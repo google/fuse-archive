@@ -279,7 +279,7 @@ struct reader {
               redact(pathname), redact(g_archive_filename),
               archive_error_string(this->archive));
       return -EIO;
-    } else if (n > dst_len) {
+    } else if (static_cast<size_t>(n) > dst_len) {
       fprintf(stderr, "fuse-archive: too much data serving %s from %s\n",
               redact(pathname), redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so exit.
@@ -588,7 +588,7 @@ insert_leaf(struct archive* a,
         fprintf(stderr, "fuse-archive: could not decompress %s: %s\n",
                 redact(g_archive_filename), archive_error_string(a));
         return -EIO;
-      } else if (n > sizeof discard_buffer) {
+      } else if (static_cast<size_t>(n) > sizeof discard_buffer) {
         fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
                 redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so exit.
@@ -813,8 +813,8 @@ my_read(const char* pathname,
     return 0;
   } else if (!r->advance_offset(offset, pathname)) {
     return -EIO;
-  } else if (dst_len > (size - offset)) {
-    dst_len = (size - offset);
+  } else if (dst_len > static_cast<uint64_t>(size - offset)) {
+    dst_len = static_cast<uint64_t>(size - offset);
   }
   return r->read(dst_ptr, dst_len, pathname);
 }
