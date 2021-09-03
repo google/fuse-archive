@@ -224,7 +224,7 @@ struct reader {
         fprintf(stderr, "fuse-archive: inconsistent archive: %s\n",
                 redact(g_archive_filename));
         return false;
-      } else if (status != ARCHIVE_OK) {
+      } else if ((status != ARCHIVE_OK) && (status != ARCHIVE_WARN)) {
         fprintf(stderr, "fuse-archive: invalid archive: %s\n",
                 redact(g_archive_filename));
         return false;
@@ -480,13 +480,15 @@ normalize_pathname(struct archive_entry* e) {
   if (!s) {
     s = archive_entry_pathname(e);
     if (!s) {
-      fprintf(stderr, "fuse-archive: archive entry has empty pathname\n");
+      fprintf(stderr, "fuse-archive: archive entry in %s has empty pathname\n",
+              redact(g_archive_filename));
       return "";
     }
   }
   if (!valid_pathname(s)) {
-    fprintf(stderr, "fuse-archive: archive entry has invalid pathname: %s\n",
-            redact(s));
+    fprintf(stderr,
+            "fuse-archive: archive entry in %s has invalid pathname: %s\n",
+            redact(g_archive_filename), redact(s));
     return "";
   }
   if (*s == '/') {
@@ -502,8 +504,8 @@ insert_leaf_node(std::string&& pathname,
                  time_t mtime,
                  mode_t mode) {
   if (g_nodes.find(pathname) != g_nodes.end()) {
-    fprintf(stderr, "fuse-archive: duplicate pathname: %s\n",
-            redact(pathname.c_str()));
+    fprintf(stderr, "fuse-archive: duplicate pathname in %s: %s\n",
+            redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
   }
   node* parent = g_root_node;
@@ -550,9 +552,10 @@ insert_leaf_node(std::string&& pathname,
       g_nodes.insert(iter, {std::move(abs_pathname), n});
       parent = n;
     } else if (!S_ISDIR(iter->second->mode)) {
-      fprintf(stderr,
-              "fuse-archive: simultaneous directory and regular file: %s\n",
-              redact(abs_pathname.c_str()));
+      fprintf(
+          stderr,
+          "fuse-archive: simultaneous directory and regular file in %s: %s\n",
+          redact(g_archive_filename), redact(abs_pathname.c_str()));
       return -EIO;
     } else {
       parent = iter->second;
@@ -570,8 +573,8 @@ insert_leaf(struct archive* a,
     // normalize_pathname already printed a log message.
     return 0;
   } else if (!S_ISREG(archive_entry_mode(e))) {
-    fprintf(stderr, "fuse-archive: irregular file %s in %s\n",
-            redact(pathname.c_str()), redact(g_archive_filename));
+    fprintf(stderr, "fuse-archive: irregular file in %s: %s\n",
+            redact(g_archive_filename), redact(pathname.c_str()));
     return 0;
   }
 
@@ -613,6 +616,10 @@ build_tree() {
                                             &g_initialize_archive_entry);
       if (status == ARCHIVE_EOF) {
         break;
+      } else if (status == ARCHIVE_WARN) {
+        fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
+                redact(g_archive_filename),
+                archive_error_string(g_initialize_archive));
       } else if (status != ARCHIVE_OK) {
         fprintf(stderr, "fuse-archive: invalid archive: %s\n",
                 redact(g_archive_filename));
@@ -684,7 +691,11 @@ pre_initialize() {
 
   int status = archive_read_next_header(g_initialize_archive,
                                         &g_initialize_archive_entry);
-  if (status != ARCHIVE_OK) {
+  if (status == ARCHIVE_WARN) {
+    fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
+            redact(g_archive_filename),
+            archive_error_string(g_initialize_archive));
+  } else if (status != ARCHIVE_OK) {
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
