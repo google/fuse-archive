@@ -623,8 +623,7 @@ build_tree() {
       } else if (status != ARCHIVE_OK) {
         fprintf(stderr, "fuse-archive: invalid archive: %s\n",
                 redact(g_archive_filename));
-        g_initialize_status_code = -EIO;
-        return g_initialize_status_code;
+        return -EIO;
       }
     }
 
@@ -632,11 +631,8 @@ build_tree() {
       continue;
     }
 
-    g_initialize_status_code = insert_leaf(
-        g_initialize_archive, g_initialize_archive_entry, index_within_archive);
-    if (g_initialize_status_code != 0) {
-      return g_initialize_status_code;
-    }
+    TRY(insert_leaf(g_initialize_archive, g_initialize_archive_entry,
+                    index_within_archive));
   }
   return 0;
 }
@@ -740,11 +736,11 @@ post_initialize() {
     return 0;
   }
   insert_root_node();
-  int ret = build_tree();
+  g_initialize_status_code = build_tree();
   archive_read_free(g_initialize_archive);
   g_initialize_archive = nullptr;
   g_initialize_archive_entry = nullptr;
-  return ret;
+  return g_initialize_status_code;
 }
 
 // ---- FUSE Callbacks
