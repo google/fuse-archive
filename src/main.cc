@@ -621,6 +621,10 @@ build_tree() {
       }
     }
 
+    if (S_ISDIR(archive_entry_mode(g_initialize_archive_entry))) {
+      continue;
+    }
+
     g_initialize_status_code = insert_leaf(
         g_initialize_archive, g_initialize_archive_entry, index_within_archive);
     if (g_initialize_status_code != 0) {
