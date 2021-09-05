@@ -1,0 +1,6 @@
+This placeholder file means that the "test/mnt" directory exists (in a fresh
+git checkout) as a target mountpoint.
+
+In the initial state, this file ("test/mnt/placeholder.txt") exists. During
+tests, when the "out/fuse-archive" program binds the "test/mnt" directory,
+"test/mnt/placeholder.txt" should no longer be visible in the file system.

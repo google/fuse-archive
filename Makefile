@@ -8,6 +8,9 @@ override CXXFLAGS := -O3 $(CXXFLAGS)
 
 all: out/fuse-archive
 
+check: all
+	go run test/go/check.go
+
 clean:
 	rm -rf out
 
@@ -22,4 +25,4 @@ out/fuse-archive: src/main.cc
 	mkdir -p out
 	$(CXX) $(CXXFLAGS) $(pkgcflags) $< $(LDFLAGS) $(pkglibs) -o $@
 
-.PHONY: all clean install uninstall
+.PHONY: all check clean install uninstall
