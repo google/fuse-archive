@@ -5,8 +5,6 @@ pkglibs=$(shell   $(PKG_CONFIG) libarchive fuse --libs)
 prefix=/usr/local
 bindir=$(prefix)/bin
 
-override CXXFLAGS := -O3 $(CXXFLAGS)
-
 all: out/fuse-archive
 
 check: all
