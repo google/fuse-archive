@@ -1,5 +1,6 @@
-pkgcflags=$(shell pkg-config libarchive fuse --cflags)
-pkglibs=$(shell   pkg-config libarchive fuse --libs)
+PKG_CONFIG?=pkg-config
+pkgcflags=$(shell $(PKG_CONFIG) libarchive fuse --cflags)
+pkglibs=$(shell   $(PKG_CONFIG) libarchive fuse --libs)
 
 prefix=/usr/local
 bindir=$(prefix)/bin
