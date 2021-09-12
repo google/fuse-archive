@@ -72,13 +72,18 @@
 
 // ---- Globals
 
+static struct options {
+  bool help;
+  bool redact;
+} g_options = {};
+
 enum {
   MY_KEY_IGNORE = 100,
   MY_KEY_HELP = 101,
   MY_KEY_REDACT = 102,
 };
 
-static struct fuse_opt g_opts[] = {
+static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", MY_KEY_HELP),          //
     FUSE_OPT_KEY("--help", MY_KEY_HELP),      //
     FUSE_OPT_KEY("--redact", MY_KEY_REDACT),  //
@@ -93,8 +98,6 @@ static struct fuse_opt g_opts[] = {
     FUSE_OPT_KEY("readonly", MY_KEY_IGNORE),   //
     FUSE_OPT_END,
 };
-static bool g_key_help = false;
-static bool g_key_redact = false;
 
 // g_archive_filename is the command line argument naming the archive file.
 static const char* g_archive_filename = NULL;
@@ -178,7 +181,7 @@ static std::pair<std::unique_ptr<struct reader>, uint64_t>
 // such as archive filenames or archive entry pathnames from being logged.
 static const char*  //
 redact(const char* s) {
-  return g_key_redact ? "[REDACTED]" : s;
+  return g_options.redact ? "[REDACTED]" : s;
 }
 
 // ---- Reader
@@ -895,10 +898,10 @@ my_opt_proc(void* private_data,
     case MY_KEY_IGNORE:
       return discard;
     case MY_KEY_HELP:
-      g_key_help = true;
+      g_options.help = true;
       return discard;
     case MY_KEY_REDACT:
-      g_key_redact = true;
+      g_options.redact = true;
       return discard;
   }
   return keep;
@@ -910,7 +913,7 @@ main(int argc, char** argv) {
   if ((argc <= 0) || !argv) {
     fprintf(stderr, "fuse-archive: missing command line arguments\n");
     return 1;
-  } else if (fuse_opt_parse(&args, NULL, g_opts, &my_opt_proc) < 0) {
+  } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     fprintf(stderr, "fuse-archive: could not parse command line arguments\n");
     return 1;
   }
@@ -922,7 +925,7 @@ main(int argc, char** argv) {
   fuse_opt_add_arg(&args, "-o");
   fuse_opt_add_arg(&args, "ro");
 
-  if (g_key_help) {
+  if (g_options.help) {
     g_initialize_status_code = -EIO;
     fprintf(stderr,
             "usage: %s archive_filename mountpoint [options]\n"
