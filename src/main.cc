@@ -70,6 +70,20 @@
 #define NUM_SAVED_READERS 8
 #endif
 
+#ifndef NUM_SIDE_BUFFERS
+#define NUM_SIDE_BUFFERS 8
+#elif NUM_SIDE_BUFFERS <= 0
+#error "invalid NUM_SIDE_BUFFERS"
+#endif
+
+// This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
+// Linux, that seems to be the largest buffer size passed to my_read.
+#ifndef SIDE_BUFFER_SIZE
+#define SIDE_BUFFER_SIZE 131072
+#elif SIDE_BUFFER_SIZE <= 0
+#error "invalid SIDE_BUFFER_SIZE"
+#endif
+
 // ---- Globals
 
 static struct options {
@@ -174,6 +188,46 @@ static struct node* g_root_node = nullptr;
 static std::pair<std::unique_ptr<struct reader>, uint64_t>
     g_saved_readers[NUM_SAVED_READERS] = {};
 
+// g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
+// statically allocated buffers used as a destination for decompressed bytes
+// when reader::advance_offset isn't a no-op. These buffers are roughly
+// equivalent to Unix's /dev/null or Go's io.Discard as a first approximation.
+// However, since we are already producing valid decompressed bytes, by saving
+// them (and their metadata), we may be able to serve some subsequent my_read
+// requests cheaply, without having to spin up another libarchive decompressor
+// to walk forward from the start of the archive entry.
+//
+// In particular (https://crbug.com/1245925#c18), even when libfuse is single-
+// threaded, we have seen kernel readahead causing the offset arguments in a
+// sequence of my_read calls to sometimes arrive out-of-order, where
+// conceptually consecutive reads are swapped. With side buffers, we can serve
+// the second-to-arrive request by a cheap memcpy instead of an expensive
+// "re-do decompression from the start". That side-buffer was filled by a
+// reader::advance_offset side-effect from serving the first-to-arrive request.
+static uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
+static struct side_buffer_metadata {
+  int64_t index_within_archive;
+  int64_t offset_within_entry;
+  int64_t length;
+  uint64_t lru_priority;
+
+  static uint64_t next_lru_priority;
+
+  bool contains(int64_t index_within_archive,
+                int64_t offset_within_entry,
+                uint64_t length) {
+    if ((this->index_within_archive >= 0) &&
+        (this->index_within_archive == index_within_archive) &&
+        (this->offset_within_entry <= offset_within_entry)) {
+      int64_t o = offset_within_entry - this->offset_within_entry;
+      return (this->length >= o) &&
+             (static_cast<uint64_t>(this->length - o) >= length);
+    }
+    return false;
+  }
+} g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
+uint64_t side_buffer_metadata::next_lru_priority = 0;
+
 // ---- Logging
 
 // redact replaces s with a placeholder string when the "--redact" command line
@@ -182,6 +236,56 @@ static std::pair<std::unique_ptr<struct reader>, uint64_t>
 static const char*  //
 redact(const char* s) {
   return g_options.redact ? "[REDACTED]" : s;
+}
+
+// ---- Side Buffer
+
+// acquire_side_buffer returns the index of the least recently used side
+// buffer. This indexes g_side_buffer_data and g_side_buffer_metadata.
+static int  //
+acquire_side_buffer() {
+  // The preprocessor already checks "#elif NUM_SIDE_BUFFERS <= 0".
+  int oldest_i = 0;
+  uint64_t oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
+  for (int i = 1; i < NUM_SIDE_BUFFERS; i++) {
+    if (oldest_lru_priority > g_side_buffer_metadata[i].lru_priority) {
+      oldest_lru_priority = g_side_buffer_metadata[i].lru_priority;
+      oldest_i = i;
+    }
+  }
+  g_side_buffer_metadata[oldest_i].index_within_archive = -1;
+  g_side_buffer_metadata[oldest_i].offset_within_entry = -1;
+  g_side_buffer_metadata[oldest_i].length = -1;
+  g_side_buffer_metadata[oldest_i].lru_priority = UINT64_MAX;
+  return oldest_i;
+}
+
+static bool  //
+read_from_side_buffer(int64_t index_within_archive,
+                      char* dst_ptr,
+                      size_t dst_len,
+                      int64_t offset_within_entry) {
+  // Find the longest side buffer that contains (index_within_archive,
+  // offset_within_entry, dst_len).
+  int best_i = -1;
+  int64_t best_length = -1;
+  for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
+    struct side_buffer_metadata* meta = &g_side_buffer_metadata[i];
+    if ((meta->length > best_length) &&
+        meta->contains(index_within_archive, offset_within_entry, dst_len)) {
+      best_i = i;
+      best_length = meta->length;
+    }
+  }
+
+  if (best_i >= 0) {
+    struct side_buffer_metadata* meta = &g_side_buffer_metadata[best_i];
+    meta->lru_priority = ++side_buffer_metadata::next_lru_priority;
+    int64_t o = offset_within_entry - meta->offset_within_entry;
+    memcpy(dst_ptr, g_side_buffer_data[best_i] + o, dst_len);
+    return true;
+  }
+  return false;
 }
 
 // ---- Reader
@@ -197,14 +301,12 @@ struct reader {
   struct archive_entry* archive_entry;
   int64_t index_within_archive;
   int64_t offset_within_entry;
-  std::unique_ptr<char[]> discard_buffer;
 
   reader(struct archive* _archive)
       : archive(_archive),
         archive_entry(nullptr),
         index_within_archive(-1),
-        offset_within_entry(0),
-        discard_buffer(nullptr) {}
+        offset_within_entry(0) {}
 
   ~reader() {
     if (this->archive) {
@@ -249,25 +351,41 @@ struct reader {
   bool advance_offset(int64_t want, const char* pathname) {
     if (!this->archive || !this->archive_entry) {
       return false;
+    } else if (want < this->offset_within_entry) {
+      // We can't walk backwards.
+      return false;
+    } else if (want == this->offset_within_entry) {
+      // We are exactly where we want to be.
+      return true;
     }
+
+    // We are behind where we want to be. Advance (decompressing from the
+    // archive entry into a side buffer) until we get there.
+    int sb = acquire_side_buffer();
+    if ((sb < 0) || (NUM_SIDE_BUFFERS <= sb)) {
+      return false;
+    }
+    uint8_t* dst_ptr = g_side_buffer_data[sb];
+    struct side_buffer_metadata* meta = &g_side_buffer_metadata[sb];
     while (want > this->offset_within_entry) {
-      static constexpr int64_t N = 4096;
-      if (!this->discard_buffer) {
-        this->discard_buffer = std::unique_ptr<char[]>(new char[N]);
-        if (!this->discard_buffer) {
-          return false;
-        }
-      }
-      char* dst_ptr = this->discard_buffer.get();
-
-      int64_t dst_len = want - this->offset_within_entry;
-      if (dst_len > N) {
-        dst_len = N;
+      int64_t original_owe = this->offset_within_entry;
+      int64_t dst_len = want - original_owe;
+      if (dst_len > SIDE_BUFFER_SIZE) {
+        dst_len = SIDE_BUFFER_SIZE;
       }
 
-      if (this->read(dst_ptr, dst_len, pathname) < 0) {
+      ssize_t n = this->read(dst_ptr, dst_len, pathname);
+      if (n < 0) {
+        meta->index_within_archive = -1;
+        meta->offset_within_entry = -1;
+        meta->length = -1;
+        meta->lru_priority = 0;
         return false;
       }
+      meta->index_within_archive = this->index_within_archive;
+      meta->offset_within_entry = original_owe;
+      meta->length = n;
+      meta->lru_priority = ++side_buffer_metadata::next_lru_priority;
     }
     return true;
   }
@@ -299,7 +417,9 @@ struct reader {
     std::swap(this->archive_entry, that->archive_entry);
     std::swap(this->index_within_archive, that->index_within_archive);
     std::swap(this->offset_within_entry, that->offset_within_entry);
-    // Ignore discard_buffer. It's not part of libarchive state.
+    // Historically, there were other fields in this struct that were not part
+    // of libarchive state, so this method was called swap_libarchive_state
+    // instead of just swap.
   }
 };
 
@@ -390,9 +510,8 @@ release_reader(std::unique_ptr<struct reader> r) {
     }
   }
   static uint64_t next_lru_priority = 0;
-  next_lru_priority++;
   g_saved_readers[oldest_i].first = std::move(r);
-  g_saved_readers[oldest_i].second = next_lru_priority;
+  g_saved_readers[oldest_i].second = ++next_lru_priority;
 }
 
 // ---- In-Memory Directory Tree
@@ -586,16 +705,15 @@ insert_leaf(struct archive* a,
   if (g_archive_is_raw && (size == 0)) {
     // 'Raw' archives don't always explicitly record the decompressed size.
     // We'll have to decompress it to find out.
-    static char discard_buffer[65536];
     while (true) {
-      ssize_t n = archive_read_data(a, discard_buffer, sizeof discard_buffer);
+      ssize_t n = archive_read_data(a, g_side_buffer_data[0], SIDE_BUFFER_SIZE);
       if (n == 0) {
         break;
       } else if (n < 0) {
         fprintf(stderr, "fuse-archive: could not decompress %s: %s\n",
                 redact(g_archive_filename), archive_error_string(a));
         return -EIO;
-      } else if (static_cast<size_t>(n) > sizeof discard_buffer) {
+      } else if (n > SIDE_BUFFER_SIZE) {
         fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
                 redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so exit.
@@ -805,6 +923,11 @@ my_read(const char* pathname,
     return -EIO;
   }
 
+  if (read_from_side_buffer(r->index_within_archive, dst_ptr, dst_len,
+                            offset)) {
+    return dst_len;
+  }
+
   // libarchive is designed for streaming access, not random access. If we
   // need to seek backwards, there's more work to do.
   if (offset < r->offset_within_entry) {
@@ -909,6 +1032,14 @@ my_opt_proc(void* private_data,
 
 int  //
 main(int argc, char** argv) {
+  // Initialize side buffers as invalid.
+  for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
+    g_side_buffer_metadata[i].index_within_archive = -1;
+    g_side_buffer_metadata[i].offset_within_entry = -1;
+    g_side_buffer_metadata[i].length = -1;
+    g_side_buffer_metadata[i].lru_priority = 0;
+  }
+
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
     fprintf(stderr, "fuse-archive: missing command line arguments\n");
@@ -919,6 +1050,9 @@ main(int argc, char** argv) {
   }
 
   // Force single-threading. It's simpler.
+  //
+  // For example, there may be complications about acquiring an unused side
+  // buffer if NUM_SIDE_BUFFERS is less than the number of threads.
   fuse_opt_add_arg(&args, "-s");
 
   // Mount read-only.

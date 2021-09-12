@@ -151,7 +151,7 @@ func testReadAt() error {
 	buf := make([]byte, 1024)
 	rng := rand.New(rand.NewSource(1))
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 50; i++ {
 		a := int(rng.Uint32() & 1023)
 		b := int(rng.Uint32() & 1023)
 		if a > b {
@@ -164,6 +164,19 @@ func testReadAt() error {
 		if (err != nil) && (err != io.EOF) {
 			return err
 		}
+
+		wantN := 0
+		if a < len(romeoTxt) {
+			if b < len(romeoTxt) {
+				wantN = b - a
+			} else {
+				wantN = len(romeoTxt) - a
+			}
+		}
+		if n != wantN {
+			return fmt.Errorf("length mismatch: have %d want %d", n, wantN)
+		}
+
 		have := buf[:n]
 		want := romeoTxt[a : a+n]
 		if !bytes.Equal(have, want) {
