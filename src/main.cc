@@ -413,15 +413,12 @@ struct reader {
     return n;
   }
 
-  // swap_libarchive_state swaps some fields with another reader.
-  void swap_libarchive_state(struct reader* that) {
+  // swap swaps fields with another reader.
+  void swap(struct reader* that) {
     std::swap(this->archive, that->archive);
     std::swap(this->archive_entry, that->archive_entry);
     std::swap(this->index_within_archive, that->index_within_archive);
     std::swap(this->offset_within_entry, that->offset_within_entry);
-    // Historically, there were other fields in this struct that were not part
-    // of libarchive state, so this method was called swap_libarchive_state
-    // instead of just swap.
   }
 };
 
@@ -977,7 +974,7 @@ my_read(const char* pathname,
     if (!ur || !ur->archive || !ur->archive_entry) {
       return -EIO;
     }
-    r->swap_libarchive_state(ur.get());
+    r->swap(ur.get());
     release_reader(std::move(ur));
   }
 
