@@ -158,7 +158,7 @@ static struct archive_entry* g_initialize_archive_entry = nullptr;
 // These global variables are the in-memory directory tree of nodes.
 //
 // g_root_node being non-nullptr means that initialization is complete.
-static std::unordered_map<std::string, struct node*> g_nodes;
+static std::unordered_map<std::string, struct node*> g_nodes_by_name;
 static struct node* g_root_node = nullptr;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
@@ -626,7 +626,7 @@ insert_leaf_node(std::string&& pathname,
                  int64_t size,
                  time_t mtime,
                  mode_t mode) {
-  if (g_nodes.find(pathname) != g_nodes.end()) {
+  if (g_nodes_by_name.find(pathname) != g_nodes_by_name.end()) {
     fprintf(stderr, "fuse-archive: duplicate pathname in %s: %s\n",
             redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
@@ -662,17 +662,17 @@ insert_leaf_node(std::string&& pathname,
       node* n = new node(std::move(rel_pathname), index_within_archive, size,
                          mtime, leaf_mode);
       parent->add_child(n);
-      g_nodes.insert({std::move(abs_pathname), n});
+      g_nodes_by_name.insert({std::move(abs_pathname), n});
       break;
     }
     q = r + 1;
 
     // Insert an implicit branch node (a directory).
-    auto iter = g_nodes.find(abs_pathname);
-    if (iter == g_nodes.end()) {
+    auto iter = g_nodes_by_name.find(abs_pathname);
+    if (iter == g_nodes_by_name.end()) {
       node* n = new node(std::move(rel_pathname), -1, 0, mtime, branch_mode);
       parent->add_child(n);
-      g_nodes.insert(iter, {std::move(abs_pathname), n});
+      g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
       parent = n;
     } else if (!S_ISDIR(iter->second->mode)) {
       fprintf(
@@ -768,7 +768,7 @@ static void  //
 insert_root_node() {
   static constexpr int64_t index_within_archive = -1;
   g_root_node = new node("", index_within_archive, 0, 0, S_IFDIR);
-  g_nodes["/"] = g_root_node;
+  g_nodes_by_name["/"] = g_root_node;
 }
 
 static int  //
@@ -870,8 +870,8 @@ post_initialize() {
 static int  //
 my_getattr(const char* pathname, struct stat* z) {
   TRY(post_initialize());
-  auto iter = g_nodes.find(pathname);
-  if (iter == g_nodes.end()) {
+  auto iter = g_nodes_by_name.find(pathname);
+  if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
   node* n = iter->second;
@@ -888,8 +888,8 @@ my_getattr(const char* pathname, struct stat* z) {
 static int  //
 my_open(const char* pathname, struct fuse_file_info* ffi) {
   TRY(post_initialize());
-  auto iter = g_nodes.find(pathname);
-  if (iter == g_nodes.end()) {
+  auto iter = g_nodes_by_name.find(pathname);
+  if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   } else if (S_ISDIR(iter->second->mode)) {
     return -EISDIR;
@@ -975,8 +975,8 @@ my_readdir(const char* pathname,
            off_t offset,
            struct fuse_file_info* ffi) {
   TRY(post_initialize());
-  auto iter = g_nodes.find(pathname);
-  if (iter == g_nodes.end()) {
+  auto iter = g_nodes_by_name.find(pathname);
+  if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
   node* n = iter->second;
