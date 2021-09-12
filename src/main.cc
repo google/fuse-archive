@@ -46,6 +46,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // fuse_file_info.fh is a uint64_t. Check that it can hold a pointer.
 #if UINTPTR_MAX > UINT64_MAX
@@ -159,6 +160,7 @@ static struct archive_entry* g_initialize_archive_entry = nullptr;
 //
 // g_root_node being non-nullptr means that initialization is complete.
 static std::unordered_map<std::string, struct node*> g_nodes_by_name;
+static std::vector<struct node*> g_nodes_by_index;
 static struct node* g_root_node = nullptr;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
@@ -626,7 +628,11 @@ insert_leaf_node(std::string&& pathname,
                  int64_t size,
                  time_t mtime,
                  mode_t mode) {
-  if (g_nodes_by_name.find(pathname) != g_nodes_by_name.end()) {
+  if (index_within_archive < 0) {
+    fprintf(stderr, "fuse-archive: negative index_within_archive in %s: %s\n",
+            redact(g_archive_filename), redact(pathname.c_str()));
+    return -EIO;
+  } else if (g_nodes_by_name.find(pathname) != g_nodes_by_name.end()) {
     fprintf(stderr, "fuse-archive: duplicate pathname in %s: %s\n",
             redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
@@ -662,7 +668,21 @@ insert_leaf_node(std::string&& pathname,
       node* n = new node(std::move(rel_pathname), index_within_archive, size,
                          mtime, leaf_mode);
       parent->add_child(n);
+      // Add to g_nodes_by_name.
       g_nodes_by_name.insert({std::move(abs_pathname), n});
+      // Add to g_nodes_by_index.
+      while (g_nodes_by_index.size() <
+             static_cast<uint64_t>(index_within_archive)) {
+        g_nodes_by_index.push_back(nullptr);
+      }
+      if (g_nodes_by_index.size() >
+          static_cast<uint64_t>(index_within_archive)) {
+        fprintf(stderr,
+                "fuse-archive: index_within_archive out of order in %s: %s\n",
+                redact(g_archive_filename), redact(pathname.c_str()));
+        return -EIO;
+      }
+      g_nodes_by_index.push_back(n);
       break;
     }
     q = r + 1;
@@ -923,8 +943,26 @@ my_read(const char* pathname,
     return -EIO;
   }
 
-  if (read_from_side_buffer(r->index_within_archive, dst_ptr, dst_len,
-                            offset)) {
+  if (r->index_within_archive >= 0) {
+    uint64_t i = static_cast<uint64_t>(r->index_within_archive);
+    if (i < g_nodes_by_index.size()) {
+      struct node* n = g_nodes_by_index[i];
+      if (n) {
+        if (n->size <= offset) {
+          return 0;
+        }
+        uint64_t remaining = static_cast<uint64_t>(n->size - offset);
+        if (dst_len > remaining) {
+          dst_len = remaining;
+        }
+      }
+    }
+  }
+
+  if (dst_len == 0) {
+    return 0;
+  } else if (read_from_side_buffer(r->index_within_archive, dst_ptr, dst_len,
+                                   offset)) {
     return dst_len;
   }
 
