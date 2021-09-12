@@ -82,6 +82,7 @@ static struct fuse_opt g_opts[] = {
     FUSE_OPT_KEY("-h", MY_KEY_HELP),          //
     FUSE_OPT_KEY("--help", MY_KEY_HELP),      //
     FUSE_OPT_KEY("--redact", MY_KEY_REDACT),  //
+    FUSE_OPT_KEY("redact", MY_KEY_REDACT),    //
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
@@ -933,6 +934,7 @@ main(int argc, char** argv) {
             "\n"
             "%s options:\n"
             "         --redact          redact pathnames from log messages\n"
+            "         -o redact         ditto\n"
             "\n",
             argv[0], argv[0]);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
