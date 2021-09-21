@@ -64,6 +64,7 @@
 // ---- Error Codes
 
 #define ERROR_CODE_GENERIC 1
+#define ERROR_CODE_PASSPHRASE_REQUIRED 2
 
 // ---- Compile-time Configuration
 
@@ -159,6 +160,7 @@ static gid_t g_gid = 0;
 static int g_initialize_status_code = 0;
 static struct archive* g_initialize_archive = nullptr;
 static struct archive_entry* g_initialize_archive_entry = nullptr;
+static int64_t g_initialize_index_within_archive = -1;
 
 // These global variables are the in-memory directory tree of nodes.
 //
@@ -233,6 +235,18 @@ static struct side_buffer_metadata {
   }
 } g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 uint64_t side_buffer_metadata::next_lru_priority = 0;
+
+// ---- C String Manipulation
+
+static bool  //
+starts_with(const char* s, const char* prefix) {
+  if (!s || !prefix) {
+    return false;
+  }
+  size_t ns = strlen(s);
+  size_t np = strlen(prefix);
+  return (ns >= np) && (strncmp(s, prefix, np) == 0);
+}
 
 // ---- Logging
 
@@ -751,12 +765,19 @@ insert_leaf(struct archive* a,
 
 static int  //
 build_tree() {
-  for (int64_t index_within_archive = 0; true; index_within_archive++) {
-    if (index_within_archive == 0) {
-      // No-op. The entry was already read by pre_initialize.
+  if (g_initialize_index_within_archive < 0) {
+    return -EIO;
+  }
+  bool first = true;
+  while (true) {
+    if (first) {
+      // The entry was already read by pre_initialize.
+      first = false;
+
     } else {
       int status = archive_read_next_header(g_initialize_archive,
                                             &g_initialize_archive_entry);
+      g_initialize_index_within_archive++;
       if (status == ARCHIVE_EOF) {
         break;
       } else if (status == ARCHIVE_WARN) {
@@ -775,7 +796,7 @@ build_tree() {
     }
 
     TRY(insert_leaf(g_initialize_archive, g_initialize_archive_entry,
-                    index_within_archive));
+                    g_initialize_index_within_archive));
   }
   return 0;
 }
@@ -823,29 +844,39 @@ pre_initialize() {
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
+    g_initialize_index_within_archive = -1;
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
     return ERROR_CODE_GENERIC;
   }
 
-  int status = archive_read_next_header(g_initialize_archive,
-                                        &g_initialize_archive_entry);
-  if (status == ARCHIVE_WARN) {
-    fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
-            redact(g_archive_filename),
-            archive_error_string(g_initialize_archive));
-  } else if (status != ARCHIVE_OK) {
-    archive_read_free(g_initialize_archive);
-    g_initialize_archive = nullptr;
-    g_initialize_archive_entry = nullptr;
-    if (status != ARCHIVE_EOF) {
-      fprintf(stderr, "fuse-archive: invalid archive: %s\n",
-              redact(g_archive_filename));
-      return ERROR_CODE_GENERIC;
+  while (true) {
+    int status = archive_read_next_header(g_initialize_archive,
+                                          &g_initialize_archive_entry);
+    g_initialize_index_within_archive++;
+    if (status == ARCHIVE_WARN) {
+      fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
+              redact(g_archive_filename),
+              archive_error_string(g_initialize_archive));
+    } else if (status != ARCHIVE_OK) {
+      archive_read_free(g_initialize_archive);
+      g_initialize_archive = nullptr;
+      g_initialize_archive_entry = nullptr;
+      g_initialize_index_within_archive = -1;
+      if (status != ARCHIVE_EOF) {
+        fprintf(stderr, "fuse-archive: invalid archive: %s\n",
+                redact(g_archive_filename));
+        return ERROR_CODE_GENERIC;
+      }
+      // Building the tree for an empty archive is trivial.
+      insert_root_node();
+      return 0;
     }
-    // Building the tree for an empty archive is trivial.
-    insert_root_node();
-    return 0;
+
+    if (S_ISDIR(archive_entry_mode(g_initialize_archive_entry))) {
+      continue;
+    }
+    break;
   }
 
   // For 'raw' archives, check that at least one of the compression filters
@@ -859,6 +890,7 @@ pre_initialize() {
         archive_read_free(g_initialize_archive);
         g_initialize_archive = nullptr;
         g_initialize_archive_entry = nullptr;
+        g_initialize_index_within_archive = -1;
         fprintf(stderr, "fuse-archive: invalid raw archive: %s\n",
                 redact(g_archive_filename));
         return ERROR_CODE_GENERIC;
@@ -867,7 +899,34 @@ pre_initialize() {
         break;
       }
     }
+
+  } else {
+    // Otherwise, reading the first byte of the first non-directory entry will
+    // reveal whether we also need a passphrase. libarchive doesn't have a
+    // designated error number for "passphrase required". We have to do a
+    // string comparison on the error message.
+    ssize_t n =
+        archive_read_data(g_initialize_archive, g_side_buffer_data[0], 1);
+    if (n < 0) {
+      bool passphrase_required = starts_with(
+          archive_error_string(g_initialize_archive), "Passphrase required");
+      if (passphrase_required) {
+        fprintf(stderr, "fuse-archive: passphrase required for %s\n",
+                redact(g_archive_filename));
+      } else {
+        fprintf(stderr, "fuse-archive: libarchive error for %s: %s\n",
+                redact(g_archive_filename),
+                archive_error_string(g_initialize_archive));
+      }
+      archive_read_free(g_initialize_archive);
+      g_initialize_archive = nullptr;
+      g_initialize_archive_entry = nullptr;
+      g_initialize_index_within_archive = -1;
+      return passphrase_required ? ERROR_CODE_PASSPHRASE_REQUIRED
+                                 : ERROR_CODE_GENERIC;
+    }
   }
+
   return 0;
 }
 
@@ -883,6 +942,7 @@ post_initialize() {
   archive_read_free(g_initialize_archive);
   g_initialize_archive = nullptr;
   g_initialize_archive_entry = nullptr;
+  g_initialize_index_within_archive = -1;
   return g_initialize_status_code;
 }
 
