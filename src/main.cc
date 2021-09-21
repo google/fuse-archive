@@ -61,6 +61,10 @@
     }                                \
   } while (false)
 
+// ---- Error Codes
+
+#define ERROR_CODE_GENERIC 1
+
 // ---- Compile-time Configuration
 
 #ifndef BLOCK_SIZE
@@ -407,7 +411,7 @@ struct reader {
       fprintf(stderr, "fuse-archive: too much data serving %s from %s\n",
               redact(pathname), redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so exit.
-      exit(1);
+      exit(ERROR_CODE_GENERIC);
     }
     this->offset_within_entry += n;
     return n;
@@ -734,7 +738,7 @@ insert_leaf(struct archive* a,
         fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
                 redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so exit.
-        exit(1);
+        exit(ERROR_CODE_GENERIC);
       }
       size += n;
     }
@@ -792,7 +796,7 @@ static int  //
 pre_initialize() {
   if (!g_archive_filename) {
     fprintf(stderr, "fuse-archive: missing archive_filename argument\n");
-    return 1;
+    return ERROR_CODE_GENERIC;
   }
 
   // fd is the file descriptor for the command line archive_filename argument.
@@ -802,14 +806,14 @@ pre_initialize() {
   if (fd < 0) {
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
-    return 1;
+    return ERROR_CODE_GENERIC;
   }
   sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", fd);
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     fprintf(stderr, "fuse-archive: out of memory\n");
-    return 1;
+    return ERROR_CODE_GENERIC;
   }
   archive_read_support_filter_all(g_initialize_archive);
   archive_read_support_format_all(g_initialize_archive);
@@ -821,7 +825,7 @@ pre_initialize() {
     g_initialize_archive_entry = nullptr;
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
-    return 1;
+    return ERROR_CODE_GENERIC;
   }
 
   int status = archive_read_next_header(g_initialize_archive,
@@ -837,7 +841,7 @@ pre_initialize() {
     if (status != ARCHIVE_EOF) {
       fprintf(stderr, "fuse-archive: invalid archive: %s\n",
               redact(g_archive_filename));
-      return 1;
+      return ERROR_CODE_GENERIC;
     }
     // Building the tree for an empty archive is trivial.
     insert_root_node();
@@ -857,7 +861,7 @@ pre_initialize() {
         g_initialize_archive_entry = nullptr;
         fprintf(stderr, "fuse-archive: invalid raw archive: %s\n",
                 redact(g_archive_filename));
-        return 1;
+        return ERROR_CODE_GENERIC;
       } else if (archive_filter_code(g_initialize_archive, i) !=
                  ARCHIVE_FILTER_NONE) {
         break;
@@ -1078,10 +1082,10 @@ main(int argc, char** argv) {
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
     fprintf(stderr, "fuse-archive: missing command line arguments\n");
-    return 1;
+    return ERROR_CODE_GENERIC;
   } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     fprintf(stderr, "fuse-archive: could not parse command line arguments\n");
-    return 1;
+    return ERROR_CODE_GENERIC;
   }
 
   // Force single-threading. It's simpler.
