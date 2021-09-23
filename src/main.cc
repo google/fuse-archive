@@ -400,8 +400,18 @@ struct reader {
     while (want > this->offset_within_entry) {
       int64_t original_owe = this->offset_within_entry;
       int64_t dst_len = want - original_owe;
+      // If the amount we need to advance is greater than the SIDE_BUFFER_SIZE,
+      // we need multiple this->read calls, but the total advance might not be
+      // an exact multiple of SIDE_BUFFER_SIZE. Read that remainder amount
+      // first, not last. For example, if advancing 260KiB with a 128KiB
+      // SIDE_BUFFER_SIZE then read 4+128+128 instead of 128+128+4. This leaves
+      // a full side buffer when we've finished advancing, maximizing later
+      // requests' chances of side-buffer-as-cache hits.
       if (dst_len > SIDE_BUFFER_SIZE) {
-        dst_len = SIDE_BUFFER_SIZE;
+        dst_len %= SIDE_BUFFER_SIZE;
+        if (dst_len == 0) {
+          dst_len = SIDE_BUFFER_SIZE;
+        }
       }
 
       ssize_t n = this->read(dst_ptr, dst_len, pathname);
