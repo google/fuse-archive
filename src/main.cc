@@ -99,10 +99,9 @@ static struct options {
 } g_options = {};
 
 enum {
-  MY_KEY_IGNORE = 100,
-  MY_KEY_HELP = 101,
-  MY_KEY_PASSPHRASE = 102,
-  MY_KEY_REDACT = 103,
+  MY_KEY_HELP = 100,
+  MY_KEY_PASSPHRASE = 101,
+  MY_KEY_REDACT = 102,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
@@ -116,10 +115,10 @@ static struct fuse_opt g_fuse_opts[] = {
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
     // archives automatically and only supports read-only, not read-write.
-    FUSE_OPT_KEY("formatraw", MY_KEY_IGNORE),  //
-    FUSE_OPT_KEY("nobackup", MY_KEY_IGNORE),   //
-    FUSE_OPT_KEY("nosave", MY_KEY_IGNORE),     //
-    FUSE_OPT_KEY("readonly", MY_KEY_IGNORE),   //
+    FUSE_OPT_KEY("formatraw", FUSE_OPT_KEY_DISCARD),  //
+    FUSE_OPT_KEY("nobackup", FUSE_OPT_KEY_DISCARD),   //
+    FUSE_OPT_KEY("nosave", FUSE_OPT_KEY_DISCARD),     //
+    FUSE_OPT_KEY("readonly", FUSE_OPT_KEY_DISCARD),   //
     FUSE_OPT_END,
 };
 
@@ -1172,8 +1171,6 @@ my_opt_proc(void* private_data,
         return discard;
       }
       break;
-    case MY_KEY_IGNORE:
-      return discard;
     case MY_KEY_HELP:
       g_options.help = true;
       return discard;
