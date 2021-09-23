@@ -2,7 +2,7 @@ PKG_CONFIG?=pkg-config
 pkgcflags=$(shell $(PKG_CONFIG) libarchive fuse --cflags)
 pkglibs=$(shell   $(PKG_CONFIG) libarchive fuse --libs)
 
-prefix=/usr/local
+prefix=/usr
 bindir=$(prefix)/bin
 
 all: out/fuse-archive
