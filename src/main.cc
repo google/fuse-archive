@@ -95,19 +95,23 @@
 static struct options {
   bool help;
   bool redact;
+  bool passphrase;
 } g_options = {};
 
 enum {
   MY_KEY_IGNORE = 100,
   MY_KEY_HELP = 101,
-  MY_KEY_REDACT = 102,
+  MY_KEY_PASSPHRASE = 102,
+  MY_KEY_REDACT = 103,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", MY_KEY_HELP),          //
-    FUSE_OPT_KEY("--help", MY_KEY_HELP),      //
-    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),  //
-    FUSE_OPT_KEY("redact", MY_KEY_REDACT),    //
+    FUSE_OPT_KEY("-h", MY_KEY_HELP),                  //
+    FUSE_OPT_KEY("--help", MY_KEY_HELP),              //
+    FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),  //
+    FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),    //
+    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),          //
+    FUSE_OPT_KEY("redact", MY_KEY_REDACT),            //
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
@@ -129,6 +133,13 @@ static const char* g_archive_filename = NULL;
 // archive_read_open_filename calls use this "/proc/self/fd/%d" absolute
 // filename instead. g_archive_filename is still used for logging.
 static char g_proc_self_fd_filename[64] = {};
+
+// g_passphrase_buffer and g_passphrase_length combine to hold the passphrase,
+// if given. The buffer is NUL-terminated but g_passphrase_length excludes the
+// final '\0'. If no passphrase was given, g_passphrase_length is zero.
+#define PASSPHRASE_BUFFER_LENGTH 1024
+static char g_passphrase_buffer[PASSPHRASE_BUFFER_LENGTH] = {};
+static int g_passphrase_length = 0;
 
 // g_archive_is_raw is whether the archive file is 'cooked' or 'raw'.
 //
@@ -493,6 +504,9 @@ acquire_reader(int64_t want_index_within_archive) {
       fprintf(stderr, "fuse-archive: out of memory\n");
       return nullptr;
     }
+    if (g_passphrase_length > 0) {
+      archive_read_add_passphrase(a, g_passphrase_buffer);
+    }
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
     archive_read_support_format_raw(a);
@@ -806,6 +820,40 @@ build_tree() {
 // This section (pre_initialize and post_initialize) are the "two parts"
 // described in the "Building is split into two parts" comment above.
 
+static int  //
+read_passphrase_from_stdin() {
+  static constexpr int stdin_fd = 0;
+  while (g_passphrase_length < PASSPHRASE_BUFFER_LENGTH) {
+    ssize_t n = read(stdin_fd, &g_passphrase_buffer[g_passphrase_length],
+                     PASSPHRASE_BUFFER_LENGTH - g_passphrase_length);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      fprintf(stderr,
+              "fuse-archive: could not read passphrase from stdin: %s\n",
+              strerror(errno));
+      return -errno;
+    } else if (n == 0) {
+      g_passphrase_buffer[g_passphrase_length] = '\x00';
+      return 0;
+    }
+
+    int j = g_passphrase_length + n;
+    for (int i = g_passphrase_length; i < j; i++) {
+      if ((g_passphrase_buffer[i] == '\n') ||
+          (g_passphrase_buffer[i] == '\x00')) {
+        g_passphrase_buffer[i] = '\x00';
+        g_passphrase_length = i;
+        return 0;
+      }
+    }
+    g_passphrase_length = j;
+  }
+  fprintf(stderr, "fuse-archive: passphrase was too long\n");
+  return -EIO;
+}
+
 static void  //
 insert_root_node() {
   static constexpr int64_t index_within_archive = -1;
@@ -831,10 +879,17 @@ pre_initialize() {
   }
   sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", fd);
 
+  if (g_options.passphrase) {
+    TRY(read_passphrase_from_stdin());
+  }
+
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     fprintf(stderr, "fuse-archive: out of memory\n");
     return ERROR_CODE_GENERIC;
+  }
+  if (g_passphrase_length > 0) {
+    archive_read_add_passphrase(g_initialize_archive, g_passphrase_buffer);
   }
   archive_read_support_filter_all(g_initialize_archive);
   archive_read_support_format_all(g_initialize_archive);
@@ -1122,6 +1177,9 @@ my_opt_proc(void* private_data,
     case MY_KEY_HELP:
       g_options.help = true;
       return discard;
+    case MY_KEY_PASSPHRASE:
+      g_options.passphrase = true;
+      return discard;
     case MY_KEY_REDACT:
       g_options.redact = true;
       return discard;
@@ -1169,6 +1227,11 @@ main(int argc, char** argv) {
             "    -V   --version         print version\n"
             "\n"
             "%s options:\n"
+            "         --passphrase      passphrase given on stdin; 1023 bytes "
+            "max;\n"
+            "                           up to (excluding) first '\\n', '\\x00' "
+            "or EOF\n"
+            "         -o passphrase     ditto\n"
             "         --redact          redact pathnames from log messages\n"
             "         -o redact         ditto\n"
             "\n",

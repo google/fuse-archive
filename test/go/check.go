@@ -30,6 +30,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,7 @@ func main1() error {
 	}
 
 	archiveFilenames := []string{
+		"test/data/archive.password-is-asdf.zip",
 		"test/data/archive.tar.bz2",
 		"test/data/archive.zip",
 		"test/data/romeo.txt.gz",
@@ -55,8 +57,13 @@ func main1() error {
 	}
 	for _, archiveFilename := range archiveFilenames {
 		for _, directIO := range []bool{false, true} {
-			if err := run(archiveFilename, directIO); err != nil {
+			if err := run(archiveFilename, directIO, ""); err != nil {
 				return err
+			}
+			if strings.Contains(archiveFilename, "password-is-asdf") {
+				if err := run(archiveFilename, directIO, "asdf"); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -64,8 +71,9 @@ func main1() error {
 	return nil
 }
 
-func run(archiveFilename string, directIO bool) error {
-	fmt.Printf("--- archiveFilename=%q directIO=%t\n", archiveFilename, directIO)
+func run(archiveFilename string, directIO bool, passphrase string) error {
+	fmt.Printf("--- archiveFilename=%q directIO=%t passphrase=%q\n",
+		archiveFilename, directIO, passphrase)
 	if !placeholderTxtExists() {
 		return fmt.Errorf(`Cannot verify pre-mount state. Try "fusermount -u test/mnt"?`)
 	}
@@ -74,15 +82,42 @@ func run(archiveFilename string, directIO bool) error {
 	if directIO {
 		args = append(args, "-o", "direct_io")
 	}
+	if passphrase != "" {
+		args = append(args, "--passphrase")
+	}
 	// The -f flag means to run in the foreground (not as a daemon).
 	args = append(args, "-o", "nonempty", "-f", archiveFilename, "test/mnt")
 
 	cmd := exec.Command("out/fuse-archive", args...)
+	cmd.Stdin = strings.NewReader(passphrase)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("Starting out/fuse-archive: %w", err)
 	}
+
+	if strings.Contains(archiveFilename, "password-is-asdf") && (passphrase == "") {
+		timedOut := make(chan struct{})
+		go func() {
+			time.Sleep(10 * time.Second)
+			close(timedOut)
+			cmd.Process.Signal(os.Interrupt)
+		}()
+		if err := cmd.Wait(); err == nil {
+			select {
+			case <-timedOut:
+				return fmt.Errorf("Process.Wait(): timed out")
+			default:
+				return fmt.Errorf("Process.Wait(): have nil error want non-nil")
+			}
+		} else if e, ok := err.(*exec.ExitError); !ok {
+			return fmt.Errorf("Process.Wait(): have %T error want *exec.ExitError", err)
+		} else if ec := e.ExitCode(); ec != 2 { // 2 is ERROR_CODE_PASSPHRASE_REQUIRED
+			return fmt.Errorf("exit code: have %d want %d", ec, 2)
+		}
+		return nil
+	}
+
 	defer func() {
 		cmd.Process.Signal(os.Interrupt)
 		cmd.Process.Wait()
