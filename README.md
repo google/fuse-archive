@@ -52,9 +52,9 @@ compressed (the file just contains repeated 0x00 NUL bytes):
     268435456 bytes (268 MB, 256 MiB) copied, 570.146 s, 471 kB/s
     $ fusermount -u ~/mnt
 
-Here, `fuse-archivemount` was 58x faster (0.010s vs 0.581s) to bind the
-mountpoint and daemonize, and 682x faster (0.836048s vs 570.146s) to copy out
-the decompressed contents.
+Here, `fuse-archive` was **58x faster** (0.010s vs 0.581s) to bind the
+mountpoint and daemonize, and **682x faster** (0.836048s vs 570.146s) to copy
+out the decompressed contents.
 
 For the second ratio, the key difference is that `fuse-archive` does not use
 `archivemount`'s [quadratic complexity
@@ -69,4 +69,4 @@ owned by Google.
 
 ---
 
-Updated on August 2021.
+Updated on September 2021.
