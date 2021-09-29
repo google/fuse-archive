@@ -1249,5 +1249,13 @@ main(int argc, char** argv) {
     g_uid = getuid();
     g_gid = getgid();
   }
-  return fuse_main(args.argc, args.argv, &my_operations, NULL);
+
+  int ret = fuse_main(args.argc, args.argv, &my_operations, NULL);
+  if (ret != 0) {
+    // libfuse's fuse_main can return a variety of integer values. Collapse
+    // them all to fuse-archive's ERROR_CODE_GENERIC to avoid colliding with
+    // fuse-archive's other ERROR_CODE_ETC values.
+    return ERROR_CODE_GENERIC;
+  }
+  return 0;
 }
