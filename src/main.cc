@@ -170,6 +170,9 @@ static int64_t g_raw_decompressed_size = 0;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
+//
+// libfuse will override my_getattr's use of these variables if the "-o uid=N"
+// or "-o gid=N" command line options are set.
 static uid_t g_uid = 0;
 static gid_t g_gid = 0;
 
