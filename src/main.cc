@@ -71,8 +71,16 @@
 // after daemonization succeeds.
 
 #define ERROR_CODE_GENERIC 1
-#define ERROR_CODE_PASSPHRASE_REQUIRED 2
-#define ERROR_CODE_PASSPHRASE_INCORRECT 3
+// Error code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
+
+#define ERROR_CODE_LIBARCHIVE_CONTRACT_VIOLATION 10
+
+#define ERROR_CODE_PASSPHRASE_REQUIRED 20
+#define ERROR_CODE_PASSPHRASE_INCORRECT 21
+
+#define ERROR_CODE_INVALID_RAW_ARCHIVE 30
+#define ERROR_CODE_INVALID_ARCHIVE_HEADER 31
+#define ERROR_CODE_INVALID_ARCHIVE_CONTENTS 32
 
 // ---- Compile-time Configuration
 
@@ -453,7 +461,7 @@ struct reader {
       fprintf(stderr, "fuse-archive: too much data serving %s from %s\n",
               redact(pathname), redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so exit.
-      exit(ERROR_CODE_GENERIC);
+      exit(ERROR_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
     }
     this->offset_within_entry += n;
     return n;
@@ -783,7 +791,7 @@ insert_leaf(struct archive* a,
         fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
                 redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so exit.
-        exit(ERROR_CODE_GENERIC);
+        exit(ERROR_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
       }
       size += n;
     }
@@ -938,7 +946,7 @@ pre_initialize() {
       if (status != ARCHIVE_EOF) {
         fprintf(stderr, "fuse-archive: invalid archive: %s\n",
                 redact(g_archive_filename));
-        return ERROR_CODE_GENERIC;
+        return ERROR_CODE_INVALID_ARCHIVE_HEADER;
       }
       // Building the tree for an empty archive is trivial.
       insert_root_node();
@@ -965,7 +973,7 @@ pre_initialize() {
         g_initialize_index_within_archive = -1;
         fprintf(stderr, "fuse-archive: invalid raw archive: %s\n",
                 redact(g_archive_filename));
-        return ERROR_CODE_GENERIC;
+        return ERROR_CODE_INVALID_RAW_ARCHIVE;
       } else if (archive_filter_code(g_initialize_archive, i) !=
                  ARCHIVE_FILTER_NONE) {
         break;
@@ -980,7 +988,7 @@ pre_initialize() {
     ssize_t n =
         archive_read_data(g_initialize_archive, g_side_buffer_data[0], 1);
     if (n < 0) {
-      int ret = ERROR_CODE_GENERIC;
+      int ret = ERROR_CODE_INVALID_ARCHIVE_CONTENTS;
       if (starts_with(archive_error_string(g_initialize_archive),
                       "Passphrase required")) {
         ret = ERROR_CODE_PASSPHRASE_REQUIRED;

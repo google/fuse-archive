@@ -112,8 +112,8 @@ func run(archiveFilename string, directIO bool, passphrase string) error {
 			}
 		} else if e, ok := err.(*exec.ExitError); !ok {
 			return fmt.Errorf("Process.Wait(): have %T error want *exec.ExitError", err)
-		} else if ec := e.ExitCode(); ec != 2 { // 2 is ERROR_CODE_PASSPHRASE_REQUIRED
-			return fmt.Errorf("exit code: have %d want %d", ec, 2)
+		} else if ec := e.ExitCode(); ec != 20 { // 20 is ERROR_CODE_PASSPHRASE_REQUIRED
+			return fmt.Errorf("exit code: have %d want %d", ec, 20)
 		}
 		return nil
 	}
