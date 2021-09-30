@@ -376,12 +376,13 @@ struct reader {
       int status =
           archive_read_next_header(this->archive, &this->archive_entry);
       if (status == ARCHIVE_EOF) {
-        fprintf(stderr, "fuse-archive: inconsistent archive: %s\n",
+        fprintf(stderr, "fuse-archive: inconsistent archive %s\n",
                 redact(g_archive_filename));
         return false;
       } else if ((status != ARCHIVE_OK) && (status != ARCHIVE_WARN)) {
-        fprintf(stderr, "fuse-archive: invalid archive: %s\n",
-                redact(g_archive_filename));
+        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
+                redact(g_archive_filename),
+                archive_error_string(this->archive));
         return false;
       }
       this->index_within_archive++;
@@ -827,8 +828,9 @@ build_tree() {
                 redact(g_archive_filename),
                 archive_error_string(g_initialize_archive));
       } else if (status != ARCHIVE_OK) {
-        fprintf(stderr, "fuse-archive: invalid archive: %s\n",
-                redact(g_archive_filename));
+        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
+                redact(g_archive_filename),
+                archive_error_string(g_initialize_archive));
         return -EIO;
       }
     }
@@ -942,13 +944,16 @@ pre_initialize() {
               redact(g_archive_filename),
               archive_error_string(g_initialize_archive));
     } else if (status != ARCHIVE_OK) {
+      if (status != ARCHIVE_EOF) {
+        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
+                redact(g_archive_filename),
+                archive_error_string(g_initialize_archive));
+      }
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
       g_initialize_archive_entry = nullptr;
       g_initialize_index_within_archive = -1;
       if (status != ARCHIVE_EOF) {
-        fprintf(stderr, "fuse-archive: invalid archive: %s\n",
-                redact(g_archive_filename));
         return ERROR_CODE_INVALID_ARCHIVE_HEADER;
       }
       // Building the tree for an empty archive is trivial.
