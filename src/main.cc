@@ -63,8 +63,16 @@
 
 // ---- Error Codes
 
+// These are values passed to the exit function, or returned by main. These are
+// (Linux or Linux-like) application error codes, not library error codes.
+//
+// Note that, unless the -f command line option was passed for foreground
+// operation, the parent process may very well ignore the error code value
+// after daemonization succeeds.
+
 #define ERROR_CODE_GENERIC 1
 #define ERROR_CODE_PASSPHRASE_REQUIRED 2
+#define ERROR_CODE_PASSPHRASE_INCORRECT 3
 
 // ---- Compile-time Configuration
 
@@ -972,10 +980,16 @@ pre_initialize() {
     ssize_t n =
         archive_read_data(g_initialize_archive, g_side_buffer_data[0], 1);
     if (n < 0) {
-      bool passphrase_required = starts_with(
-          archive_error_string(g_initialize_archive), "Passphrase required");
-      if (passphrase_required) {
+      int ret = ERROR_CODE_GENERIC;
+      if (starts_with(archive_error_string(g_initialize_archive),
+                      "Passphrase required")) {
+        ret = ERROR_CODE_PASSPHRASE_REQUIRED;
         fprintf(stderr, "fuse-archive: passphrase required for %s\n",
+                redact(g_archive_filename));
+      } else if (starts_with(archive_error_string(g_initialize_archive),
+                             "Incorrect passphrase")) {
+        ret = ERROR_CODE_PASSPHRASE_INCORRECT;
+        fprintf(stderr, "fuse-archive: passphrase incorrect for %s\n",
                 redact(g_archive_filename));
       } else {
         fprintf(stderr, "fuse-archive: libarchive error for %s: %s\n",
@@ -986,8 +1000,7 @@ pre_initialize() {
       g_initialize_archive = nullptr;
       g_initialize_archive_entry = nullptr;
       g_initialize_index_within_archive = -1;
-      return passphrase_required ? ERROR_CODE_PASSPHRASE_REQUIRED
-                                 : ERROR_CODE_GENERIC;
+      return ret;
     }
   }
 
