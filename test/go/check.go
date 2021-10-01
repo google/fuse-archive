@@ -49,6 +49,7 @@ func main1() error {
 	}
 
 	archiveFilenames := []string{
+		"test/data/archive.7z",
 		"test/data/archive.password-is-asdf.zip",
 		"test/data/archive.tar.bz2",
 		"test/data/archive.zip",
@@ -152,6 +153,9 @@ func run(archiveFilename string, directIO bool, passphrase string) error {
 			testReadFile,
 			testSeek,
 		}
+		if strings.HasPrefix(archiveFilename, "test/data/archive.") {
+			testFunctions = append(testFunctions, testNonASCIIPathnames)
+		}
 	}
 
 	for _, tf := range testFunctions {
@@ -171,6 +175,21 @@ func memset(b []byte, value byte) {
 func placeholderTxtExists() bool {
 	_, err := os.Stat("test/mnt/placeholder.txt")
 	return err == nil
+}
+
+func testNonASCIIPathnames() error {
+	pathnames := []string{
+		// These are inside and outside the BMP (Basic Multilingual Plane).
+		"non-ascii/αβ.txt",
+		"non-ascii/😻.txt",
+	}
+	for _, pathname := range pathnames {
+		fmt.Printf("  - test NonASCIIPathnames [%s]\n", pathname)
+		if _, err := os.Stat("test/mnt/" + pathname); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func testReadAt() error {

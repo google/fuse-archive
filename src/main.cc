@@ -1233,6 +1233,12 @@ main(int argc, char** argv) {
     g_side_buffer_metadata[i].lru_priority = 0;
   }
 
+  // libarchive (especially for reading 7z) has locale-dependent behavior.
+  // Overriding LC_ALL, here, can avoid "Pathname cannot be converted from
+  // UTF-16LE to current locale" warnings from archive_read_next_header and
+  // archive_entry_pathname_utf8 subsequently returning nullptr.
+  setlocale(LC_ALL, "C.UTF-8");
+
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
     fprintf(stderr, "fuse-archive: missing command line arguments\n");
