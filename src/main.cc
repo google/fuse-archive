@@ -37,6 +37,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fuse.h>
+#include <locale.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
