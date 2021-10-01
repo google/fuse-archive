@@ -62,26 +62,26 @@
     }                                \
   } while (false)
 
-// ---- Error Codes
+// ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
-// (Linux or Linux-like) application error codes, not library error codes.
+// (Linux or Linux-like) application exit codes, not library error codes.
 //
 // Note that, unless the -f command line option was passed for foreground
-// operation, the parent process may very well ignore the error code value
-// after daemonization succeeds.
+// operation, the parent process may very well ignore the exit code value after
+// daemonization succeeds.
 
-#define ERROR_CODE_GENERIC 1
-// Error code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
+#define EXIT_CODE_GENERIC 1
+// Exit code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
 
-#define ERROR_CODE_LIBARCHIVE_CONTRACT_VIOLATION 10
+#define EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION 10
 
-#define ERROR_CODE_PASSPHRASE_REQUIRED 20
-#define ERROR_CODE_PASSPHRASE_INCORRECT 21
+#define EXIT_CODE_PASSPHRASE_REQUIRED 20
+#define EXIT_CODE_PASSPHRASE_INCORRECT 21
 
-#define ERROR_CODE_INVALID_RAW_ARCHIVE 30
-#define ERROR_CODE_INVALID_ARCHIVE_HEADER 31
-#define ERROR_CODE_INVALID_ARCHIVE_CONTENTS 32
+#define EXIT_CODE_INVALID_RAW_ARCHIVE 30
+#define EXIT_CODE_INVALID_ARCHIVE_HEADER 31
+#define EXIT_CODE_INVALID_ARCHIVE_CONTENTS 32
 
 // ---- Compile-time Configuration
 
@@ -466,7 +466,7 @@ struct reader {
       fprintf(stderr, "fuse-archive: too much data serving %s from %s\n",
               redact(pathname), redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so exit.
-      exit(ERROR_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
+      exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
     }
     this->offset_within_entry += n;
     return n;
@@ -796,7 +796,7 @@ insert_leaf(struct archive* a,
         fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
                 redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so exit.
-        exit(ERROR_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
+        exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
       }
       size += n;
     }
@@ -896,7 +896,7 @@ static int  //
 pre_initialize() {
   if (!g_archive_filename) {
     fprintf(stderr, "fuse-archive: missing archive_filename argument\n");
-    return ERROR_CODE_GENERIC;
+    return EXIT_CODE_GENERIC;
   }
 
   // fd is the file descriptor for the command line archive_filename argument.
@@ -906,7 +906,7 @@ pre_initialize() {
   if (fd < 0) {
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
-    return ERROR_CODE_GENERIC;
+    return EXIT_CODE_GENERIC;
   }
   sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", fd);
 
@@ -917,7 +917,7 @@ pre_initialize() {
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     fprintf(stderr, "fuse-archive: out of memory\n");
-    return ERROR_CODE_GENERIC;
+    return EXIT_CODE_GENERIC;
   }
   if (g_passphrase_length > 0) {
     archive_read_add_passphrase(g_initialize_archive, g_passphrase_buffer);
@@ -933,7 +933,7 @@ pre_initialize() {
     g_initialize_index_within_archive = -1;
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
-    return ERROR_CODE_GENERIC;
+    return EXIT_CODE_GENERIC;
   }
 
   while (true) {
@@ -955,7 +955,7 @@ pre_initialize() {
       g_initialize_archive_entry = nullptr;
       g_initialize_index_within_archive = -1;
       if (status != ARCHIVE_EOF) {
-        return ERROR_CODE_INVALID_ARCHIVE_HEADER;
+        return EXIT_CODE_INVALID_ARCHIVE_HEADER;
       }
       // Building the tree for an empty archive is trivial.
       insert_root_node();
@@ -982,7 +982,7 @@ pre_initialize() {
         g_initialize_index_within_archive = -1;
         fprintf(stderr, "fuse-archive: invalid raw archive: %s\n",
                 redact(g_archive_filename));
-        return ERROR_CODE_INVALID_RAW_ARCHIVE;
+        return EXIT_CODE_INVALID_RAW_ARCHIVE;
       } else if (archive_filter_code(g_initialize_archive, i) !=
                  ARCHIVE_FILTER_NONE) {
         break;
@@ -997,15 +997,15 @@ pre_initialize() {
     ssize_t n =
         archive_read_data(g_initialize_archive, g_side_buffer_data[0], 1);
     if (n < 0) {
-      int ret = ERROR_CODE_INVALID_ARCHIVE_CONTENTS;
+      int ret = EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
       if (starts_with(archive_error_string(g_initialize_archive),
                       "Passphrase required")) {
-        ret = ERROR_CODE_PASSPHRASE_REQUIRED;
+        ret = EXIT_CODE_PASSPHRASE_REQUIRED;
         fprintf(stderr, "fuse-archive: passphrase required for %s\n",
                 redact(g_archive_filename));
       } else if (starts_with(archive_error_string(g_initialize_archive),
                              "Incorrect passphrase")) {
-        ret = ERROR_CODE_PASSPHRASE_INCORRECT;
+        ret = EXIT_CODE_PASSPHRASE_INCORRECT;
         fprintf(stderr, "fuse-archive: passphrase incorrect for %s\n",
                 redact(g_archive_filename));
       } else {
@@ -1243,10 +1243,10 @@ main(int argc, char** argv) {
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
     fprintf(stderr, "fuse-archive: missing command line arguments\n");
-    return ERROR_CODE_GENERIC;
+    return EXIT_CODE_GENERIC;
   } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     fprintf(stderr, "fuse-archive: could not parse command line arguments\n");
-    return ERROR_CODE_GENERIC;
+    return EXIT_CODE_GENERIC;
   }
 
   // Force single-threading. It's simpler.
@@ -1289,9 +1289,9 @@ main(int argc, char** argv) {
   int ret = fuse_main(args.argc, args.argv, &my_operations, NULL);
   if (ret != 0) {
     // libfuse's fuse_main can return a variety of integer values. Collapse
-    // them all to fuse-archive's ERROR_CODE_GENERIC to avoid colliding with
-    // fuse-archive's other ERROR_CODE_ETC values.
-    return ERROR_CODE_GENERIC;
+    // them all to fuse-archive's EXIT_CODE_GENERIC to avoid colliding with
+    // fuse-archive's other EXIT_CODE_ETC values.
+    return EXIT_CODE_GENERIC;
   }
   return 0;
 }
