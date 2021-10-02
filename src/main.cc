@@ -37,6 +37,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fuse.h>
+#include <langinfo.h>
 #include <locale.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -53,6 +54,8 @@
 #if UINTPTR_MAX > UINT64_MAX
 #error "fuse-archive requires that casting a uintptr_t to uint64_t is lossless"
 #endif
+
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 #define TRY(operation)               \
   do {                               \
@@ -1224,6 +1227,39 @@ my_opt_proc(void* private_data,
   return keep;
 }
 
+static int  //
+ensure_utf_8_encoding() {
+  // libarchive (especially for reading 7z) has locale-dependent behavior.
+  // Non-ASCII pathnames can trigger "Pathname cannot be converted from
+  // UTF-16LE to current locale" warnings from archive_read_next_header and
+  // archive_entry_pathname_utf8 subsequently returning nullptr.
+  //
+  // Calling setlocale to enforce a UTF-8 encoding can avoid that. Try various
+  // arguments and pick the first one that is supported and produces UTF-8.
+  static const char* locales[] = {
+      // As of 2021, many systems (including Debian) support "C.UTF-8".
+      "C.UTF-8",
+      // However, "C.UTF-8" is not a POSIX standard and glibc 2.34 (released
+      // 2021-08-01) does not support it. It may come to glibc 2.35 (see the
+      // sourceware.org commit link below), but until then and on older
+      // systems, try the popular "en_US.UTF-8".
+      //
+      // https://sourceware.org/git/?p=glibc.git;a=commit;h=466f2be6c08070e9113ae2fdc7acd5d8828cba50
+      "en_US.UTF-8",
+      // As a final fallback, an empty string means to use the relevant
+      // environment variables (LANG, LC_ALL, etc).
+      "",
+  };
+  for (int i = 0; i < ARRAY_SIZE(locales); i++) {
+    if (setlocale(LC_ALL, locales[i]) &&
+        (strcmp("UTF-8", nl_langinfo(CODESET)) == 0)) {
+      return 0;
+    }
+  }
+  fprintf(stderr, "fuse-archive: could not ensure UTF-8 encoding\n");
+  return EXIT_CODE_GENERIC;
+}
+
 int  //
 main(int argc, char** argv) {
   // Initialize side buffers as invalid.
@@ -1234,11 +1270,7 @@ main(int argc, char** argv) {
     g_side_buffer_metadata[i].lru_priority = 0;
   }
 
-  // libarchive (especially for reading 7z) has locale-dependent behavior.
-  // Overriding LC_ALL, here, can avoid "Pathname cannot be converted from
-  // UTF-16LE to current locale" warnings from archive_read_next_header and
-  // archive_entry_pathname_utf8 subsequently returning nullptr.
-  setlocale(LC_ALL, "C.UTF-8");
+  TRY(ensure_utf_8_encoding());
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
