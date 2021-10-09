@@ -74,7 +74,7 @@
 // operation, the parent process may very well ignore the exit code value after
 // daemonization succeeds.
 
-#define EXIT_CODE_GENERIC 1
+#define EXIT_CODE_GENERIC_FAILURE 1
 // Exit code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
 
 #define EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION 10
@@ -899,7 +899,7 @@ static int  //
 pre_initialize() {
   if (!g_archive_filename) {
     fprintf(stderr, "fuse-archive: missing archive_filename argument\n");
-    return EXIT_CODE_GENERIC;
+    return EXIT_CODE_GENERIC_FAILURE;
   }
 
   // fd is the file descriptor for the command line archive_filename argument.
@@ -909,7 +909,7 @@ pre_initialize() {
   if (fd < 0) {
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
-    return EXIT_CODE_GENERIC;
+    return EXIT_CODE_GENERIC_FAILURE;
   }
   sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", fd);
 
@@ -920,7 +920,7 @@ pre_initialize() {
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     fprintf(stderr, "fuse-archive: out of memory\n");
-    return EXIT_CODE_GENERIC;
+    return EXIT_CODE_GENERIC_FAILURE;
   }
   if (g_passphrase_length > 0) {
     archive_read_add_passphrase(g_initialize_archive, g_passphrase_buffer);
@@ -936,7 +936,7 @@ pre_initialize() {
     g_initialize_index_within_archive = -1;
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
-    return EXIT_CODE_GENERIC;
+    return EXIT_CODE_GENERIC_FAILURE;
   }
 
   while (true) {
@@ -1257,7 +1257,7 @@ ensure_utf_8_encoding() {
     }
   }
   fprintf(stderr, "fuse-archive: could not ensure UTF-8 encoding\n");
-  return EXIT_CODE_GENERIC;
+  return EXIT_CODE_GENERIC_FAILURE;
 }
 
 int  //
@@ -1275,10 +1275,10 @@ main(int argc, char** argv) {
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
     fprintf(stderr, "fuse-archive: missing command line arguments\n");
-    return EXIT_CODE_GENERIC;
+    return EXIT_CODE_GENERIC_FAILURE;
   } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     fprintf(stderr, "fuse-archive: could not parse command line arguments\n");
-    return EXIT_CODE_GENERIC;
+    return EXIT_CODE_GENERIC_FAILURE;
   }
 
   // Force single-threading. It's simpler.
@@ -1321,9 +1321,9 @@ main(int argc, char** argv) {
   int ret = fuse_main(args.argc, args.argv, &my_operations, NULL);
   if (ret != 0) {
     // libfuse's fuse_main can return a variety of integer values. Collapse
-    // them all to fuse-archive's EXIT_CODE_GENERIC to avoid colliding with
-    // fuse-archive's other EXIT_CODE_ETC values.
-    return EXIT_CODE_GENERIC;
+    // them all to fuse-archive's EXIT_CODE_GENERIC_FAILURE to avoid colliding
+    // with fuse-archive's other EXIT_CODE_ETC values.
+    return EXIT_CODE_GENERIC_FAILURE;
   }
   return 0;
 }
