@@ -81,6 +81,7 @@
 
 #define EXIT_CODE_PASSPHRASE_REQUIRED 20
 #define EXIT_CODE_PASSPHRASE_INCORRECT 21
+#define EXIT_CODE_PASSPHRASE_NOT_SUPPORTED 22
 
 #define EXIT_CODE_INVALID_RAW_ARCHIVE 30
 #define EXIT_CODE_INVALID_ARCHIVE_HEADER 31
@@ -269,7 +270,7 @@ static struct side_buffer_metadata {
 } g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 uint64_t side_buffer_metadata::next_lru_priority = 0;
 
-// ---- C String Manipulation
+// ---- Libarchive Error Codes
 
 static bool  //
 starts_with(const char* s, const char* prefix) {
@@ -279,6 +280,50 @@ starts_with(const char* s, const char* prefix) {
   size_t ns = strlen(s);
   size_t np = strlen(prefix);
   return (ns >= np) && (strncmp(s, prefix, np) == 0);
+}
+
+// determine_passphrase_exit_code converts libarchive errors to fuse-archive
+// exit codes. libarchive doesn't have designated passphrase-related error
+// numbers. As for whether a particular archive file's encryption is supported,
+// libarchive isn't consistent in archive_read_has_encrypted_entries returning
+// ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
+// comparison on the various possible error messages.
+static int  //
+determine_passphrase_exit_code(struct archive* a, int fallback) {
+  const char* e = archive_error_string(a);
+  if (e) {
+    switch (e[0]) {
+      case 'I':
+        if (starts_with(e, "Incorrect passphrase")) {
+          return EXIT_CODE_PASSPHRASE_INCORRECT;
+        }
+        break;
+      case 'P':
+        if (starts_with(e, "Passphrase required")) {
+          return EXIT_CODE_PASSPHRASE_REQUIRED;
+        }
+        break;
+    }
+
+    static const char* not_supported_prefixes[] = {
+        "Crypto codec not supported",
+        "Decryption is unsupported",
+        "Encrypted file is unsupported",
+        "Encryption is not supported",
+        "RAR encryption support unavailable",
+        "The archive header is encrypted, but currently not supported",
+        "The file content is encrypted, but currently not supported",
+        "Unsupported encryption format",
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(not_supported_prefixes); i++) {
+      const char* prefix = not_supported_prefixes[i];
+      if ((e[0] == prefix[0]) && starts_with(e, prefix)) {
+        return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
+      }
+    }
+  }
+  return fallback;
 }
 
 // ---- Logging
@@ -994,27 +1039,30 @@ pre_initialize() {
 
   } else {
     // Otherwise, reading the first byte of the first non-directory entry will
-    // reveal whether we also need a passphrase. libarchive doesn't have a
-    // designated error number for "passphrase required". We have to do a
-    // string comparison on the error message.
+    // reveal whether we also need a passphrase.
     ssize_t n =
         archive_read_data(g_initialize_archive, g_side_buffer_data[0], 1);
     if (n < 0) {
-      int ret = EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
-      if (starts_with(archive_error_string(g_initialize_archive),
-                      "Passphrase required")) {
-        ret = EXIT_CODE_PASSPHRASE_REQUIRED;
-        fprintf(stderr, "fuse-archive: passphrase required for %s\n",
-                redact(g_archive_filename));
-      } else if (starts_with(archive_error_string(g_initialize_archive),
-                             "Incorrect passphrase")) {
-        ret = EXIT_CODE_PASSPHRASE_INCORRECT;
-        fprintf(stderr, "fuse-archive: passphrase incorrect for %s\n",
-                redact(g_archive_filename));
-      } else {
-        fprintf(stderr, "fuse-archive: libarchive error for %s: %s\n",
-                redact(g_archive_filename),
-                archive_error_string(g_initialize_archive));
+      int ret = determine_passphrase_exit_code(
+          g_initialize_archive, EXIT_CODE_INVALID_ARCHIVE_CONTENTS);
+      switch (ret) {
+        case EXIT_CODE_PASSPHRASE_REQUIRED:
+          fprintf(stderr, "fuse-archive: passphrase required for %s\n",
+                  redact(g_archive_filename));
+          break;
+        case EXIT_CODE_PASSPHRASE_INCORRECT:
+          fprintf(stderr, "fuse-archive: passphrase incorrect for %s\n",
+                  redact(g_archive_filename));
+          break;
+        case EXIT_CODE_PASSPHRASE_NOT_SUPPORTED:
+          fprintf(stderr, "fuse-archive: passphrase not supported for %s\n",
+                  redact(g_archive_filename));
+          break;
+        default:
+          fprintf(stderr, "fuse-archive: libarchive error for %s: %s\n",
+                  redact(g_archive_filename),
+                  archive_error_string(g_initialize_archive));
+          break;
       }
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
