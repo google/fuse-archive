@@ -44,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <atomic>
 #include <climits>
 #include <memory>
 #include <string>
@@ -150,6 +151,19 @@ static const char* g_archive_filename = NULL;
 // We never close this file. It's used to repeatedly re-open the file (with an
 // independent seek position) under the "/proc/self/fd/%d" name.
 static int g_archive_fd = -1;
+
+// g_archive_file_size is the size of the g_archive_filename file.
+static int64_t g_archive_file_size = 0;
+
+// g_archive_fd_position_current is the read position of g_archive_fd.
+//
+// etc_hwm is the etc_current high water mark (the largest value seen). When
+// compared to g_archive_file_size, it proxies what proportion of the archive
+// has been processed. This matters for 'raw' archives that need a complete
+// decompression pass (as they do not have a table of contents within to
+// explicitly record the decompressed file size).
+static int64_t g_archive_fd_position_current = 0;
+static std::atomic<int64_t> g_archive_fd_position_hwm;
 
 // g_proc_self_fd_filename holds the "/proc/self/fd/%d" filename of the file
 // descriptor for the archive file. The command line argument may give a
@@ -275,6 +289,14 @@ static struct side_buffer_metadata {
 } g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 uint64_t side_buffer_metadata::next_lru_priority = 0;
 
+// The side buffers are also repurposed as source (compressed) and destination
+// (decompressed) buffers during the initial pass over the archive file.
+#define SIDE_BUFFER_INDEX_COMPRESSED 0
+#define SIDE_BUFFER_INDEX_DECOMPRESSED 1
+#if NUM_SIDE_BUFFERS <= 1
+#error "invalid NUM_SIDE_BUFFERS"
+#endif
+
 // ---- Libarchive Error Codes
 
 static bool  //
@@ -339,6 +361,117 @@ determine_passphrase_exit_code(struct archive* a, int fallback) {
 static const char*  //
 redact(const char* s) {
   return g_options.redact ? "[REDACTED]" : s;
+}
+
+// ---- Libarchive Read Callbacks
+
+static void  //
+update_g_archive_fd_position_hwm() {
+  int64_t h = g_archive_fd_position_hwm.load();
+  if (h < g_archive_fd_position_current) {
+    g_archive_fd_position_hwm.store(g_archive_fd_position_current);
+  }
+}
+
+// TODO: export this over FUSE somehow.
+static uint32_t  //
+initialization_progress_out_of_1000000() {
+  int64_t m = g_archive_fd_position_hwm.load();
+  int64_t n = g_archive_file_size;
+  if ((m <= 0) || (n <= 0)) {
+    return 0;
+  } else if (m >= n) {
+    return 1000000;
+  }
+  double x = ((double)m) / ((double)n);
+  return ((uint32_t)(1000000 * x));
+}
+
+// The callbacks below are only used during start-up, for the initial pass
+// through the archive to build the node tree, based on the g_archive_fd file
+// descriptor that stays open for the lifetime of the process. They are like
+// libarchive's built-in "read from a file" callbacks but also update
+// g_archive_fd_position_etc. The callback_data arguments are ignored in favor
+// of global variables.
+
+static int  //
+my_file_close(struct archive* a, void* callback_data) {
+  return ARCHIVE_OK;
+}
+
+static int  //
+my_file_open(struct archive* a, void* callback_data) {
+  g_archive_fd_position_current = 0;
+  g_archive_fd_position_hwm.store(0);
+  return ARCHIVE_OK;
+}
+
+static ssize_t  //
+my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
+  if (g_archive_fd < 0) {
+    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    return ARCHIVE_FATAL;
+  }
+  uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
+  while (true) {
+    ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
+    if (n >= 0) {
+      g_archive_fd_position_current += n;
+      update_g_archive_fd_position_hwm();
+      *out_dst_ptr = dst_ptr;
+      return n;
+    } else if (errno == EINTR) {
+      continue;
+    }
+    archive_set_error(a, errno, "fuse-archive: could not read archive file");
+    break;
+  }
+  return ARCHIVE_FATAL;
+}
+
+static int64_t  //
+my_file_seek(struct archive* a,
+             void* callback_data,
+             int64_t offset,
+             int whence) {
+  int64_t o = lseek64(g_archive_fd, offset, whence);
+  if (o >= 0) {
+    g_archive_fd_position_current = o;
+    update_g_archive_fd_position_hwm();
+    return o;
+  }
+  archive_set_error(a, errno, "fuse-archive: could not seek in archive file");
+  return ARCHIVE_FATAL;
+}
+
+static int64_t  //
+my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
+  int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
+  int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
+  if ((o1 >= 0) && (o0 >= 0)) {
+    g_archive_fd_position_current = o1;
+    update_g_archive_fd_position_hwm();
+    return o1 - o0;
+  }
+  archive_set_error(a, errno, "fuse-archive: could not seek in archive file");
+  return ARCHIVE_FATAL;
+}
+
+static int  //
+my_file_switch(struct archive* a, void* callback_data0, void* callback_data1) {
+  return ARCHIVE_OK;
+}
+
+static int  //
+my_archive_read_open(struct archive* a) {
+  TRY(archive_read_set_callback_data(a, nullptr));
+  TRY(archive_read_set_close_callback(a, my_file_close));
+  TRY(archive_read_set_open_callback(a, my_file_open));
+  TRY(archive_read_set_read_callback(a, my_file_read));
+  TRY(archive_read_set_seek_callback(a, my_file_seek));
+  TRY(archive_read_set_skip_callback(a, my_file_skip));
+  TRY(archive_read_set_switch_callback(a, my_file_switch));
+  return archive_read_open1(a);
 }
 
 // ---- Side Buffer
@@ -838,7 +971,9 @@ insert_leaf(struct archive* a,
     // 'Raw' archives don't always explicitly record the decompressed size.
     // We'll have to decompress it to find out.
     while (true) {
-      ssize_t n = archive_read_data(a, g_side_buffer_data[0], SIDE_BUFFER_SIZE);
+      ssize_t n = archive_read_data(
+          a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
+          SIDE_BUFFER_SIZE);
       if (n == 0) {
         break;
       } else if (n < 0) {
@@ -960,6 +1095,14 @@ pre_initialize() {
   }
   sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", g_archive_fd);
 
+  struct stat z;
+  if (fstat(g_archive_fd, &z) != 0) {
+    fprintf(stderr, "fuse-archive: could not stat %s\n",
+            redact(g_archive_filename));
+    return EXIT_CODE_GENERIC_FAILURE;
+  }
+  g_archive_file_size = z.st_size;
+
   if (g_options.passphrase) {
     TRY(read_passphrase_from_stdin());
   }
@@ -975,8 +1118,7 @@ pre_initialize() {
   archive_read_support_filter_all(g_initialize_archive);
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
-  if (archive_read_open_fd(g_initialize_archive, g_archive_fd, BLOCK_SIZE) !=
-      ARCHIVE_OK) {
+  if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
@@ -1042,8 +1184,9 @@ pre_initialize() {
   } else {
     // Otherwise, reading the first byte of the first non-directory entry will
     // reveal whether we also need a passphrase.
-    ssize_t n =
-        archive_read_data(g_initialize_archive, g_side_buffer_data[0], 1);
+    ssize_t n = archive_read_data(
+        g_initialize_archive,
+        g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
       int ret = determine_passphrase_exit_code(
           g_initialize_archive, EXIT_CODE_INVALID_ARCHIVE_CONTENTS);
