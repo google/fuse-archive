@@ -146,6 +146,11 @@ static struct fuse_opt g_fuse_opts[] = {
 // g_archive_filename is the command line argument naming the archive file.
 static const char* g_archive_filename = NULL;
 
+// g_archive_fd is the file descriptor returned by opening g_archive_filename.
+// We never close this file. It's used to repeatedly re-open the file (with an
+// independent seek position) under the "/proc/self/fd/%d" name.
+static int g_archive_fd = -1;
+
 // g_proc_self_fd_filename holds the "/proc/self/fd/%d" filename of the file
 // descriptor for the archive file. The command line argument may give a
 // relative filename (one that doesn't start with a slash) and the fuse_main
@@ -947,16 +952,13 @@ pre_initialize() {
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
-  // fd is the file descriptor for the command line archive_filename argument.
-  // We never close this file. It's used to repeatedly re-open the file (with
-  // an independent seek position) under the "/proc/self/fd/%d" name.
-  int fd = open(g_archive_filename, O_RDONLY);
-  if (fd < 0) {
+  g_archive_fd = open(g_archive_filename, O_RDONLY);
+  if (g_archive_fd < 0) {
     fprintf(stderr, "fuse-archive: could not open %s\n",
             redact(g_archive_filename));
     return EXIT_CODE_GENERIC_FAILURE;
   }
-  sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", fd);
+  sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", g_archive_fd);
 
   if (g_options.passphrase) {
     TRY(read_passphrase_from_stdin());
@@ -973,7 +975,7 @@ pre_initialize() {
   archive_read_support_filter_all(g_initialize_archive);
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
-  if (archive_read_open_fd(g_initialize_archive, fd, BLOCK_SIZE) !=
+  if (archive_read_open_fd(g_initialize_archive, g_archive_fd, BLOCK_SIZE) !=
       ARCHIVE_OK) {
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
