@@ -912,10 +912,10 @@ insert_leaf_node(std::string&& pathname,
   }
   node* parent = g_root_node;
 
-  mode_t rwx = mode & 0777;
-  mode_t rwx_r_bits = rwx & 0444;
-  mode_t branch_mode = rwx | (rwx_r_bits >> 2) | S_IFDIR;
-  mode_t leaf_mode = rwx | S_IFREG;
+  mode_t rx_bits = mode & 0555;
+  mode_t r_bits = rx_bits & 0444;
+  mode_t branch_mode = rx_bits | (r_bits >> 2) | S_IFDIR;
+  mode_t leaf_mode = rx_bits | S_IFREG;
 
   // p, q and r point to pathname fragments per the valid_pathname comment.
   const char* p = pathname.c_str();
