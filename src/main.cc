@@ -48,6 +48,7 @@
 #include <climits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -118,21 +119,25 @@ static struct options {
   bool help;
   bool redact;
   bool passphrase;
+  const char* asyncprogress;
 } g_options = {};
 
 enum {
   MY_KEY_HELP = 100,
-  MY_KEY_PASSPHRASE = 101,
-  MY_KEY_REDACT = 102,
+  MY_KEY_ASYNCPROGRESS = 101,
+  MY_KEY_PASSPHRASE = 102,
+  MY_KEY_REDACT = 103,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", MY_KEY_HELP),                  //
-    FUSE_OPT_KEY("--help", MY_KEY_HELP),              //
-    FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),  //
-    FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),    //
-    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),          //
-    FUSE_OPT_KEY("redact", MY_KEY_REDACT),            //
+    FUSE_OPT_KEY("-h", MY_KEY_HELP),                           //
+    FUSE_OPT_KEY("--help", MY_KEY_HELP),                       //
+    FUSE_OPT_KEY("--asyncprogress=%s", MY_KEY_ASYNCPROGRESS),  //
+    FUSE_OPT_KEY("asyncprogress=%s", MY_KEY_ASYNCPROGRESS),    //
+    FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
+    FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),             //
+    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),                   //
+    FUSE_OPT_KEY("redact", MY_KEY_REDACT),                     //
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
@@ -217,10 +222,22 @@ static int64_t g_initialize_index_within_archive = -1;
 
 // These global variables are the in-memory directory tree of nodes.
 //
-// g_root_node being non-nullptr means that initialization is complete.
+// g_root_node being non-nullptr means that initialization is complete (when
+// the --asyncprogress option is not used).
+//
+// g_asyncprogress_complete being true means that initialization is complete
+// (when the --asyncprogress option is used).
+//
+// Building the directory tree can take minutes, for archive file formats like
+// .tar.gz that are compressed but also do not contain an explicit on-disk
+// directory of archive entries. Using the --asyncprogress option makes serving
+// the first FUSE request (such as a top-level "ls") instantaneous, at the
+// expense of making it harder (at the file system level) to determine when the
+// initialization is complete and the actual directory tree is being served.
 static std::unordered_map<std::string, struct node*> g_nodes_by_name;
 static std::vector<struct node*> g_nodes_by_index;
 static struct node* g_root_node = nullptr;
+static std::atomic<bool> g_asyncprogress_complete;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
@@ -373,7 +390,6 @@ update_g_archive_fd_position_hwm() {
   }
 }
 
-// TODO: export this over FUSE somehow.
 static uint32_t  //
 initialization_progress_out_of_1000000() {
   int64_t m = g_archive_fd_position_hwm.load();
@@ -403,6 +419,7 @@ static int  //
 my_file_open(struct archive* a, void* callback_data) {
   g_archive_fd_position_current = 0;
   g_archive_fd_position_hwm.store(0);
+  g_asyncprogress_complete.store(false);
   return ARCHIVE_OK;
 }
 
@@ -803,6 +820,8 @@ struct node {
 // splitting on '/' into pathname fragments, no fragment is "", "." or ".."
 // other than a possibly leading empty fragment when p starts with "/".
 //
+// If allow_slashes is false then p must not contain "/".
+//
 // When iterating over fragments, the p pointer does not move but the q and r
 // pointers bracket each fragment:
 //   "/an/example/pathname"
@@ -810,12 +829,15 @@ struct node {
 //    p   q------r|       |
 //    p           q-------r
 static bool  //
-valid_pathname(const char* p) {
+valid_pathname(const char* p, bool allow_slashes) {
   if (!p) {
     return false;
   }
   const char* q = p;
   if (*q == '/') {
+    if (!allow_slashes) {
+      return false;
+    }
     q++;
   }
   if (*q == 0) {
@@ -823,8 +845,14 @@ valid_pathname(const char* p) {
   }
   while (true) {
     const char* r = q;
-    while ((*r != 0) && (*r != '/')) {
-      r++;
+    while (*r != 0) {
+      if (*r != '/') {
+        r++;
+      } else if (!allow_slashes) {
+        return false;
+      } else {
+        break;
+      }
     }
     size_t len = r - q;
     if (len == 0) {
@@ -855,7 +883,7 @@ normalize_pathname(struct archive_entry* e) {
       return "";
     }
   }
-  if (!valid_pathname(s)) {
+  if (!valid_pathname(s, true)) {
     fprintf(stderr,
             "fuse-archive: archive entry in %s has invalid pathname: %s\n",
             redact(g_archive_filename), redact(s));
@@ -1036,7 +1064,7 @@ build_tree() {
 
 // ---- Lazy Initialization
 
-// This section (pre_initialize and post_initialize) are the "two parts"
+// This section (pre_initialize and post_initialize_etc) are the "two parts"
 // described in the "Building is split into two parts" comment above.
 
 static int  //
@@ -1221,7 +1249,7 @@ pre_initialize() {
 }
 
 static int  //
-post_initialize() {
+post_initialize_sync() {
   if (g_initialize_status_code) {
     return g_initialize_status_code;
   } else if (g_root_node != nullptr) {
@@ -1236,11 +1264,45 @@ post_initialize() {
   return g_initialize_status_code;
 }
 
+static void  //
+post_initialize_async() {
+  post_initialize_sync();
+  g_asyncprogress_complete.store(true);
+}
+
 // ---- FUSE Callbacks
 
 static int  //
 my_getattr(const char* pathname, struct stat* z) {
-  TRY(post_initialize());
+  if (!g_options.asyncprogress) {
+    TRY(post_initialize_sync());
+  } else if (!g_asyncprogress_complete.load()) {
+    if (*pathname == '/') {
+      if (pathname[1] == '\x00') {
+        memset(z, 0, sizeof(*z));
+        z->st_mode = 0555 | S_IFDIR;
+        z->st_nlink = 1;
+        z->st_uid = g_uid;
+        z->st_gid = g_gid;
+        z->st_size = 0;
+        z->st_mtime = 0;
+        return 0;
+      } else if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
+        memset(z, 0, sizeof(*z));
+        z->st_mode = 0000 | S_IFREG;
+        z->st_nlink = 1;
+        z->st_uid = g_uid;
+        z->st_gid = g_gid;
+        z->st_size = 0;
+        z->st_mtime = initialization_progress_out_of_1000000();
+        return 0;
+      }
+    }
+    return -ENOENT;
+  } else if (g_initialize_status_code) {
+    return g_initialize_status_code;
+  }
+
   auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1258,7 +1320,21 @@ my_getattr(const char* pathname, struct stat* z) {
 
 static int  //
 my_open(const char* pathname, struct fuse_file_info* ffi) {
-  TRY(post_initialize());
+  if (!g_options.asyncprogress) {
+    TRY(post_initialize_sync());
+  } else if (!g_asyncprogress_complete.load()) {
+    if (*pathname == '/') {
+      if (pathname[1] == '\x00') {
+        return -EISDIR;
+      } else if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
+        return -EACCES;
+      }
+    }
+    return -ENOENT;
+  } else if (g_initialize_status_code) {
+    return g_initialize_status_code;
+  }
+
   auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1285,7 +1361,14 @@ my_read(const char* pathname,
         size_t dst_len,
         off_t offset,
         struct fuse_file_info* ffi) {
-  TRY(post_initialize());
+  if (!g_options.asyncprogress) {
+    TRY(post_initialize_sync());
+  } else if (!g_asyncprogress_complete.load()) {
+    return -EIO;
+  } else if (g_initialize_status_code) {
+    return g_initialize_status_code;
+  }
+
   if ((offset < 0) || (dst_len > INT_MAX)) {
     return -EINVAL;
   }
@@ -1348,7 +1431,14 @@ my_read(const char* pathname,
 
 static int  //
 my_release(const char* pathname, struct fuse_file_info* ffi) {
-  TRY(post_initialize());
+  if (!g_options.asyncprogress) {
+    TRY(post_initialize_sync());
+  } else if (!g_asyncprogress_complete.load()) {
+    return -EIO;
+  } else if (g_initialize_status_code) {
+    return g_initialize_status_code;
+  }
+
   struct reader* r = reinterpret_cast<struct reader*>(ffi->fh);
   if (!r) {
     return -EIO;
@@ -1363,7 +1453,25 @@ my_readdir(const char* pathname,
            fuse_fill_dir_t filler,
            off_t offset,
            struct fuse_file_info* ffi) {
-  TRY(post_initialize());
+  if (!g_options.asyncprogress) {
+    TRY(post_initialize_sync());
+  } else if (!g_asyncprogress_complete.load()) {
+    if (*pathname == '/') {
+      if (pathname[1] == '\x00') {
+        if (filler(buf, ".", NULL, 0) || filler(buf, "..", NULL, 0) ||
+            filler(buf, g_options.asyncprogress, NULL, 0)) {
+          return -ENOMEM;
+        }
+        return 0;
+      } else if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
+        return -ENOTDIR;
+      }
+    }
+    return -ENOENT;
+  } else if (g_initialize_status_code) {
+    return g_initialize_status_code;
+  }
+
   auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1382,12 +1490,27 @@ my_readdir(const char* pathname,
   return 0;
 }
 
+static void*  //
+my_init(struct fuse_conn_info* conn) {
+  if (g_options.asyncprogress) {
+    // Finish the initialization asynchronously, in a separate thread. This is
+    // kicked off here, in my_init, instead of the main function, because of
+    // the fuse_main call in between. fuse_main (which calls fuse_daemonize,
+    // inside libfuse) can fork-and-kill the current process (unless the -f
+    // command line flag was passed for foreground operation), which can also
+    // stop any threads started by the main function.
+    std::thread(post_initialize_async).detach();
+  }
+  return nullptr;
+}
+
 static struct fuse_operations my_operations = {
     .getattr = my_getattr,
     .open = my_open,
     .read = my_read,
     .release = my_release,
     .readdir = my_readdir,
+    .init = my_init,
 };
 
 // ---- Main
@@ -1397,6 +1520,7 @@ my_opt_proc(void* private_data,
             const char* arg,
             int key,
             struct fuse_args* out_args) {
+  static constexpr int error = -1;
   static constexpr int discard = 0;
   static constexpr int keep = 1;
 
@@ -1409,6 +1533,28 @@ my_opt_proc(void* private_data,
       break;
     case MY_KEY_HELP:
       g_options.help = true;
+      return discard;
+    case MY_KEY_ASYNCPROGRESS:
+      if (!arg) {
+        return error;
+      }
+      for (; (*arg != '\x00') && (*arg != '='); arg++) {
+      }
+      if (*arg == '=') {
+        arg++;
+      }
+      if (*arg == '/') {
+        arg++;
+      }
+      if (!valid_pathname(arg, false) || (*arg == '\x00')) {
+        fprintf(stderr, "fuse-archive: invalid --asyncprogress=etc pathname\n");
+        return error;
+      }
+      g_options.asyncprogress = strdup(arg);
+      if (!g_options.asyncprogress) {
+        fprintf(stderr, "fuse-archive: out of memory\n");
+        return error;
+      }
       return discard;
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
@@ -1486,24 +1632,40 @@ main(int argc, char** argv) {
 
   if (g_options.help) {
     g_initialize_status_code = -EIO;
-    fprintf(stderr,
-            "usage: %s archive_filename mountpoint [options]\n"
-            "\n"
-            "general options:\n"
-            "    -o opt,[opt...]        mount options\n"
-            "    -h   --help            print help\n"
-            "    -V   --version         print version\n"
-            "\n"
-            "%s options:\n"
-            "         --passphrase      passphrase given on stdin; 1023 bytes "
-            "max;\n"
-            "                           up to (excluding) first '\\n', '\\x00' "
-            "or EOF\n"
-            "         -o passphrase     ditto\n"
-            "         --redact          redact pathnames from log messages\n"
-            "         -o redact         ditto\n"
-            "\n",
-            argv[0], argv[0]);
+    fprintf(
+        stderr,
+        "usage: %s archive_filename mountpoint [options]\n"
+        "\n"
+        "general options:\n"
+        "    -o opt,[opt...]        mount options\n"
+        "    -h   --help            print help\n"
+        "    -V   --version         print version\n"
+        "\n"
+        "%s options:\n"
+        "         --asyncprogress=foo.bar   load the archive file immediately "
+        "and\n"
+        "                           asynchronously, instead of waiting until\n"
+        "                           serving the first FUSE request.\n"
+        "                           Progress can be watched from the "
+        "modification\n"
+        "                           time (via a stat syscall) of the "
+        "artificial\n"
+        "                           foo.bar file under the mountpoint. 0%% and "
+        "100%%\n"
+        "                           correspond to 0 and 1 million seconds "
+        "since\n"
+        "                           the Unix epoch, roughly 1 and 12 January "
+        "1970.\n"
+        "         -o asyncprogress=foo.bar  ditto\n"
+        "         --passphrase      passphrase given on stdin; 1023 bytes "
+        "max;\n"
+        "                           up to (excluding) first '\\n', '\\x00' or "
+        "EOF\n"
+        "         -o passphrase     ditto\n"
+        "         --redact          redact pathnames from log messages\n"
+        "         -o redact         ditto\n"
+        "\n",
+        argv[0], argv[0]);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
   } else {
     TRY(pre_initialize());
