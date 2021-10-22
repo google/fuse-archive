@@ -239,6 +239,24 @@ static std::vector<struct node*> g_nodes_by_index;
 static struct node* g_root_node = nullptr;
 static std::atomic<bool> g_asyncprogress_complete;
 
+// g_shutting_down (when the --asyncprogress option is used) communicates to
+// the worker thread that the main thread is shutting down.
+//
+// Normally, the worker thread populates the g_nodes_by_etc containers, then
+// flips g_asyncprogress_complete, then the main thread reads those containers.
+// All of the container reads happen after all of the container writes, even
+// though reads and writes happen in different threads.
+//
+// However, if the mountpoint is unmounted (e.g. by "fusermount -u") before the
+// worker thread is done, the main thread's main function's return can trigger
+// those containers' destructors and we now have concurrent and racy writes on
+// those global variables.
+//
+// To avoid a segfault (or other undefined behavior), g_shutting_down tells the
+// worker thread to stop early and the main thread then joins it before
+// implicitly running the g_nodes_by_etc destructors.
+static std::atomic<bool> g_shutting_down;
+
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
 // backwards. For example, if some other program reads "/foo", "/bar" and then
@@ -425,7 +443,10 @@ my_file_open(struct archive* a, void* callback_data) {
 
 static ssize_t  //
 my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
-  if (g_archive_fd < 0) {
+  if (g_options.asyncprogress && g_shutting_down.load()) {
+    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    return ARCHIVE_FATAL;
+  } else if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
@@ -451,6 +472,10 @@ my_file_seek(struct archive* a,
              void* callback_data,
              int64_t offset,
              int whence) {
+  if (g_options.asyncprogress && g_shutting_down.load()) {
+    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    return ARCHIVE_FATAL;
+  }
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
     g_archive_fd_position_current = o;
@@ -463,6 +488,10 @@ my_file_seek(struct archive* a,
 
 static int64_t  //
 my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
+  if (g_options.asyncprogress && g_shutting_down.load()) {
+    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    return ARCHIVE_FATAL;
+  }
   int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if ((o1 >= 0) && (o0 >= 0)) {
@@ -1030,6 +1059,10 @@ build_tree() {
   }
   bool first = true;
   while (true) {
+    if (g_options.asyncprogress && g_shutting_down.load()) {
+      return -ECANCELED;
+    }
+
     if (first) {
       // The entry was already read by pre_initialize.
       first = false;
@@ -1499,9 +1532,20 @@ my_init(struct fuse_conn_info* conn) {
     // inside libfuse) can fork-and-kill the current process (unless the -f
     // command line flag was passed for foreground operation), which can also
     // stop any threads started by the main function.
-    std::thread(post_initialize_async).detach();
+    g_shutting_down.store(false);
+    return new std::thread(post_initialize_async);
   }
   return nullptr;
+}
+
+static void  //
+my_destroy(void* arg) {
+  if (arg) {
+    g_shutting_down.store(true);
+    std::thread* t = static_cast<std::thread*>(arg);
+    t->join();
+    delete t;
+  }
 }
 
 static struct fuse_operations my_operations = {
@@ -1511,6 +1555,7 @@ static struct fuse_operations my_operations = {
     .release = my_release,
     .readdir = my_readdir,
     .init = my_init,
+    .destroy = my_destroy,
 };
 
 // ---- Main
