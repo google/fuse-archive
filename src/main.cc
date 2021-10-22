@@ -811,6 +811,7 @@ release_reader(std::unique_ptr<struct reader> r) {
 
 struct node {
   std::string rel_name;  // Relative (not absolute) pathname.
+  std::string symlink;
   int64_t index_within_archive;
   int64_t size;
   time_t mtime;
@@ -821,11 +822,13 @@ struct node {
   node* next_sibling;
 
   node(std::string&& _rel_name,
+       std::string&& _symlink,
        int64_t _index_within_archive,
        int64_t _size,
        time_t _mtime,
        mode_t _mode)
       : rel_name(_rel_name),
+        symlink(_symlink),
         index_within_archive(_index_within_archive),
         size(_size),
         mtime(_mtime),
@@ -926,6 +929,7 @@ normalize_pathname(struct archive_entry* e) {
 
 static int  //
 insert_leaf_node(std::string&& pathname,
+                 std::string&& symlink,
                  int64_t index_within_archive,
                  int64_t size,
                  time_t mtime,
@@ -944,7 +948,12 @@ insert_leaf_node(std::string&& pathname,
   mode_t rx_bits = mode & 0555;
   mode_t r_bits = rx_bits & 0444;
   mode_t branch_mode = rx_bits | (r_bits >> 2) | S_IFDIR;
-  mode_t leaf_mode = rx_bits | S_IFREG;
+  mode_t leaf_mode = rx_bits;
+  if (symlink.empty()) {
+    leaf_mode |= S_IFREG;
+  } else {
+    leaf_mode |= S_IFLNK;
+  }
 
   // p, q and r point to pathname fragments per the valid_pathname comment.
   const char* p = pathname.c_str();
@@ -967,8 +976,8 @@ insert_leaf_node(std::string&& pathname,
     std::string rel_pathname(q, r - q);
     if (*r == 0) {
       // Insert an explicit leaf node (a regular file).
-      node* n = new node(std::move(rel_pathname), index_within_archive, size,
-                         mtime, leaf_mode);
+      node* n = new node(std::move(rel_pathname), std::move(symlink),
+                         index_within_archive, size, mtime, leaf_mode);
       parent->add_child(n);
       // Add to g_nodes_by_name.
       g_nodes_by_name.insert({std::move(abs_pathname), n});
@@ -992,7 +1001,8 @@ insert_leaf_node(std::string&& pathname,
     // Insert an implicit branch node (a directory).
     auto iter = g_nodes_by_name.find(abs_pathname);
     if (iter == g_nodes_by_name.end()) {
-      node* n = new node(std::move(rel_pathname), -1, 0, mtime, branch_mode);
+      node* n = new node(std::move(rel_pathname), std::move(symlink), -1, 0,
+                         mtime, branch_mode);
       parent->add_child(n);
       g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
       parent = n;
@@ -1017,8 +1027,25 @@ insert_leaf(struct archive* a,
   if (pathname.empty()) {
     // normalize_pathname already printed a log message.
     return 0;
-  } else if (!S_ISREG(archive_entry_mode(e))) {
-    fprintf(stderr, "fuse-archive: irregular file in %s: %s\n",
+  }
+
+  std::string symlink;
+  mode_t mode = archive_entry_mode(e);
+  if (S_ISLNK(mode)) {
+    const char* s = archive_entry_symlink_utf8(e);
+    if (!s) {
+      s = archive_entry_symlink(e);
+    }
+    if (s) {
+      symlink = std::string(s);
+    }
+    if (symlink.empty()) {
+      fprintf(stderr, "fuse-archive: empty link in %s: %s\n",
+              redact(g_archive_filename), redact(pathname.c_str()));
+      return 0;
+    }
+  } else if (!S_ISREG(mode)) {
+    fprintf(stderr, "fuse-archive: irregular non-link file in %s: %s\n",
             redact(g_archive_filename), redact(pathname.c_str()));
     return 0;
   }
@@ -1048,8 +1075,9 @@ insert_leaf(struct archive* a,
     g_raw_decompressed_size = size;
   }
 
-  return insert_leaf_node(std::move(pathname), index_within_archive, size,
-                          archive_entry_mtime(e), archive_entry_mode(e));
+  return insert_leaf_node(std::move(pathname), std::move(symlink),
+                          index_within_archive, size, archive_entry_mtime(e),
+                          mode);
 }
 
 static int  //
@@ -1137,7 +1165,7 @@ read_passphrase_from_stdin() {
 static void  //
 insert_root_node() {
   static constexpr int64_t index_within_archive = -1;
-  g_root_node = new node("", index_within_archive, 0, 0, S_IFDIR);
+  g_root_node = new node("", "", index_within_archive, 0, 0, S_IFDIR);
   g_nodes_by_name["/"] = g_root_node;
 }
 
@@ -1352,6 +1380,34 @@ my_getattr(const char* pathname, struct stat* z) {
 }
 
 static int  //
+my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
+  if (!g_options.asyncprogress) {
+    TRY(post_initialize_sync());
+  } else if (!g_asyncprogress_complete.load()) {
+    if (*pathname == '/') {
+      if ((pathname[1] == '\x00') ||
+          (strcmp(pathname + 1, g_options.asyncprogress) == 0)) {
+        return -ENOLINK;
+      }
+    }
+    return -ENOENT;
+  } else if (g_initialize_status_code) {
+    return g_initialize_status_code;
+  }
+
+  auto iter = g_nodes_by_name.find(pathname);
+  if (iter == g_nodes_by_name.end()) {
+    return -ENOENT;
+  }
+  node* n = iter->second;
+  if (n->symlink.empty() || (dst_len == 0)) {
+    return -ENOLINK;
+  }
+  snprintf(dst_ptr, dst_len, "%s", n->symlink.c_str());
+  return 0;
+}
+
+static int  //
 my_open(const char* pathname, struct fuse_file_info* ffi) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
@@ -1550,6 +1606,7 @@ my_destroy(void* arg) {
 
 static struct fuse_operations my_operations = {
     .getattr = my_getattr,
+    .readlink = my_readlink,
     .open = my_open,
     .read = my_read,
     .release = my_release,
