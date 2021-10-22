@@ -378,7 +378,7 @@ determine_passphrase_exit_code(struct archive* a, int fallback) {
         "Unsupported encryption format",
     };
 
-    for (int i = 0; i < ARRAY_SIZE(not_supported_prefixes); i++) {
+    for (size_t i = 0; i < ARRAY_SIZE(not_supported_prefixes); i++) {
       const char* prefix = not_supported_prefixes[i];
       if ((e[0] == prefix[0]) && starts_with(e, prefix)) {
         return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
@@ -1691,7 +1691,7 @@ ensure_utf_8_encoding() {
       // environment variables (LANG, LC_ALL, etc).
       "",
   };
-  for (int i = 0; i < ARRAY_SIZE(locales); i++) {
+  for (size_t i = 0; i < ARRAY_SIZE(locales); i++) {
     if (setlocale(LC_ALL, locales[i]) &&
         (strcmp("UTF-8", nl_langinfo(CODESET)) == 0)) {
       return 0;
