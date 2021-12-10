@@ -113,6 +113,12 @@
 #error "invalid SIDE_BUFFER_SIZE"
 #endif
 
+// ---- Platform specifics
+
+#if defined(__FreeBSD__) || defined( __OpenBSD__ ) || defined( __APPLE__ )
+#define lseek64 lseek
+#endif
+
 // ---- Globals
 
 static struct options {
@@ -153,8 +159,7 @@ static struct fuse_opt g_fuse_opts[] = {
 static const char* g_archive_filename = NULL;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
-// We never close this file. It's used to repeatedly re-open the file (with an
-// independent seek position) under the "/proc/self/fd/%d" name.
+// We never close this file.
 static int g_archive_fd = -1;
 
 // g_archive_file_size is the size of the g_archive_filename file.
@@ -170,13 +175,13 @@ static int64_t g_archive_file_size = 0;
 static int64_t g_archive_fd_position_current = 0;
 static std::atomic<int64_t> g_archive_fd_position_hwm;
 
-// g_proc_self_fd_filename holds the "/proc/self/fd/%d" filename of the file
-// descriptor for the archive file. The command line argument may give a
-// relative filename (one that doesn't start with a slash) and the fuse_main
-// function may change the current working directory, so subsequent
-// archive_read_open_filename calls use this "/proc/self/fd/%d" absolute
-// filename instead. g_archive_filename is still used for logging.
-static char g_proc_self_fd_filename[64] = {};
+// g_archive_path holds the canonicalised absolute path of the archive file.
+// The command line argument may give a relative filename (one that doesn't
+// start with a slash) and the fuse_main function may change the current
+// working directory, so subsequent archive_read_open_filename calls use this
+// absolute filepath instead. g_archive_filename is still used for logging.
+// *g_archive_path is allocated in pre_initialize() and never freed after.
+static const char* g_archive_path = NULL;
 
 // g_passphrase_buffer and g_passphrase_length combine to hold the passphrase,
 // if given. The buffer is NUL-terminated but g_passphrase_length excludes the
@@ -772,7 +777,7 @@ acquire_reader(int64_t want_index_within_archive) {
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
     archive_read_support_format_raw(a);
-    if (archive_read_open_filename(a, g_proc_self_fd_filename, BLOCK_SIZE) !=
+    if (archive_read_open_filename(a, g_archive_path, BLOCK_SIZE) !=
         ARCHIVE_OK) {
       fprintf(stderr, "fuse-archive: could not open %s: %s\n",
               redact(g_archive_filename), archive_error_string(a));
@@ -1182,7 +1187,11 @@ pre_initialize() {
             redact(g_archive_filename));
     return EXIT_CODE_GENERIC_FAILURE;
   }
-  sprintf(g_proc_self_fd_filename, "/proc/self/fd/%d", g_archive_fd);
+  if (!(g_archive_path = realpath(g_archive_filename, NULL))) {
+    fprintf(stderr, "fuse-archive: error getting absolute path of %s: %s\n",
+            redact(g_archive_filename), strerror(errno));
+    return EXIT_CODE_GENERIC_FAILURE;
+  }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
