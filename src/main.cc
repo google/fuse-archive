@@ -774,9 +774,9 @@ acquire_reader(int64_t want_index_within_archive) {
     archive_read_support_format_raw(a);
     if (archive_read_open_filename(a, g_proc_self_fd_filename, BLOCK_SIZE) !=
         ARCHIVE_OK) {
+      fprintf(stderr, "fuse-archive: could not open %s: %s\n",
+              redact(g_archive_filename), archive_error_string(a));
       archive_read_free(a);
-      fprintf(stderr, "fuse-archive: could not open %s\n",
-              redact(g_archive_filename));
       return nullptr;
     }
     r = std::make_unique<struct reader>(a);
@@ -1208,12 +1208,13 @@ pre_initialize() {
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
   if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
+    fprintf(stderr, "fuse-archive: could not open %s: %s\n",
+            redact(g_archive_filename),
+            archive_error_string(g_initialize_archive));
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
     g_initialize_index_within_archive = -1;
-    fprintf(stderr, "fuse-archive: could not open %s\n",
-            redact(g_archive_filename));
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
