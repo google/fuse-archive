@@ -159,7 +159,6 @@ static struct fuse_opt g_fuse_opts[] = {
 static const char* g_archive_filename = NULL;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
-// We never close this file.
 static int g_archive_fd = -1;
 
 // g_archive_file_size is the size of the g_archive_filename file.
@@ -480,6 +479,9 @@ my_file_seek(struct archive* a,
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
     return ARCHIVE_FATAL;
+  } else if (g_archive_fd < 0) {
+    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    return ARCHIVE_FATAL;
   }
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
@@ -495,6 +497,9 @@ static int64_t  //
 my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    return ARCHIVE_FATAL;
+  } else if (g_archive_fd < 0) {
+    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
@@ -1333,6 +1338,10 @@ post_initialize_sync() {
   g_initialize_archive = nullptr;
   g_initialize_archive_entry = nullptr;
   g_initialize_index_within_archive = -1;
+  if (g_archive_fd >= 0) {
+    close(g_archive_fd);
+    g_archive_fd = -1;
+  }
   return g_initialize_status_code;
 }
 
