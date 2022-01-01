@@ -858,9 +858,10 @@ struct node {
   }
 };
 
-// valid_pathname returns whether the C string p is neither "" or "/" and, when
-// splitting on '/' into pathname fragments, no fragment is "", "." or ".."
-// other than a possibly leading empty fragment when p starts with "/".
+// valid_pathname returns whether the C string p is neither "", "./" or "/"
+// and, when splitting on '/' into pathname fragments, no fragment is "", "."
+// or ".." other than a possibly leading "" or "." fragment when p starts with
+// "/" or "./".
 //
 // If allow_slashes is false then p must not contain "/".
 //
@@ -871,12 +872,17 @@ struct node {
 //    p   q------r|       |
 //    p           q-------r
 static bool  //
-valid_pathname(const char* p, bool allow_slashes) {
+valid_pathname(const char* const p, bool allow_slashes) {
   if (!p) {
     return false;
   }
   const char* q = p;
-  if (*q == '/') {
+  if ((q[0] == '.') && (q[1] == '/')) {
+    if (!allow_slashes) {
+      return false;
+    }
+    q += 2;
+  } else if (*q == '/') {
     if (!allow_slashes) {
       return false;
     }
@@ -931,7 +937,9 @@ normalize_pathname(struct archive_entry* e) {
             redact(g_archive_filename), redact(s));
     return "";
   }
-  if (*s == '/') {
+  if ((s[0] == '.') && (s[1] == '/')) {
+    return std::string(s + 1);
+  } else if (*s == '/') {
     return std::string(s);
   }
   return std::string("/") + std::string(s);

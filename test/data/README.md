@@ -1,6 +1,11 @@
 `archive.*` was copied from the github.com/google/wuffs test/data directory,
 released under the same Apache 2 license.
 
+`dot-slash-foo` was created by:
+
+    $ touch foo
+    $ tar cf dot-slash-foo.tar ./foo
+
 `romeo.txt` is an excerpt of Shakespeare's "Romeo and Juliet", copied from
 [shakespeare.mit.edu](http://shakespeare.mit.edu/romeo_juliet/romeo_juliet.2.2.html).
 
