@@ -856,6 +856,19 @@ struct node {
       this->last_child = n;
     }
   }
+
+  void fill_stat(struct stat* z) const {
+    if (!z) {
+      return;
+    }
+    memset(z, 0, sizeof(*z));
+    z->st_mode = this->mode;
+    z->st_nlink = 1;
+    z->st_uid = g_uid;
+    z->st_gid = g_gid;
+    z->st_size = this->size;
+    z->st_mtime = this->mtime;
+  }
 };
 
 // valid_pathname returns whether the C string p is neither "", "./" or "/"
@@ -1396,14 +1409,7 @@ my_getattr(const char* pathname, struct stat* z) {
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
-  node* n = iter->second;
-  memset(z, 0, sizeof(*z));
-  z->st_mode = n->mode;
-  z->st_nlink = 1;
-  z->st_uid = g_uid;
-  z->st_gid = g_gid;
-  z->st_size = n->size;
-  z->st_mtime = n->mtime;
+  iter->second->fill_stat(z);
   return 0;
 }
 
@@ -1599,8 +1605,10 @@ my_readdir(const char* pathname,
   } else if (filler(buf, ".", NULL, 0) || filler(buf, "..", NULL, 0)) {
     return -ENOMEM;
   }
+  struct stat z;
   for (n = n->first_child; n; n = n->next_sibling) {
-    if (filler(buf, n->rel_name.c_str(), NULL, 0)) {
+    n->fill_stat(&z);
+    if (filler(buf, n->rel_name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
   }
