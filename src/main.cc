@@ -91,6 +91,10 @@
 
 // ---- Compile-time Configuration
 
+#ifndef FUSE_ARCHIVE_VERSION
+#define FUSE_ARCHIVE_VERSION "0.1.10-pre"
+#endif
+
 #ifndef BLOCK_SIZE
 #define BLOCK_SIZE 16384
 #endif
@@ -123,21 +127,28 @@
 
 static struct options {
   bool help;
+  bool version;
   bool redact;
   bool passphrase;
   const char* asyncprogress;
 } g_options = {};
 
 enum {
+  // Options shared with libfuse's helper.c.
   MY_KEY_HELP = 100,
-  MY_KEY_ASYNCPROGRESS = 101,
-  MY_KEY_PASSPHRASE = 102,
-  MY_KEY_REDACT = 103,
+  MY_KEY_VERSION = 101,
+
+  // Options exclusive to fuse-archive.
+  MY_KEY_ASYNCPROGRESS = 200,
+  MY_KEY_PASSPHRASE = 201,
+  MY_KEY_REDACT = 202,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", MY_KEY_HELP),                           //
     FUSE_OPT_KEY("--help", MY_KEY_HELP),                       //
+    FUSE_OPT_KEY("-V", MY_KEY_VERSION),                        //
+    FUSE_OPT_KEY("--version", MY_KEY_VERSION),                 //
     FUSE_OPT_KEY("--asyncprogress=%s", MY_KEY_ASYNCPROGRESS),  //
     FUSE_OPT_KEY("asyncprogress=%s", MY_KEY_ASYNCPROGRESS),    //
     FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
@@ -1672,6 +1683,9 @@ my_opt_proc(void* private_data,
     case MY_KEY_HELP:
       g_options.help = true;
       return discard;
+    case MY_KEY_VERSION:
+      g_options.version = true;
+      return keep;
     case MY_KEY_ASYNCPROGRESS:
       if (!arg) {
         return error;
@@ -1805,6 +1819,8 @@ main(int argc, char** argv) {
         "\n",
         argv[0], argv[0]);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
+  } else if (g_options.version) {
+    fprintf(stderr, "fuse-archive version: %s\n", FUSE_ARCHIVE_VERSION);
   } else {
     TRY(pre_initialize());
     g_uid = getuid();
