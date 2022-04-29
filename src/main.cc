@@ -43,6 +43,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 
 #include <atomic>
 #include <chrono>
@@ -450,10 +451,8 @@ update_g_archive_fd_position_hwm() {
     auto now = std::chrono::steady_clock::now();
     if ((now - ago) >= std::chrono::seconds(1)) {
       ago = now;
-      uint32_t progress = initialization_progress_out_of_1000000();
-      printf("Loading %3" PRIu32 "%% = %7" PRIu32 " / 1000000.\n",
-             progress / 10000, progress);
-      fflush(stdout);
+      const int percent = initialization_progress_out_of_1000000() / 10000;
+      syslog(LOG_INFO, "Loading %d%%", percent);
     }
   }
 }
@@ -652,11 +651,10 @@ struct reader {
       int status =
           archive_read_next_header(this->archive, &this->archive_entry);
       if (status == ARCHIVE_EOF) {
-        fprintf(stderr, "fuse-archive: inconsistent archive %s\n",
-                redact(g_archive_filename));
+        syslog(LOG_ERR, "inconsistent archive %s", redact(g_archive_filename));
         return false;
       } else if ((status != ARCHIVE_OK) && (status != ARCHIVE_WARN)) {
-        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
+        syslog(LOG_ERR, "invalid archive %s: %s",
                 redact(g_archive_filename),
                 archive_error_string(this->archive));
         return false;
@@ -733,12 +731,12 @@ struct reader {
   ssize_t read(void* dst_ptr, size_t dst_len, const char* pathname) {
     ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
     if (n < 0) {
-      fprintf(stderr, "fuse-archive: could not serve %s from %s: %s\n",
+      syslog(LOG_ERR, "could not serve %s from %s: %s",
               redact(pathname), redact(g_archive_filename),
               archive_error_string(this->archive));
       return -EIO;
     } else if (static_cast<size_t>(n) > dst_len) {
-      fprintf(stderr, "fuse-archive: too much data serving %s from %s\n",
+      syslog(LOG_ERR, "too much data serving %s from %s",
               redact(pathname), redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so exit.
       exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
@@ -779,7 +777,7 @@ compare(int64_t index_within_archive0,
 static std::unique_ptr<struct reader>  //
 acquire_reader(int64_t want_index_within_archive) {
   if (want_index_within_archive < 0) {
-    fprintf(stderr, "fuse-archive: negative index_within_archive\n");
+    syslog(LOG_ERR, "negative index_within_archive");
     return nullptr;
   }
 
@@ -806,7 +804,7 @@ acquire_reader(int64_t want_index_within_archive) {
   } else {
     struct archive* a = archive_read_new();
     if (!a) {
-      fprintf(stderr, "fuse-archive: out of memory\n");
+      syslog(LOG_ERR, "out of memory");
       return nullptr;
     }
     if (g_passphrase_length > 0) {
@@ -817,7 +815,7 @@ acquire_reader(int64_t want_index_within_archive) {
     archive_read_support_format_raw(a);
     if (archive_read_open_filename(a, g_archive_realpath, BLOCK_SIZE) !=
         ARCHIVE_OK) {
-      fprintf(stderr, "fuse-archive: could not open %s: %s\n",
+      syslog(LOG_ERR, "could not open %s: %s",
               redact(g_archive_filename), archive_error_string(a));
       archive_read_free(a);
       return nullptr;
@@ -972,14 +970,13 @@ normalize_pathname(struct archive_entry* e) {
   if (!s) {
     s = archive_entry_pathname(e);
     if (!s) {
-      fprintf(stderr, "fuse-archive: archive entry in %s has empty pathname\n",
+      syslog(LOG_ERR, "archive entry in %s has empty pathname",
               redact(g_archive_filename));
       return "";
     }
   }
   if (!valid_pathname(s, true)) {
-    fprintf(stderr,
-            "fuse-archive: archive entry in %s has invalid pathname: %s\n",
+    syslog(LOG_ERR, "archive entry in %s has invalid pathname: %s",
             redact(g_archive_filename), redact(s));
     return "";
   }
@@ -999,11 +996,11 @@ insert_leaf_node(std::string&& pathname,
                  time_t mtime,
                  mode_t mode) {
   if (index_within_archive < 0) {
-    fprintf(stderr, "fuse-archive: negative index_within_archive in %s: %s\n",
+    syslog(LOG_ERR, "negative index_within_archive in %s: %s",
             redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
   } else if (g_nodes_by_name.find(pathname) != g_nodes_by_name.end()) {
-    fprintf(stderr, "fuse-archive: duplicate pathname in %s: %s\n",
+    syslog(LOG_ERR, "duplicate pathname in %s: %s",
             redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
   }
@@ -1052,8 +1049,7 @@ insert_leaf_node(std::string&& pathname,
       }
       if (g_nodes_by_index.size() >
           static_cast<uint64_t>(index_within_archive)) {
-        fprintf(stderr,
-                "fuse-archive: index_within_archive out of order in %s: %s\n",
+        syslog(LOG_ERR, "index_within_archive out of order in %s: %s",
                 redact(g_archive_filename), redact(pathname.c_str()));
         return -EIO;
       }
@@ -1071,9 +1067,7 @@ insert_leaf_node(std::string&& pathname,
       g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
       parent = n;
     } else if (!S_ISDIR(iter->second->mode)) {
-      fprintf(
-          stderr,
-          "fuse-archive: simultaneous directory and regular file in %s: %s\n",
+      syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
           redact(g_archive_filename), redact(abs_pathname.c_str()));
       return -EIO;
     } else {
@@ -1104,12 +1098,12 @@ insert_leaf(struct archive* a,
       symlink = std::string(s);
     }
     if (symlink.empty()) {
-      fprintf(stderr, "fuse-archive: empty link in %s: %s\n",
+      syslog(LOG_ERR, "empty link in %s: %s",
               redact(g_archive_filename), redact(pathname.c_str()));
       return 0;
     }
   } else if (!S_ISREG(mode)) {
-    fprintf(stderr, "fuse-archive: irregular non-link file in %s: %s\n",
+    syslog(LOG_ERR, "irregular non-link file in %s: %s",
             redact(g_archive_filename), redact(pathname.c_str()));
     return 0;
   }
@@ -1125,11 +1119,11 @@ insert_leaf(struct archive* a,
       if (n == 0) {
         break;
       } else if (n < 0) {
-        fprintf(stderr, "fuse-archive: could not decompress %s: %s\n",
+        syslog(LOG_ERR, "could not decompress %s: %s",
                 redact(g_archive_filename), archive_error_string(a));
         return -EIO;
       } else if (n > SIDE_BUFFER_SIZE) {
-        fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
+        syslog(LOG_ERR, "too much data decompressing %s",
                 redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so exit.
         exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
@@ -1166,11 +1160,11 @@ build_tree() {
       if (status == ARCHIVE_EOF) {
         break;
       } else if (status == ARCHIVE_WARN) {
-        fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
+        syslog(LOG_ERR, "libarchive warning for %s: %s",
                 redact(g_archive_filename),
                 archive_error_string(g_initialize_archive));
       } else if (status != ARCHIVE_OK) {
-        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
+        syslog(LOG_ERR, "invalid archive %s: %s",
                 redact(g_archive_filename),
                 archive_error_string(g_initialize_archive));
         return -EIO;
@@ -1202,8 +1196,7 @@ read_passphrase_from_stdin() {
       if (errno == EINTR) {
         continue;
       }
-      fprintf(stderr,
-              "fuse-archive: could not read passphrase from stdin: %s\n",
+      syslog(LOG_ERR, "could not read passphrase from stdin: %s",
               strerror(errno));
       return -errno;
     } else if (n == 0) {
@@ -1222,7 +1215,7 @@ read_passphrase_from_stdin() {
     }
     g_passphrase_length = j;
   }
-  fprintf(stderr, "fuse-archive: passphrase was too long\n");
+  syslog(LOG_ERR, "passphrase was too long");
   return -EIO;
 }
 
@@ -1236,26 +1229,26 @@ insert_root_node() {
 static int  //
 pre_initialize() {
   if (!g_archive_filename) {
-    fprintf(stderr, "fuse-archive: missing archive_filename argument\n");
+    syslog(LOG_ERR, "missing archive_filename argument");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
   g_archive_fd = open(g_archive_filename, O_RDONLY);
   if (g_archive_fd < 0) {
-    fprintf(stderr, "fuse-archive: could not open %s\n",
+    syslog(LOG_ERR, "could not open %s",
             redact(g_archive_filename));
     return EXIT_CODE_GENERIC_FAILURE;
   }
   g_archive_realpath = realpath(g_archive_filename, NULL);
   if (!g_archive_realpath) {
-    fprintf(stderr, "fuse-archive: error getting absolute path of %s: %s\n",
+    syslog(LOG_ERR, "error getting absolute path of %s: %s",
             redact(g_archive_filename), strerror(errno));
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
-    fprintf(stderr, "fuse-archive: could not stat %s\n",
+    syslog(LOG_ERR, "could not stat %s",
             redact(g_archive_filename));
     return EXIT_CODE_GENERIC_FAILURE;
   }
@@ -1267,7 +1260,7 @@ pre_initialize() {
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
-    fprintf(stderr, "fuse-archive: out of memory\n");
+    syslog(LOG_ERR, "out of memory");
     return EXIT_CODE_GENERIC_FAILURE;
   }
   if (g_passphrase_length > 0) {
@@ -1277,7 +1270,7 @@ pre_initialize() {
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
   if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
-    fprintf(stderr, "fuse-archive: could not open %s: %s\n",
+    syslog(LOG_ERR, "could not open %s: %s",
             redact(g_archive_filename),
             archive_error_string(g_initialize_archive));
     archive_read_free(g_initialize_archive);
@@ -1292,12 +1285,12 @@ pre_initialize() {
                                           &g_initialize_archive_entry);
     g_initialize_index_within_archive++;
     if (status == ARCHIVE_WARN) {
-      fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
+      syslog(LOG_ERR, "libarchive warning for %s: %s",
               redact(g_archive_filename),
               archive_error_string(g_initialize_archive));
     } else if (status != ARCHIVE_OK) {
       if (status != ARCHIVE_EOF) {
-        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
+        syslog(LOG_ERR, "invalid archive %s: %s",
                 redact(g_archive_filename),
                 archive_error_string(g_initialize_archive));
       }
@@ -1331,7 +1324,7 @@ pre_initialize() {
         g_initialize_archive = nullptr;
         g_initialize_archive_entry = nullptr;
         g_initialize_index_within_archive = -1;
-        fprintf(stderr, "fuse-archive: invalid raw archive: %s\n",
+        syslog(LOG_ERR, "invalid raw archive: %s",
                 redact(g_archive_filename));
         return EXIT_CODE_INVALID_RAW_ARCHIVE;
       } else if (archive_filter_code(g_initialize_archive, i) !=
@@ -1351,19 +1344,19 @@ pre_initialize() {
           g_initialize_archive, EXIT_CODE_INVALID_ARCHIVE_CONTENTS);
       switch (ret) {
         case EXIT_CODE_PASSPHRASE_REQUIRED:
-          fprintf(stderr, "fuse-archive: passphrase required for %s\n",
+          syslog(LOG_ERR, "passphrase required for %s",
                   redact(g_archive_filename));
           break;
         case EXIT_CODE_PASSPHRASE_INCORRECT:
-          fprintf(stderr, "fuse-archive: passphrase incorrect for %s\n",
+          syslog(LOG_ERR, "passphrase incorrect for %s",
                   redact(g_archive_filename));
           break;
         case EXIT_CODE_PASSPHRASE_NOT_SUPPORTED:
-          fprintf(stderr, "fuse-archive: passphrase not supported for %s\n",
+          syslog(LOG_ERR, "passphrase not supported for %s",
                   redact(g_archive_filename));
           break;
         default:
-          fprintf(stderr, "fuse-archive: libarchive error for %s: %s\n",
+          syslog(LOG_ERR, "libarchive error for %s: %s",
                   redact(g_archive_filename),
                   archive_error_string(g_initialize_archive));
           break;
@@ -1397,8 +1390,7 @@ post_initialize_sync() {
     g_archive_fd = -1;
   }
   if (g_options.printprogress && (g_initialize_status_code == 0)) {
-    printf("Ready.\n");
-    fflush(stdout);
+    syslog(LOG_INFO, "Loaded 100%%");
   }
   return g_initialize_status_code;
 }
@@ -1725,12 +1717,12 @@ my_opt_proc(void* private_data,
         arg++;
       }
       if (!valid_pathname(arg, false) || (*arg == '\x00')) {
-        fprintf(stderr, "fuse-archive: invalid --asyncprogress=etc pathname\n");
+        syslog(LOG_ERR, "invalid --asyncprogress=etc pathname");
         return error;
       }
       g_options.asyncprogress = strdup(arg);
       if (!g_options.asyncprogress) {
-        fprintf(stderr, "fuse-archive: out of memory\n");
+        syslog(LOG_ERR, "out of memory");
         return error;
       }
       return discard;
@@ -1779,12 +1771,15 @@ ensure_utf_8_encoding() {
       return 0;
     }
   }
-  fprintf(stderr, "fuse-archive: could not ensure UTF-8 encoding\n");
+  syslog(LOG_ERR, "could not ensure UTF-8 encoding");
   return EXIT_CODE_GENERIC_FAILURE;
 }
 
 int  //
 main(int argc, char** argv) {
+  openlog("fuse-archive", LOG_PERROR, LOG_USER);
+  setlogmask(LOG_UPTO(LOG_INFO));
+
   // Initialize side buffers as invalid.
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
     g_side_buffer_metadata[i].index_within_archive = -1;
@@ -1797,14 +1792,13 @@ main(int argc, char** argv) {
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
-    fprintf(stderr, "fuse-archive: missing command line arguments\n");
+    syslog(LOG_ERR, "missing command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
-    fprintf(stderr, "fuse-archive: could not parse command line arguments\n");
+    syslog(LOG_ERR, "could not parse command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   } else if (g_options.asyncprogress && g_options.eager) {
-    fprintf(stderr,
-            "fuse-archive: cannot combine --asyncprogress and --eager\n");
+    syslog(LOG_ERR, "cannot combine --asyncprogress and --eager");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
@@ -1860,8 +1854,8 @@ main(int argc, char** argv) {
         "                           up to (excluding) first '\\n', '\\x00' or "
         "EOF\n"
         "         -o passphrase     ditto\n"
-        "         --printprogress   print loading progress to stdout, like\n"
-        "                           'Loading  23% =  234567 / 1000000.'\n"
+        "         --printprogress   print loading progress to stderr, like\n"
+        "                           'Loading 23%'\n"
         "                           This flag is ineffective unless -f,\n"
         "                           --asyncprogress or --eager is also set.\n"
         "         -o printprogress  ditto\n"
