@@ -45,6 +45,7 @@
 #include <string.h>
 
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <memory>
 #include <string>
@@ -128,8 +129,10 @@
 static struct options {
   bool help;
   bool version;
-  bool redact;
+
   bool passphrase;
+  bool printprogress;
+  bool redact;
   const char* asyncprogress;
 } g_options = {};
 
@@ -141,7 +144,8 @@ enum {
   // Options exclusive to fuse-archive.
   MY_KEY_ASYNCPROGRESS = 200,
   MY_KEY_PASSPHRASE = 201,
-  MY_KEY_REDACT = 202,
+  MY_KEY_PRINTPROGRESS = 202,
+  MY_KEY_REDACT = 203,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
@@ -153,6 +157,8 @@ static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("asyncprogress=%s", MY_KEY_ASYNCPROGRESS),    //
     FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
     FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),             //
+    FUSE_OPT_KEY("--printprogress", MY_KEY_PRINTPROGRESS),     //
+    FUSE_OPT_KEY("printprogress", MY_KEY_PRINTPROGRESS),       //
     FUSE_OPT_KEY("--redact", MY_KEY_REDACT),                   //
     FUSE_OPT_KEY("redact", MY_KEY_REDACT),                     //
     // The remaining options are listed for e.g. "-o formatraw" command line
@@ -415,14 +421,6 @@ redact(const char* s) {
 
 // ---- Libarchive Read Callbacks
 
-static void  //
-update_g_archive_fd_position_hwm() {
-  int64_t h = g_archive_fd_position_hwm.load();
-  if (h < g_archive_fd_position_current) {
-    g_archive_fd_position_hwm.store(g_archive_fd_position_current);
-  }
-}
-
 static uint32_t  //
 initialization_progress_out_of_1000000() {
   int64_t m = g_archive_fd_position_hwm.load();
@@ -434,6 +432,25 @@ initialization_progress_out_of_1000000() {
   }
   double x = ((double)m) / ((double)n);
   return ((uint32_t)(1000000 * x));
+}
+
+static void  //
+update_g_archive_fd_position_hwm() {
+  int64_t h = g_archive_fd_position_hwm.load();
+  if (h < g_archive_fd_position_current) {
+    g_archive_fd_position_hwm.store(g_archive_fd_position_current);
+  }
+  if (g_options.printprogress) {
+    static auto ago = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if ((now - ago) >= std::chrono::seconds(1)) {
+      ago = now;
+      uint32_t progress = initialization_progress_out_of_1000000();
+      printf("Loading %3" PRIu32 "%% = %7" PRIu32 " / 1000000.\n",
+             progress / 10000, progress);
+      fflush(stdout);
+    }
+  }
 }
 
 // The callbacks below are only used during start-up, for the initial pass
@@ -1374,6 +1391,10 @@ post_initialize_sync() {
     close(g_archive_fd);
     g_archive_fd = -1;
   }
+  if (g_options.printprogress && (g_initialize_status_code == 0)) {
+    printf("Ready.\n");
+    fflush(stdout);
+  }
   return g_initialize_status_code;
 }
 
@@ -1711,6 +1732,9 @@ my_opt_proc(void* private_data,
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
       return discard;
+    case MY_KEY_PRINTPROGRESS:
+      g_options.printprogress = true;
+      return discard;
     case MY_KEY_REDACT:
       g_options.redact = true;
       return discard;
@@ -1814,6 +1838,11 @@ main(int argc, char** argv) {
         "                           up to (excluding) first '\\n', '\\x00' or "
         "EOF\n"
         "         -o passphrase     ditto\n"
+        "         --printprogress   print loading progress to stdout, like\n"
+        "                           'Loading  23% =  234567 / 1000000.'\n"
+        "                           This flag is ineffective unless -f or\n"
+        "                           --asyncprogress is also set.\n"
+        "         -o printprogress  ditto\n"
         "         --redact          redact pathnames from log messages\n"
         "         -o redact         ditto\n"
         "\n",
