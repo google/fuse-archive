@@ -133,7 +133,6 @@ static struct options {
 
   bool eager;
   bool passphrase;
-  bool printprogress;
   bool redact;
   const char* asyncprogress;
 } g_options = {};
@@ -147,7 +146,7 @@ enum {
   MY_KEY_ASYNCPROGRESS = 200,
   MY_KEY_EAGER = 201,
   MY_KEY_PASSPHRASE = 202,
-  MY_KEY_PRINTPROGRESS = 203,
+  MY_KEY_QUIET = 203,
   MY_KEY_REDACT = 204,
 };
 
@@ -162,8 +161,8 @@ static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("eager", MY_KEY_EAGER),                       //
     FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
     FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),             //
-    FUSE_OPT_KEY("--printprogress", MY_KEY_PRINTPROGRESS),     //
-    FUSE_OPT_KEY("printprogress", MY_KEY_PRINTPROGRESS),       //
+    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),                     //
+    FUSE_OPT_KEY("-q", MY_KEY_QUIET),                          //
     FUSE_OPT_KEY("--redact", MY_KEY_REDACT),                   //
     FUSE_OPT_KEY("redact", MY_KEY_REDACT),                     //
     // The remaining options are listed for e.g. "-o formatraw" command line
@@ -446,14 +445,13 @@ update_g_archive_fd_position_hwm() {
   if (h < g_archive_fd_position_current) {
     g_archive_fd_position_hwm.store(g_archive_fd_position_current);
   }
-  if (g_options.printprogress) {
-    static auto ago = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    if ((now - ago) >= std::chrono::seconds(1)) {
-      ago = now;
-      const int percent = initialization_progress_out_of_1000000() / 10000;
-      syslog(LOG_INFO, "Loading %d%%", percent);
-    }
+
+  static auto ago = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+  if ((now - ago) >= std::chrono::seconds(1)) {
+    ago = now;
+    const int percent = initialization_progress_out_of_1000000() / 10000;
+    syslog(LOG_INFO, "Loading %d%%", percent);
   }
 }
 
@@ -1389,7 +1387,7 @@ post_initialize_sync() {
     close(g_archive_fd);
     g_archive_fd = -1;
   }
-  if (g_options.printprogress && (g_initialize_status_code == 0)) {
+  if (g_initialize_status_code == 0) {
     syslog(LOG_INFO, "Loaded 100%%");
   }
   return g_initialize_status_code;
@@ -1732,8 +1730,8 @@ my_opt_proc(void* private_data,
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
       return discard;
-    case MY_KEY_PRINTPROGRESS:
-      g_options.printprogress = true;
+    case MY_KEY_QUIET:
+      setlogmask(LOG_UPTO(LOG_ERR));
       return discard;
     case MY_KEY_REDACT:
       g_options.redact = true;
@@ -1822,43 +1820,30 @@ main(int argc, char** argv) {
         "    -o opt,[opt...]        mount options\n"
         "    -h   --help            print help\n"
         "    -V   --version         print version\n"
+        "    -q   --quiet           do not print progress messages\n"
         "\n"
         "%s options:\n"
-        "         --asyncprogress=foo.bar   load the archive file immediately "
-        "and\n"
+        "         --asyncprogress=foo.bar   load the archive file immediately and\n"
         "                           asynchronously, instead of waiting until\n"
         "                           serving the first FUSE request.\n"
-        "                           Progress can be watched from the "
-        "modification\n"
-        "                           time (via a stat syscall) of the "
-        "artificial\n"
-        "                           foo.bar file under the mountpoint. 0%% and "
-        "100%%\n"
-        "                           correspond to 0 and 1 million seconds "
-        "since\n"
-        "                           the Unix epoch, roughly 1 and 12 January "
-        "1970.\n"
+        "                           Progress can be watched from the modification\n"
+        "                           time (via a stat syscall) of the artificial\n"
+        "                           foo.bar file under the mountpoint. 0%% and 100%%\n"
+        "                           correspond to 0 and 1 million seconds since\n"
+        "                           the Unix epoch, roughly 1 and 12 January 1970.\n"
         "                           Incompatible with --eager.\n"
         "         -o asyncprogress=foo.bar  ditto\n"
         "         --eager           load the archive file immediately and\n"
         "                           synchronously, instead of waiting until\n"
         "                           serving the first FUSE request.\n"
-        "                           Binding the mountpoint and "
-        "daemonization will\n"
+        "                           Binding the mountpoint and daemonization will\n"
         "                           not occur until the archive file is loaded,\n"
         "                           which can take up to tens of seconds.\n"
         "                           Incompatible with --asyncprogress.\n"
         "         -o eager          ditto\n"
-        "         --passphrase      passphrase given on stdin; 1023 bytes "
-        "max;\n"
-        "                           up to (excluding) first '\\n', '\\x00' or "
-        "EOF\n"
+        "         --passphrase      passphrase given on stdin; 1023 bytes max;\n"
+        "                           up to (excluding) first '\\n', '\\x00' or EOF\n"
         "         -o passphrase     ditto\n"
-        "         --printprogress   print loading progress to stderr, like\n"
-        "                           'Loading 23%'\n"
-        "                           This flag is ineffective unless -f,\n"
-        "                           --asyncprogress or --eager is also set.\n"
-        "         -o printprogress  ditto\n"
         "         --redact          redact pathnames from log messages\n"
         "         -o redact         ditto\n"
         "\n",
