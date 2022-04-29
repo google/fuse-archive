@@ -131,7 +131,6 @@ static struct options {
   bool help;
   bool version;
 
-  bool eager;
   bool passphrase;
   bool redact;
   const char* asyncprogress;
@@ -157,8 +156,6 @@ static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("--version", MY_KEY_VERSION),                 //
     FUSE_OPT_KEY("--asyncprogress=%s", MY_KEY_ASYNCPROGRESS),  //
     FUSE_OPT_KEY("asyncprogress=%s", MY_KEY_ASYNCPROGRESS),    //
-    FUSE_OPT_KEY("--eager", MY_KEY_EAGER),                     //
-    FUSE_OPT_KEY("eager", MY_KEY_EAGER),                       //
     FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
     FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),             //
     FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),                     //
@@ -234,11 +231,11 @@ static gid_t g_gid = 0;
 // Building that tree is one of the first things that we do.
 //
 // Building is split into two parts and the bulk of it is done in the second
-// part, lazily (unless the --asyncprogress or --eager flags are set), so that
-// the main function can call fuse_main (to bind the mountpoint and daemonize)
-// as fast as possible (although the main function still does a preliminary
-// check that the archive_filename command line argument actually names an
-// existing file that looks like a valid archive).
+// part, lazily (unless the --asyncprogress flag is set), so that the main
+// function can call fuse_main (to bind the mountpoint and daemonize) as fast as
+// possible (although the main function still does a preliminary check that the
+// archive_filename command line argument actually names an existing file that
+// looks like a valid archive).
 //
 // These global variables connect those two parts.
 static int g_initialize_status_code = 0;
@@ -1724,9 +1721,6 @@ my_opt_proc(void* private_data,
         return error;
       }
       return discard;
-    case MY_KEY_EAGER:
-      g_options.eager = true;
-      return discard;
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
       return discard;
@@ -1795,9 +1789,6 @@ main(int argc, char** argv) {
   } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     syslog(LOG_ERR, "could not parse command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
-  } else if (g_options.asyncprogress && g_options.eager) {
-    syslog(LOG_ERR, "cannot combine --asyncprogress and --eager");
-    return EXIT_CODE_GENERIC_FAILURE;
   }
 
   // Force single-threading. It's simpler.
@@ -1831,16 +1822,7 @@ main(int argc, char** argv) {
         "                           foo.bar file under the mountpoint. 0%% and 100%%\n"
         "                           correspond to 0 and 1 million seconds since\n"
         "                           the Unix epoch, roughly 1 and 12 January 1970.\n"
-        "                           Incompatible with --eager.\n"
         "         -o asyncprogress=foo.bar  ditto\n"
-        "         --eager           load the archive file immediately and\n"
-        "                           synchronously, instead of waiting until\n"
-        "                           serving the first FUSE request.\n"
-        "                           Binding the mountpoint and daemonization will\n"
-        "                           not occur until the archive file is loaded,\n"
-        "                           which can take up to tens of seconds.\n"
-        "                           Incompatible with --asyncprogress.\n"
-        "         -o eager          ditto\n"
         "         --passphrase      passphrase given on stdin; 1023 bytes max;\n"
         "                           up to (excluding) first '\\n', '\\x00' or EOF\n"
         "         -o passphrase     ditto\n"
@@ -1855,7 +1837,7 @@ main(int argc, char** argv) {
     TRY(pre_initialize());
     g_uid = getuid();
     g_gid = getgid();
-    if (g_options.eager) {
+    if (!g_options.asyncprogress) {
       TRY(post_initialize_sync());
     }
   }
