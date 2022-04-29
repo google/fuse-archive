@@ -94,7 +94,7 @@
 // ---- Compile-time Configuration
 
 #ifndef FUSE_ARCHIVE_VERSION
-#define FUSE_ARCHIVE_VERSION "0.1.10-pre"
+#define FUSE_ARCHIVE_VERSION "0.1.10"
 #endif
 
 #ifndef BLOCK_SIZE
