@@ -93,6 +93,8 @@
 
 // ---- Compile-time Configuration
 
+#define PROGRAM_NAME "fuse-archive"
+
 #ifndef FUSE_ARCHIVE_VERSION
 #define FUSE_ARCHIVE_VERSION "0.1.10"
 #endif
@@ -475,10 +477,10 @@ my_file_open(struct archive* a, void* callback_data) {
 static ssize_t  //
 my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    archive_set_error(a, ECANCELED, PROGRAM_NAME ": shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    archive_set_error(a, EIO, PROGRAM_NAME ": invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
@@ -492,7 +494,7 @@ my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
     } else if (errno == EINTR) {
       continue;
     }
-    archive_set_error(a, errno, "fuse-archive: could not read archive file");
+    archive_set_error(a, errno, PROGRAM_NAME ": could not read archive file");
     break;
   }
   return ARCHIVE_FATAL;
@@ -504,10 +506,10 @@ my_file_seek(struct archive* a,
              int64_t offset,
              int whence) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    archive_set_error(a, ECANCELED, PROGRAM_NAME ": shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    archive_set_error(a, EIO, PROGRAM_NAME ": invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o = lseek64(g_archive_fd, offset, whence);
@@ -516,17 +518,17 @@ my_file_seek(struct archive* a,
     update_g_archive_fd_position_hwm();
     return o;
   }
-  archive_set_error(a, errno, "fuse-archive: could not seek in archive file");
+  archive_set_error(a, errno, PROGRAM_NAME ": could not seek in archive file");
   return ARCHIVE_FATAL;
 }
 
 static int64_t  //
 my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    archive_set_error(a, ECANCELED, PROGRAM_NAME ": shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    archive_set_error(a, EIO, PROGRAM_NAME ": invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
@@ -536,7 +538,7 @@ my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
     update_g_archive_fd_position_hwm();
     return o1 - o0;
   }
-  archive_set_error(a, errno, "fuse-archive: could not seek in archive file");
+  archive_set_error(a, errno, PROGRAM_NAME ": could not seek in archive file");
   return ARCHIVE_FATAL;
 }
 
@@ -1761,7 +1763,7 @@ ensure_utf_8_encoding() {
 
 int  //
 main(int argc, char** argv) {
-  openlog("fuse-archive", LOG_PERROR, LOG_USER);
+  openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   setlogmask(LOG_UPTO(LOG_INFO));
 
   // Initialize side buffers as invalid.
@@ -1802,9 +1804,9 @@ general options:
     -o opt,[opt...]        mount options
     -h   --help            print help
     -V   --version         print version
-    -q   --quiet           do not print progress messages
 
 %s options:
+    -q   --quiet           do not print progress messages
          --asyncprogress=foo.bar   load the archive file immediately and
                            asynchronously, instead of waiting until
                            serving the first FUSE request.
@@ -1821,10 +1823,10 @@ general options:
          -o redact         ditto
 
 )",
-            argv[0], argv[0]);
+            PROGRAM_NAME, PROGRAM_NAME);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
   } else if (g_options.version) {
-    fprintf(stderr, "fuse-archive version: %s\n", FUSE_ARCHIVE_VERSION);
+    fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
   } else {
     TRY(pre_initialize());
     g_uid = getuid();
