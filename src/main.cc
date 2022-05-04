@@ -134,6 +134,7 @@ static struct options {
   bool version;
 
   bool passphrase;
+  bool quiet;
   bool redact;
   const char* asyncprogress;
 } g_options = {};
@@ -438,6 +439,8 @@ initialization_progress_out_of_1000000() {
   return ((uint32_t)(1000000 * x));
 }
 
+static bool displayed_progress = false;
+
 static void  //
 update_g_archive_fd_position_hwm() {
   int64_t h = g_archive_fd_position_hwm.load();
@@ -445,12 +448,21 @@ update_g_archive_fd_position_hwm() {
     g_archive_fd_position_hwm.store(g_archive_fd_position_current);
   }
 
-  static auto ago = std::chrono::steady_clock::now();
-  auto now = std::chrono::steady_clock::now();
-  if ((now - ago) >= std::chrono::seconds(1)) {
-    ago = now;
+  const auto period = std::chrono::seconds(1);
+  const auto now = std::chrono::steady_clock::now();
+  static auto next = now + period;
+  if (!g_options.quiet && now >= next) {
+    next = now + period;
     const int percent = initialization_progress_out_of_1000000() / 10000;
-    syslog(LOG_INFO, "Loading %d%%", percent);
+    if (isatty(STDERR_FILENO)) {
+      if (displayed_progress)
+        fprintf(stderr, "\e[F\e[K");
+      fprintf(stderr, "Loading %d%%\n", percent);
+      fflush(stderr);
+    } else {
+      syslog(LOG_INFO, "Loading %d%%", percent);
+    }
+    displayed_progress = true;
   }
 }
 
@@ -1378,8 +1390,13 @@ post_initialize_sync() {
     close(g_archive_fd);
     g_archive_fd = -1;
   }
-  if (g_initialize_status_code == 0) {
-    syslog(LOG_INFO, "Loaded 100%%");
+  if (displayed_progress && g_initialize_status_code == 0) {
+    if (isatty(STDERR_FILENO)) {
+      fprintf(stderr, "\e[F\e[K");
+      fflush(stderr);
+    } else {
+      syslog(LOG_INFO, "Loaded 100%%");
+    }
   }
   return g_initialize_status_code;
 }
@@ -1720,6 +1737,7 @@ my_opt_proc(void* private_data,
       return discard;
     case MY_KEY_QUIET:
       setlogmask(LOG_UPTO(LOG_ERR));
+      g_options.quiet = true;
       return discard;
     case MY_KEY_REDACT:
       g_options.redact = true;
