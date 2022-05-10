@@ -246,6 +246,9 @@ static struct archive* g_initialize_archive = nullptr;
 static struct archive_entry* g_initialize_archive_entry = nullptr;
 static int64_t g_initialize_index_within_archive = -1;
 
+// g_displayed_progress is whether we have printed a progress message.
+static bool g_displayed_progress = false;
+
 // These global variables are the in-memory directory tree of nodes.
 //
 // g_root_node being non-nullptr means that initialization is complete (when
@@ -439,8 +442,6 @@ initialization_progress_out_of_1000000() {
   return ((uint32_t)(1000000 * x));
 }
 
-static bool displayed_progress = false;
-
 static void  //
 update_g_archive_fd_position_hwm() {
   int64_t h = g_archive_fd_position_hwm.load();
@@ -449,20 +450,21 @@ update_g_archive_fd_position_hwm() {
   }
 
   const auto period = std::chrono::seconds(1);
+  static auto next = std::chrono::steady_clock::now() + period;
   const auto now = std::chrono::steady_clock::now();
-  static auto next = now + period;
-  if (!g_options.quiet && now >= next) {
+  if (!g_options.quiet && (now >= next)) {
     next = now + period;
     const int percent = initialization_progress_out_of_1000000() / 10000;
     if (isatty(STDERR_FILENO)) {
-      if (displayed_progress)
+      if (g_displayed_progress) {
         fprintf(stderr, "\e[F\e[K");
+      }
       fprintf(stderr, "Loading %d%%\n", percent);
       fflush(stderr);
     } else {
       syslog(LOG_INFO, "Loading %d%%", percent);
     }
-    displayed_progress = true;
+    g_displayed_progress = true;
   }
 }
 
@@ -1390,7 +1392,7 @@ post_initialize_sync() {
     close(g_archive_fd);
     g_archive_fd = -1;
   }
-  if (displayed_progress && g_initialize_status_code == 0) {
+  if (g_displayed_progress && (g_initialize_status_code == 0)) {
     if (isatty(STDERR_FILENO)) {
       fprintf(stderr, "\e[F\e[K");
       fflush(stderr);
