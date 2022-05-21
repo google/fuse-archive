@@ -79,7 +79,6 @@
 #define EXIT_CODE_GENERIC_FAILURE 1
 // Exit code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
 
-
 #define EXIT_CODE_PASSPHRASE_REQUIRED 20
 #define EXIT_CODE_PASSPHRASE_INCORRECT 21
 #define EXIT_CODE_PASSPHRASE_NOT_SUPPORTED 22
@@ -377,9 +376,7 @@ starts_with(const char* s, const char* prefix) {
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
 static int  //
-determine_passphrase_exit_code(struct archive* a, int fallback) {
-  const char* const e = archive_error_string(a);
-
+determine_passphrase_exit_code(const char* const e) {
   if (starts_with(e, "Incorrect passphrase")) {
     return EXIT_CODE_PASSPHRASE_INCORRECT;
   }
@@ -405,7 +402,7 @@ determine_passphrase_exit_code(struct archive* a, int fallback) {
     }
   }
 
-  return fallback;
+  return EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
 }
 
 // ---- Logging
@@ -482,10 +479,10 @@ my_file_open(struct archive* a, void* callback_data) {
 static ssize_t  //
 my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, PROGRAM_NAME ": shutting down");
+    archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, PROGRAM_NAME ": invalid g_archive_fd");
+    archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
@@ -499,7 +496,8 @@ my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
     } else if (errno == EINTR) {
       continue;
     }
-    archive_set_error(a, errno, PROGRAM_NAME ": could not read archive file");
+    archive_set_error(a, errno, "could not read archive file: %s",
+                      strerror(errno));
     break;
   }
   return ARCHIVE_FATAL;
@@ -511,10 +509,10 @@ my_file_seek(struct archive* a,
              int64_t offset,
              int whence) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, PROGRAM_NAME ": shutting down");
+    archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, PROGRAM_NAME ": invalid g_archive_fd");
+    archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o = lseek64(g_archive_fd, offset, whence);
@@ -523,17 +521,18 @@ my_file_seek(struct archive* a,
     update_g_archive_fd_position_hwm();
     return o;
   }
-  archive_set_error(a, errno, PROGRAM_NAME ": could not seek in archive file");
+  archive_set_error(a, errno, "could not seek in archive file: %s",
+                    strerror(errno));
   return ARCHIVE_FATAL;
 }
 
 static int64_t  //
 my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, PROGRAM_NAME ": shutting down");
+    archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, PROGRAM_NAME ": invalid g_archive_fd");
+    archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
@@ -543,7 +542,8 @@ my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
     update_g_archive_fd_position_hwm();
     return o1 - o0;
   }
-  archive_set_error(a, errno, PROGRAM_NAME ": could not seek in archive file");
+  archive_set_error(a, errno, "could not seek in archive file: %s",
+                    strerror(errno));
   return ARCHIVE_FATAL;
 }
 
@@ -815,7 +815,7 @@ acquire_reader(int64_t want_index_within_archive) {
     archive_read_support_format_raw(a);
     if (archive_read_open_filename(a, g_archive_realpath, BLOCK_SIZE) !=
         ARCHIVE_OK) {
-      syslog(LOG_ERR, "could not open %s: %s", redact(g_archive_filename),
+      syslog(LOG_ERR, "could not read %s: %s", redact(g_archive_filename),
              archive_error_string(a));
       archive_read_free(a);
       return nullptr;
@@ -1195,8 +1195,7 @@ read_passphrase_from_stdin() {
       if (errno == EINTR) {
         continue;
       }
-      syslog(LOG_ERR, "could not read passphrase from stdin: %s",
-             strerror(errno));
+      syslog(LOG_ERR, "could not read passphrase from stdin: %m");
       return -errno;
     } else if (n == 0) {
       g_passphrase_buffer[g_passphrase_length] = '\x00';
@@ -1334,27 +1333,9 @@ pre_initialize() {
         g_initialize_archive,
         g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
-      int ret = determine_passphrase_exit_code(
-          g_initialize_archive, EXIT_CODE_INVALID_ARCHIVE_CONTENTS);
-      switch (ret) {
-        case EXIT_CODE_PASSPHRASE_REQUIRED:
-          syslog(LOG_ERR, "passphrase required for %s",
-                 redact(g_archive_filename));
-          break;
-        case EXIT_CODE_PASSPHRASE_INCORRECT:
-          syslog(LOG_ERR, "passphrase incorrect for %s",
-                 redact(g_archive_filename));
-          break;
-        case EXIT_CODE_PASSPHRASE_NOT_SUPPORTED:
-          syslog(LOG_ERR, "passphrase not supported for %s",
-                 redact(g_archive_filename));
-          break;
-        default:
-          syslog(LOG_ERR, "libarchive error for %s: %s",
-                 redact(g_archive_filename),
-                 archive_error_string(g_initialize_archive));
-          break;
-      }
+      const char* const e = archive_error_string(g_initialize_archive);
+      syslog(LOG_ERR, "%s: %s", redact(g_archive_filename), e);
+      const int ret = determine_passphrase_exit_code(e);
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
       g_initialize_archive_entry = nullptr;
