@@ -79,7 +79,6 @@
 #define EXIT_CODE_GENERIC_FAILURE 1
 // Exit code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
 
-#define EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION 10
 
 #define EXIT_CODE_PASSPHRASE_REQUIRED 20
 #define EXIT_CODE_PASSPHRASE_INCORRECT 21
@@ -739,8 +738,8 @@ struct reader {
     } else if (static_cast<size_t>(n) > dst_len) {
       syslog(LOG_ERR, "too much data serving %s from %s", redact(pathname),
              redact(g_archive_filename));
-      // Something has gone wrong, possibly a buffer overflow, so exit.
-      exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
+      // Something has gone wrong, possibly a buffer overflow, so abort.
+      abort();
     }
     this->offset_within_entry += n;
     return n;
@@ -1126,8 +1125,8 @@ insert_leaf(struct archive* a,
       } else if (n > SIDE_BUFFER_SIZE) {
         syslog(LOG_ERR, "too much data decompressing %s",
                redact(g_archive_filename));
-        // Something has gone wrong, possibly a buffer overflow, so exit.
-        exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
+        // Something has gone wrong, possibly a buffer overflow, so abort.
+        abort();
       }
       size += n;
     }
