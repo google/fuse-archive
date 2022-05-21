@@ -59,8 +59,6 @@
 #error "fuse-archive requires that casting a uintptr_t to uint64_t is lossless"
 #endif
 
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
-
 #define TRY(operation)               \
   do {                               \
     int try_status_code = operation; \
@@ -381,39 +379,33 @@ starts_with(const char* s, const char* prefix) {
 // comparison on the various possible error messages.
 static int  //
 determine_passphrase_exit_code(struct archive* a, int fallback) {
-  const char* e = archive_error_string(a);
-  if (e) {
-    switch (e[0]) {
-      case 'I':
-        if (starts_with(e, "Incorrect passphrase")) {
-          return EXIT_CODE_PASSPHRASE_INCORRECT;
-        }
-        break;
-      case 'P':
-        if (starts_with(e, "Passphrase required")) {
-          return EXIT_CODE_PASSPHRASE_REQUIRED;
-        }
-        break;
-    }
+  const char* const e = archive_error_string(a);
 
-    static const char* not_supported_prefixes[] = {
-        "Crypto codec not supported",
-        "Decryption is unsupported",
-        "Encrypted file is unsupported",
-        "Encryption is not supported",
-        "RAR encryption support unavailable",
-        "The archive header is encrypted, but currently not supported",
-        "The file content is encrypted, but currently not supported",
-        "Unsupported encryption format",
-    };
+  if (starts_with(e, "Incorrect passphrase")) {
+    return EXIT_CODE_PASSPHRASE_INCORRECT;
+  }
 
-    for (size_t i = 0; i < ARRAY_SIZE(not_supported_prefixes); i++) {
-      const char* prefix = not_supported_prefixes[i];
-      if ((e[0] == prefix[0]) && starts_with(e, prefix)) {
-        return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
-      }
+  if (starts_with(e, "Passphrase required")) {
+    return EXIT_CODE_PASSPHRASE_REQUIRED;
+  }
+
+  static const char* const not_supported_prefixes[] = {
+      "Crypto codec not supported",
+      "Decryption is unsupported",
+      "Encrypted file is unsupported",
+      "Encryption is not supported",
+      "RAR encryption support unavailable",
+      "The archive header is encrypted, but currently not supported",
+      "The file content is encrypted, but currently not supported",
+      "Unsupported encryption format",
+  };
+
+  for (const char* const prefix : not_supported_prefixes) {
+    if (starts_with(e, prefix)) {
+      return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
     }
   }
+
   return fallback;
 }
 
@@ -1379,9 +1371,12 @@ static int  //
 post_initialize_sync() {
   if (g_initialize_status_code) {
     return g_initialize_status_code;
-  } else if (g_root_node != nullptr) {
+  }
+
+  if (g_root_node != nullptr) {
     return 0;
   }
+
   insert_root_node();
   g_initialize_status_code = build_tree();
   archive_read_free(g_initialize_archive);
@@ -1757,7 +1752,7 @@ ensure_utf_8_encoding() {
   //
   // Calling setlocale to enforce a UTF-8 encoding can avoid that. Try various
   // arguments and pick the first one that is supported and produces UTF-8.
-  static const char* locales[] = {
+  static const char* const locales[] = {
       // As of 2021, many systems (including Debian) support "C.UTF-8".
       "C.UTF-8",
       // However, "C.UTF-8" is not a POSIX standard and glibc 2.34 (released
@@ -1771,12 +1766,14 @@ ensure_utf_8_encoding() {
       // environment variables (LANG, LC_ALL, etc).
       "",
   };
-  for (size_t i = 0; i < ARRAY_SIZE(locales); i++) {
-    if (setlocale(LC_ALL, locales[i]) &&
+
+  for (const char* const locale : locales) {
+    if (setlocale(LC_ALL, locale) &&
         (strcmp("UTF-8", nl_langinfo(CODESET)) == 0)) {
       return 0;
     }
   }
+
   syslog(LOG_ERR, "could not ensure UTF-8 encoding");
   return EXIT_CODE_GENERIC_FAILURE;
 }
