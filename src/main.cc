@@ -79,6 +79,8 @@
 #define EXIT_CODE_GENERIC_FAILURE 1
 // Exit code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
 
+#define EXIT_CODE_CANNOT_OPEN_ARCHIVE 11
+
 #define EXIT_CODE_PASSPHRASE_REQUIRED 20
 #define EXIT_CODE_PASSPHRASE_INCORRECT 21
 #define EXIT_CODE_PASSPHRASE_NOT_SUPPORTED 22
@@ -1231,16 +1233,17 @@ pre_initialize() {
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
-  g_archive_fd = open(g_archive_filename, O_RDONLY);
-  if (g_archive_fd < 0) {
-    syslog(LOG_ERR, "could not open %s", redact(g_archive_filename));
-    return EXIT_CODE_GENERIC_FAILURE;
-  }
   g_archive_realpath = realpath(g_archive_filename, NULL);
   if (!g_archive_realpath) {
-    syslog(LOG_ERR, "error getting absolute path of %s: %s",
-           redact(g_archive_filename), strerror(errno));
-    return EXIT_CODE_GENERIC_FAILURE;
+    syslog(LOG_ERR, "could not get absolute path of %s: %m",
+           redact(g_archive_filename));
+    return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
+  }
+
+  g_archive_fd = open(g_archive_realpath, O_RDONLY);
+  if (g_archive_fd < 0) {
+    syslog(LOG_ERR, "could not open %s: %m", redact(g_archive_filename));
+    return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
   }
 
   struct stat z;
