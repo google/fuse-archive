@@ -94,7 +94,7 @@
 #define PROGRAM_NAME "fuse-archive"
 
 #ifndef FUSE_ARCHIVE_VERSION
-#define FUSE_ARCHIVE_VERSION "0.1.10"
+#define FUSE_ARCHIVE_VERSION "0.1.11"
 #endif
 
 #ifndef BLOCK_SIZE
