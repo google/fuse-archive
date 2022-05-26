@@ -53,6 +53,7 @@ func main1() error {
 		"test/data/archive.password-is-asdf.zip",
 		"test/data/archive.tar.bz2",
 		"test/data/archive.zip",
+		"test/data/romeo.txt.bz2",
 		"test/data/romeo.txt.gz",
 		"test/data/zeroes-256mib.tar.gz",
 	}
@@ -135,11 +136,12 @@ func run(archiveFilename string, directIO bool, passphrase string) error {
 
 	testFunctions := ([]func() error)(nil)
 	switch archiveFilename {
-	case "test/data/romeo.txt.gz":
-		// The "test/data/romeo.txt.gz" file is just a gzip-compressed file,
-		// not an archive (something that can containing multiple files).
-		// Nonetheless, fuse-archive can still mount it (as something
-		// containing a single file). Libarchive calls this a "raw" archive.
+	case "test/data/romeo.txt.bz2", "test/data/romeo.txt.gz":
+		// The "test/data/romeo.txt.{bz2,gz}" files are just bzip2- or
+		// gzip-compressed files, not an archive (something that can containing
+		// multiple files). Nonetheless, fuse-archive can still mount it (as
+		// something containing a single file). Libarchive calls this a "raw"
+		// archive.
 		testFunctions = []func() error{
 			testReadAt,
 		}

@@ -177,6 +177,11 @@ static struct fuse_opt g_fuse_opts[] = {
 // g_archive_filename is the command line argument naming the archive file.
 static const char* g_archive_filename = NULL;
 
+// g_archive_innername is the base name of g_archive_filename, minus the file
+// extension suffix. For example, if g_archive_filename is "/foo/bar.ext0.ext1"
+// then g_archive_innername is "bar.ext0".
+static const char* g_archive_innername = NULL;
+
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
 static int g_archive_fd = -1;
 
@@ -977,6 +982,16 @@ normalize_pathname(struct archive_entry* e) {
       return "";
     }
   }
+
+  // For 'raw' archives, libarchive defaults to "data" when the compression
+  // file format doesn't contain the original file's name. For fuse-archive, we
+  // use the archive filename's innername instead. Given an archive filename of
+  // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
+  if (g_archive_is_raw && g_archive_innername &&
+      (g_archive_innername[0] != '\x00') && (strcmp(s, "data") == 0)) {
+    s = g_archive_innername;
+  }
+
   if (!valid_pathname(s, true)) {
     syslog(LOG_ERR, "archive entry in %s has invalid pathname: %s",
            redact(g_archive_filename), redact(s));
@@ -1668,6 +1683,23 @@ static struct fuse_operations my_operations = {
 
 // ---- Main
 
+// innername returns the "bar.ext0" from "/foo/bar.ext0.ext1".
+const char*  //
+innername(const char* filename) {
+  if (!filename) {
+    return NULL;
+  }
+  const char* last_slash = strrchr(filename, '/');
+  if (last_slash) {
+    filename = last_slash + 1;
+  }
+  const char* last_dot = strrchr(filename, '.');
+  if (last_dot) {
+    return strndup(filename, last_dot - filename);
+  }
+  return strdup(filename);
+}
+
 static int  //
 my_opt_proc(void* private_data,
             const char* arg,
@@ -1681,6 +1713,7 @@ my_opt_proc(void* private_data,
     case FUSE_OPT_KEY_NONOPT:
       if (!g_archive_filename) {
         g_archive_filename = arg;
+        g_archive_innername = innername(arg);
         return discard;
       }
       break;
