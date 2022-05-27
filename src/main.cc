@@ -67,6 +67,19 @@
     }                                \
   } while (false)
 
+// TRY_EXIT_CODE is like TRY but is used in the main function where Linux exit
+// codes range from 0 to 255. In contrast, TRY is used for other functions
+// where e.g. it's valid to return a negative value like -ENOENT.
+#define TRY_EXIT_CODE(operation)        \
+  do {                                  \
+    int try_status_code = operation;    \
+    if (try_status_code < 0) {          \
+      return EXIT_CODE_GENERIC_FAILURE; \
+    } else if (try_status_code > 0) {   \
+      return try_status_code;           \
+    }                                   \
+  } while (false)
+
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -1807,7 +1820,7 @@ main(int argc, char** argv) {
     g_side_buffer_metadata[i].lru_priority = 0;
   }
 
-  TRY(ensure_utf_8_encoding());
+  TRY_EXIT_CODE(ensure_utf_8_encoding());
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
@@ -1861,11 +1874,11 @@ general options:
   } else if (g_options.version) {
     fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
   } else {
-    TRY(pre_initialize());
+    TRY_EXIT_CODE(pre_initialize());
     g_uid = getuid();
     g_gid = getgid();
     if (!g_options.asyncprogress) {
-      TRY(post_initialize_sync());
+      TRY_EXIT_CODE(post_initialize_sync());
     }
   }
 
