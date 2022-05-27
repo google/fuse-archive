@@ -101,6 +101,12 @@
 #define EXIT_CODE_INVALID_RAW_ARCHIVE 30
 #define EXIT_CODE_INVALID_ARCHIVE_HEADER 31
 #define EXIT_CODE_INVALID_ARCHIVE_CONTENTS 32
+// Duplicate entries can be explicit (where "/foo/bar" appears twice in the
+// archive's entry list) or implicit (where "/foo/bar" might appear as a
+// regular *file* in the entry list, but "/foo/bar/baz.txt" also being present
+// implies that "/foo/bar" is a *directory*).
+#define EXIT_CODE_INVALID_EXPLICIT_DUPLICATE_ENTRY 33
+#define EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY 34
 
 // ---- Compile-time Configuration
 
@@ -1029,10 +1035,19 @@ insert_leaf_node(std::string&& pathname,
     syslog(LOG_ERR, "negative index_within_archive in %s: %s",
            redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
-  } else if (g_nodes_by_name.find(pathname) != g_nodes_by_name.end()) {
-    syslog(LOG_ERR, "duplicate pathname in %s: %s", redact(g_archive_filename),
-           redact(pathname.c_str()));
-    return -EIO;
+  } else {
+    auto iter = g_nodes_by_name.find(pathname);
+    if (iter == g_nodes_by_name.end()) {
+      // No-op.
+    } else if (S_ISDIR(iter->second->mode) == S_ISDIR(mode)) {
+      syslog(LOG_ERR, "duplicate pathname in %s: %s",
+             redact(g_archive_filename), redact(pathname.c_str()));
+      return EXIT_CODE_INVALID_EXPLICIT_DUPLICATE_ENTRY;
+    } else {
+      syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
+             redact(g_archive_filename), redact(pathname.c_str()));
+      return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
+    }
   }
   node* parent = g_root_node;
 
@@ -1099,7 +1114,7 @@ insert_leaf_node(std::string&& pathname,
     } else if (!S_ISDIR(iter->second->mode)) {
       syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
              redact(g_archive_filename), redact(abs_pathname.c_str()));
-      return -EIO;
+      return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
     } else {
       parent = iter->second;
     }
