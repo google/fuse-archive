@@ -1,0 +1,5 @@
+# test/data/archive.iso is test data, not a binary to be executed. This program
+# (fuse-archive) is specifically about being able to read ISO files (amongst
+# other archive file formats, like 7z, RAR, ZIP, etc).
+ignorePaths:
+- test/data/archive.iso
