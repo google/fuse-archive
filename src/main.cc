@@ -240,10 +240,6 @@ static int g_passphrase_length = 0;
 // it as an implicit archive containing 1 file.
 static bool g_archive_is_raw = false;
 
-// g_raw_decompressed_size is the implicit size of the sole archive entry, for
-// 'raw' archives (which don't always explicitly record the decompressed size).
-static int64_t g_raw_decompressed_size = 0;
-
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
 //
@@ -1154,9 +1150,11 @@ insert_leaf(struct archive* a,
   }
 
   int64_t size = archive_entry_size(e);
-  if (g_archive_is_raw && (size == 0)) {
-    // 'Raw' archives don't always explicitly record the decompressed size.
-    // We'll have to decompress it to find out.
+  // 'Raw' archives don't always explicitly record the decompressed size. We'll
+  // have to decompress it to find out. Some 'cooked' archives also don't
+  // explicitly record this (at the time archive_read_next_header returns). See
+  // https://github.com/libarchive/libarchive/issues/1764
+  if (!archive_entry_size_is_set(e)) {
     while (true) {
       ssize_t n = archive_read_data(
           a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
@@ -1175,7 +1173,6 @@ insert_leaf(struct archive* a,
       }
       size += n;
     }
-    g_raw_decompressed_size = size;
   }
 
   return insert_leaf_node(std::move(pathname), std::move(symlink),
@@ -1554,24 +1551,27 @@ my_read(const char* pathname,
     return -EINVAL;
   }
   struct reader* r = reinterpret_cast<struct reader*>(ffi->fh);
-  if (!r || !r->archive || !r->archive_entry) {
+  if (!r || !r->archive || !r->archive_entry || (r->index_within_archive < 0)) {
     return -EIO;
   }
 
-  if (r->index_within_archive >= 0) {
-    uint64_t i = static_cast<uint64_t>(r->index_within_archive);
-    if (i < g_nodes_by_index.size()) {
-      struct node* n = g_nodes_by_index[i];
-      if (n) {
-        if (n->size <= offset) {
-          return 0;
-        }
-        uint64_t remaining = static_cast<uint64_t>(n->size - offset);
-        if (dst_len > remaining) {
-          dst_len = remaining;
-        }
-      }
-    }
+  uint64_t i = static_cast<uint64_t>(r->index_within_archive);
+  if (i >= g_nodes_by_index.size()) {
+    return -EIO;
+  }
+  struct node* n = g_nodes_by_index[i];
+  if (!n) {
+    return -EIO;
+  }
+  const int64_t size = n->size;
+  if (size < 0) {
+    return -EIO;
+  } else if (size <= offset) {
+    return 0;
+  }
+  uint64_t remaining = static_cast<uint64_t>(size - offset);
+  if (dst_len > remaining) {
+    dst_len = remaining;
   }
 
   if (dst_len == 0) {
@@ -1596,16 +1596,8 @@ my_read(const char* pathname,
     release_reader(std::move(ur));
   }
 
-  int64_t size = g_archive_is_raw ? g_raw_decompressed_size
-                                  : archive_entry_size(r->archive_entry);
-  if (size < 0) {
+  if (!r->advance_offset(offset, pathname)) {
     return -EIO;
-  } else if ((size <= offset) || (dst_len == 0)) {
-    return 0;
-  } else if (!r->advance_offset(offset, pathname)) {
-    return -EIO;
-  } else if (dst_len > static_cast<uint64_t>(size - offset)) {
-    dst_len = static_cast<uint64_t>(size - offset);
   }
   return r->read(dst_ptr, dst_len, pathname);
 }
