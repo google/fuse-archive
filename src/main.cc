@@ -43,8 +43,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <memory>
 #include <string>
@@ -57,14 +59,25 @@
 #error "fuse-archive requires that casting a uintptr_t to uint64_t is lossless"
 #endif
 
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
-
 #define TRY(operation)               \
   do {                               \
     int try_status_code = operation; \
     if (try_status_code) {           \
       return try_status_code;        \
     }                                \
+  } while (false)
+
+// TRY_EXIT_CODE is like TRY but is used in the main function where Linux exit
+// codes range from 0 to 255. In contrast, TRY is used for other functions
+// where e.g. it's valid to return a negative value like -ENOENT.
+#define TRY_EXIT_CODE(operation)        \
+  do {                                  \
+    int try_status_code = operation;    \
+    if (try_status_code < 0) {          \
+      return EXIT_CODE_GENERIC_FAILURE; \
+    } else if (try_status_code > 0) {   \
+      return try_status_code;           \
+    }                                   \
   } while (false)
 
 // ---- Exit Codes
@@ -79,7 +92,7 @@
 #define EXIT_CODE_GENERIC_FAILURE 1
 // Exit code 2 is skipped: https://tldp.org/LDP/abs/html/exitcodes.html
 
-#define EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION 10
+#define EXIT_CODE_CANNOT_OPEN_ARCHIVE 11
 
 #define EXIT_CODE_PASSPHRASE_REQUIRED 20
 #define EXIT_CODE_PASSPHRASE_INCORRECT 21
@@ -88,8 +101,20 @@
 #define EXIT_CODE_INVALID_RAW_ARCHIVE 30
 #define EXIT_CODE_INVALID_ARCHIVE_HEADER 31
 #define EXIT_CODE_INVALID_ARCHIVE_CONTENTS 32
+// Duplicate entries can be explicit (where "/foo/bar" appears twice in the
+// archive's entry list) or implicit (where "/foo/bar" might appear as a
+// regular *file* in the entry list, but "/foo/bar/baz.txt" also being present
+// implies that "/foo/bar" is a *directory*).
+#define EXIT_CODE_INVALID_EXPLICIT_DUPLICATE_ENTRY 33
+#define EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY 34
 
 // ---- Compile-time Configuration
+
+#define PROGRAM_NAME "fuse-archive"
+
+#ifndef FUSE_ARCHIVE_VERSION
+#define FUSE_ARCHIVE_VERSION "0.1.14"
+#endif
 
 #ifndef BLOCK_SIZE
 #define BLOCK_SIZE 16384
@@ -123,25 +148,38 @@
 
 static struct options {
   bool help;
-  bool redact;
+  bool version;
+
   bool passphrase;
+  bool quiet;
+  bool redact;
   const char* asyncprogress;
 } g_options = {};
 
 enum {
+  // Options shared with libfuse's helper.c.
   MY_KEY_HELP = 100,
-  MY_KEY_ASYNCPROGRESS = 101,
-  MY_KEY_PASSPHRASE = 102,
-  MY_KEY_REDACT = 103,
+  MY_KEY_VERSION = 101,
+
+  // Options exclusive to fuse-archive.
+  MY_KEY_ASYNCPROGRESS = 200,
+  MY_KEY_EAGER = 201,
+  MY_KEY_PASSPHRASE = 202,
+  MY_KEY_QUIET = 203,
+  MY_KEY_REDACT = 204,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", MY_KEY_HELP),                           //
     FUSE_OPT_KEY("--help", MY_KEY_HELP),                       //
+    FUSE_OPT_KEY("-V", MY_KEY_VERSION),                        //
+    FUSE_OPT_KEY("--version", MY_KEY_VERSION),                 //
     FUSE_OPT_KEY("--asyncprogress=%s", MY_KEY_ASYNCPROGRESS),  //
     FUSE_OPT_KEY("asyncprogress=%s", MY_KEY_ASYNCPROGRESS),    //
     FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
     FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),             //
+    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),                     //
+    FUSE_OPT_KEY("-q", MY_KEY_QUIET),                          //
     FUSE_OPT_KEY("--redact", MY_KEY_REDACT),                   //
     FUSE_OPT_KEY("redact", MY_KEY_REDACT),                     //
     // The remaining options are listed for e.g. "-o formatraw" command line
@@ -157,6 +195,11 @@ static struct fuse_opt g_fuse_opts[] = {
 
 // g_archive_filename is the command line argument naming the archive file.
 static const char* g_archive_filename = NULL;
+
+// g_archive_innername is the base name of g_archive_filename, minus the file
+// extension suffix. For example, if g_archive_filename is "/foo/bar.ext0.ext1"
+// then g_archive_innername is "bar.ext0".
+static const char* g_archive_innername = NULL;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
 static int g_archive_fd = -1;
@@ -197,10 +240,6 @@ static int g_passphrase_length = 0;
 // it as an implicit archive containing 1 file.
 static bool g_archive_is_raw = false;
 
-// g_raw_decompressed_size is the implicit size of the sole archive entry, for
-// 'raw' archives (which don't always explicitly record the decompressed size).
-static int64_t g_raw_decompressed_size = 0;
-
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
 //
@@ -213,16 +252,20 @@ static gid_t g_gid = 0;
 // Building that tree is one of the first things that we do.
 //
 // Building is split into two parts and the bulk of it is done in the second
-// part, lazily, so that the main function can call fuse_main (to bind the
-// mountpoint and daemonize) as fast as possible (although the main function
-// still does a preliminary check that the archive_filename command line
-// argument actually names an existing file that looks like a valid archive).
+// part, lazily (unless the --asyncprogress flag is set), so that the main
+// function can call fuse_main (to bind the mountpoint and daemonize) as fast as
+// possible (although the main function still does a preliminary check that the
+// archive_filename command line argument actually names an existing file that
+// looks like a valid archive).
 //
 // These global variables connect those two parts.
 static int g_initialize_status_code = 0;
 static struct archive* g_initialize_archive = nullptr;
 static struct archive_entry* g_initialize_archive_entry = nullptr;
 static int64_t g_initialize_index_within_archive = -1;
+
+// g_displayed_progress is whether we have printed a progress message.
+static bool g_displayed_progress = false;
 
 // These global variables are the in-memory directory tree of nodes.
 //
@@ -355,41 +398,33 @@ starts_with(const char* s, const char* prefix) {
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
 static int  //
-determine_passphrase_exit_code(struct archive* a, int fallback) {
-  const char* e = archive_error_string(a);
-  if (e) {
-    switch (e[0]) {
-      case 'I':
-        if (starts_with(e, "Incorrect passphrase")) {
-          return EXIT_CODE_PASSPHRASE_INCORRECT;
-        }
-        break;
-      case 'P':
-        if (starts_with(e, "Passphrase required")) {
-          return EXIT_CODE_PASSPHRASE_REQUIRED;
-        }
-        break;
-    }
+determine_passphrase_exit_code(const char* const e) {
+  if (starts_with(e, "Incorrect passphrase")) {
+    return EXIT_CODE_PASSPHRASE_INCORRECT;
+  }
 
-    static const char* not_supported_prefixes[] = {
-        "Crypto codec not supported",
-        "Decryption is unsupported",
-        "Encrypted file is unsupported",
-        "Encryption is not supported",
-        "RAR encryption support unavailable",
-        "The archive header is encrypted, but currently not supported",
-        "The file content is encrypted, but currently not supported",
-        "Unsupported encryption format",
-    };
+  if (starts_with(e, "Passphrase required")) {
+    return EXIT_CODE_PASSPHRASE_REQUIRED;
+  }
 
-    for (size_t i = 0; i < ARRAY_SIZE(not_supported_prefixes); i++) {
-      const char* prefix = not_supported_prefixes[i];
-      if ((e[0] == prefix[0]) && starts_with(e, prefix)) {
-        return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
-      }
+  static const char* const not_supported_prefixes[] = {
+      "Crypto codec not supported",
+      "Decryption is unsupported",
+      "Encrypted file is unsupported",
+      "Encryption is not supported",
+      "RAR encryption support unavailable",
+      "The archive header is encrypted, but currently not supported",
+      "The file content is encrypted, but currently not supported",
+      "Unsupported encryption format",
+  };
+
+  for (const char* const prefix : not_supported_prefixes) {
+    if (starts_with(e, prefix)) {
+      return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
     }
   }
-  return fallback;
+
+  return EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
 }
 
 // ---- Logging
@@ -404,14 +439,6 @@ redact(const char* s) {
 
 // ---- Libarchive Read Callbacks
 
-static void  //
-update_g_archive_fd_position_hwm() {
-  int64_t h = g_archive_fd_position_hwm.load();
-  if (h < g_archive_fd_position_current) {
-    g_archive_fd_position_hwm.store(g_archive_fd_position_current);
-  }
-}
-
 static uint32_t  //
 initialization_progress_out_of_1000000() {
   int64_t m = g_archive_fd_position_hwm.load();
@@ -423,6 +450,32 @@ initialization_progress_out_of_1000000() {
   }
   double x = ((double)m) / ((double)n);
   return ((uint32_t)(1000000 * x));
+}
+
+static void  //
+update_g_archive_fd_position_hwm() {
+  int64_t h = g_archive_fd_position_hwm.load();
+  if (h < g_archive_fd_position_current) {
+    g_archive_fd_position_hwm.store(g_archive_fd_position_current);
+  }
+
+  const auto period = std::chrono::seconds(1);
+  static auto next = std::chrono::steady_clock::now() + period;
+  const auto now = std::chrono::steady_clock::now();
+  if (!g_options.quiet && (now >= next)) {
+    next = now + period;
+    const int percent = initialization_progress_out_of_1000000() / 10000;
+    if (isatty(STDERR_FILENO)) {
+      if (g_displayed_progress) {
+        fprintf(stderr, "\e[F\e[K");
+      }
+      fprintf(stderr, "Loading %d%%\n", percent);
+      fflush(stderr);
+    } else {
+      syslog(LOG_INFO, "Loading %d%%", percent);
+    }
+    g_displayed_progress = true;
+  }
 }
 
 // The callbacks below are only used during start-up, for the initial pass
@@ -448,10 +501,10 @@ my_file_open(struct archive* a, void* callback_data) {
 static ssize_t  //
 my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
@@ -465,7 +518,8 @@ my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
     } else if (errno == EINTR) {
       continue;
     }
-    archive_set_error(a, errno, "fuse-archive: could not read archive file");
+    archive_set_error(a, errno, "could not read archive file: %s",
+                      strerror(errno));
     break;
   }
   return ARCHIVE_FATAL;
@@ -477,10 +531,10 @@ my_file_seek(struct archive* a,
              int64_t offset,
              int whence) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o = lseek64(g_archive_fd, offset, whence);
@@ -489,17 +543,18 @@ my_file_seek(struct archive* a,
     update_g_archive_fd_position_hwm();
     return o;
   }
-  archive_set_error(a, errno, "fuse-archive: could not seek in archive file");
+  archive_set_error(a, errno, "could not seek in archive file: %s",
+                    strerror(errno));
   return ARCHIVE_FATAL;
 }
 
 static int64_t  //
 my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "fuse-archive: shutting down");
+    archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
   } else if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "fuse-archive: invalid g_archive_fd");
+    archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
   int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
@@ -509,7 +564,8 @@ my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
     update_g_archive_fd_position_hwm();
     return o1 - o0;
   }
-  archive_set_error(a, errno, "fuse-archive: could not seek in archive file");
+  archive_set_error(a, errno, "could not seek in archive file: %s",
+                    strerror(errno));
   return ARCHIVE_FATAL;
 }
 
@@ -619,13 +675,11 @@ struct reader {
       int status =
           archive_read_next_header(this->archive, &this->archive_entry);
       if (status == ARCHIVE_EOF) {
-        fprintf(stderr, "fuse-archive: inconsistent archive %s\n",
-                redact(g_archive_filename));
+        syslog(LOG_ERR, "inconsistent archive %s", redact(g_archive_filename));
         return false;
       } else if ((status != ARCHIVE_OK) && (status != ARCHIVE_WARN)) {
-        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
-                redact(g_archive_filename),
-                archive_error_string(this->archive));
+        syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
+               archive_error_string(this->archive));
         return false;
       }
       this->index_within_archive++;
@@ -700,15 +754,14 @@ struct reader {
   ssize_t read(void* dst_ptr, size_t dst_len, const char* pathname) {
     ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
     if (n < 0) {
-      fprintf(stderr, "fuse-archive: could not serve %s from %s: %s\n",
-              redact(pathname), redact(g_archive_filename),
-              archive_error_string(this->archive));
+      syslog(LOG_ERR, "could not serve %s from %s: %s", redact(pathname),
+             redact(g_archive_filename), archive_error_string(this->archive));
       return -EIO;
     } else if (static_cast<size_t>(n) > dst_len) {
-      fprintf(stderr, "fuse-archive: too much data serving %s from %s\n",
-              redact(pathname), redact(g_archive_filename));
-      // Something has gone wrong, possibly a buffer overflow, so exit.
-      exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
+      syslog(LOG_ERR, "too much data serving %s from %s", redact(pathname),
+             redact(g_archive_filename));
+      // Something has gone wrong, possibly a buffer overflow, so abort.
+      abort();
     }
     this->offset_within_entry += n;
     return n;
@@ -746,7 +799,7 @@ compare(int64_t index_within_archive0,
 static std::unique_ptr<struct reader>  //
 acquire_reader(int64_t want_index_within_archive) {
   if (want_index_within_archive < 0) {
-    fprintf(stderr, "fuse-archive: negative index_within_archive\n");
+    syslog(LOG_ERR, "negative index_within_archive");
     return nullptr;
   }
 
@@ -773,7 +826,7 @@ acquire_reader(int64_t want_index_within_archive) {
   } else {
     struct archive* a = archive_read_new();
     if (!a) {
-      fprintf(stderr, "fuse-archive: out of memory\n");
+      syslog(LOG_ERR, "out of memory");
       return nullptr;
     }
     if (g_passphrase_length > 0) {
@@ -784,8 +837,8 @@ acquire_reader(int64_t want_index_within_archive) {
     archive_read_support_format_raw(a);
     if (archive_read_open_filename(a, g_archive_realpath, BLOCK_SIZE) !=
         ARCHIVE_OK) {
-      fprintf(stderr, "fuse-archive: could not open %s: %s\n",
-              redact(g_archive_filename), archive_error_string(a));
+      syslog(LOG_ERR, "could not read %s: %s", redact(g_archive_filename),
+             archive_error_string(a));
       archive_read_free(a);
       return nullptr;
     }
@@ -939,15 +992,24 @@ normalize_pathname(struct archive_entry* e) {
   if (!s) {
     s = archive_entry_pathname(e);
     if (!s) {
-      fprintf(stderr, "fuse-archive: archive entry in %s has empty pathname\n",
-              redact(g_archive_filename));
+      syslog(LOG_ERR, "archive entry in %s has empty pathname",
+             redact(g_archive_filename));
       return "";
     }
   }
+
+  // For 'raw' archives, libarchive defaults to "data" when the compression
+  // file format doesn't contain the original file's name. For fuse-archive, we
+  // use the archive filename's innername instead. Given an archive filename of
+  // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
+  if (g_archive_is_raw && g_archive_innername &&
+      (g_archive_innername[0] != '\x00') && (strcmp(s, "data") == 0)) {
+    s = g_archive_innername;
+  }
+
   if (!valid_pathname(s, true)) {
-    fprintf(stderr,
-            "fuse-archive: archive entry in %s has invalid pathname: %s\n",
-            redact(g_archive_filename), redact(s));
+    syslog(LOG_ERR, "archive entry in %s has invalid pathname: %s",
+           redact(g_archive_filename), redact(s));
     return "";
   }
   if ((s[0] == '.') && (s[1] == '/')) {
@@ -966,13 +1028,22 @@ insert_leaf_node(std::string&& pathname,
                  time_t mtime,
                  mode_t mode) {
   if (index_within_archive < 0) {
-    fprintf(stderr, "fuse-archive: negative index_within_archive in %s: %s\n",
-            redact(g_archive_filename), redact(pathname.c_str()));
+    syslog(LOG_ERR, "negative index_within_archive in %s: %s",
+           redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
-  } else if (g_nodes_by_name.find(pathname) != g_nodes_by_name.end()) {
-    fprintf(stderr, "fuse-archive: duplicate pathname in %s: %s\n",
-            redact(g_archive_filename), redact(pathname.c_str()));
-    return -EIO;
+  } else {
+    auto iter = g_nodes_by_name.find(pathname);
+    if (iter == g_nodes_by_name.end()) {
+      // No-op.
+    } else if (S_ISDIR(iter->second->mode) == S_ISDIR(mode)) {
+      syslog(LOG_ERR, "duplicate pathname in %s: %s",
+             redact(g_archive_filename), redact(pathname.c_str()));
+      return EXIT_CODE_INVALID_EXPLICIT_DUPLICATE_ENTRY;
+    } else {
+      syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
+             redact(g_archive_filename), redact(pathname.c_str()));
+      return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
+    }
   }
   node* parent = g_root_node;
 
@@ -1019,9 +1090,8 @@ insert_leaf_node(std::string&& pathname,
       }
       if (g_nodes_by_index.size() >
           static_cast<uint64_t>(index_within_archive)) {
-        fprintf(stderr,
-                "fuse-archive: index_within_archive out of order in %s: %s\n",
-                redact(g_archive_filename), redact(pathname.c_str()));
+        syslog(LOG_ERR, "index_within_archive out of order in %s: %s",
+               redact(g_archive_filename), redact(pathname.c_str()));
         return -EIO;
       }
       g_nodes_by_index.push_back(n);
@@ -1038,11 +1108,9 @@ insert_leaf_node(std::string&& pathname,
       g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
       parent = n;
     } else if (!S_ISDIR(iter->second->mode)) {
-      fprintf(
-          stderr,
-          "fuse-archive: simultaneous directory and regular file in %s: %s\n",
-          redact(g_archive_filename), redact(abs_pathname.c_str()));
-      return -EIO;
+      syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
+             redact(g_archive_filename), redact(abs_pathname.c_str()));
+      return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
     } else {
       parent = iter->second;
     }
@@ -1071,20 +1139,22 @@ insert_leaf(struct archive* a,
       symlink = std::string(s);
     }
     if (symlink.empty()) {
-      fprintf(stderr, "fuse-archive: empty link in %s: %s\n",
-              redact(g_archive_filename), redact(pathname.c_str()));
+      syslog(LOG_ERR, "empty link in %s: %s", redact(g_archive_filename),
+             redact(pathname.c_str()));
       return 0;
     }
   } else if (!S_ISREG(mode)) {
-    fprintf(stderr, "fuse-archive: irregular non-link file in %s: %s\n",
-            redact(g_archive_filename), redact(pathname.c_str()));
+    syslog(LOG_ERR, "irregular non-link file in %s: %s",
+           redact(g_archive_filename), redact(pathname.c_str()));
     return 0;
   }
 
   int64_t size = archive_entry_size(e);
-  if (g_archive_is_raw && (size == 0)) {
-    // 'Raw' archives don't always explicitly record the decompressed size.
-    // We'll have to decompress it to find out.
+  // 'Raw' archives don't always explicitly record the decompressed size. We'll
+  // have to decompress it to find out. Some 'cooked' archives also don't
+  // explicitly record this (at the time archive_read_next_header returns). See
+  // https://github.com/libarchive/libarchive/issues/1764
+  if (!archive_entry_size_is_set(e)) {
     while (true) {
       ssize_t n = archive_read_data(
           a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
@@ -1092,18 +1162,17 @@ insert_leaf(struct archive* a,
       if (n == 0) {
         break;
       } else if (n < 0) {
-        fprintf(stderr, "fuse-archive: could not decompress %s: %s\n",
-                redact(g_archive_filename), archive_error_string(a));
+        syslog(LOG_ERR, "could not decompress %s: %s",
+               redact(g_archive_filename), archive_error_string(a));
         return -EIO;
       } else if (n > SIDE_BUFFER_SIZE) {
-        fprintf(stderr, "fuse-archive: too much data decompressing %s\n",
-                redact(g_archive_filename));
-        // Something has gone wrong, possibly a buffer overflow, so exit.
-        exit(EXIT_CODE_LIBARCHIVE_CONTRACT_VIOLATION);
+        syslog(LOG_ERR, "too much data decompressing %s",
+               redact(g_archive_filename));
+        // Something has gone wrong, possibly a buffer overflow, so abort.
+        abort();
       }
       size += n;
     }
-    g_raw_decompressed_size = size;
   }
 
   return insert_leaf_node(std::move(pathname), std::move(symlink),
@@ -1133,13 +1202,12 @@ build_tree() {
       if (status == ARCHIVE_EOF) {
         break;
       } else if (status == ARCHIVE_WARN) {
-        fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
-                redact(g_archive_filename),
-                archive_error_string(g_initialize_archive));
+        syslog(LOG_ERR, "libarchive warning for %s: %s",
+               redact(g_archive_filename),
+               archive_error_string(g_initialize_archive));
       } else if (status != ARCHIVE_OK) {
-        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
-                redact(g_archive_filename),
-                archive_error_string(g_initialize_archive));
+        syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
+               archive_error_string(g_initialize_archive));
         return -EIO;
       }
     }
@@ -1169,9 +1237,7 @@ read_passphrase_from_stdin() {
       if (errno == EINTR) {
         continue;
       }
-      fprintf(stderr,
-              "fuse-archive: could not read passphrase from stdin: %s\n",
-              strerror(errno));
+      syslog(LOG_ERR, "could not read passphrase from stdin: %m");
       return -errno;
     } else if (n == 0) {
       g_passphrase_buffer[g_passphrase_length] = '\x00';
@@ -1189,7 +1255,7 @@ read_passphrase_from_stdin() {
     }
     g_passphrase_length = j;
   }
-  fprintf(stderr, "fuse-archive: passphrase was too long\n");
+  syslog(LOG_ERR, "passphrase was too long");
   return -EIO;
 }
 
@@ -1203,27 +1269,26 @@ insert_root_node() {
 static int  //
 pre_initialize() {
   if (!g_archive_filename) {
-    fprintf(stderr, "fuse-archive: missing archive_filename argument\n");
+    syslog(LOG_ERR, "missing archive_filename argument");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
-  g_archive_fd = open(g_archive_filename, O_RDONLY);
-  if (g_archive_fd < 0) {
-    fprintf(stderr, "fuse-archive: could not open %s\n",
-            redact(g_archive_filename));
-    return EXIT_CODE_GENERIC_FAILURE;
-  }
   g_archive_realpath = realpath(g_archive_filename, NULL);
   if (!g_archive_realpath) {
-    fprintf(stderr, "fuse-archive: error getting absolute path of %s: %s\n",
-            redact(g_archive_filename), strerror(errno));
-    return EXIT_CODE_GENERIC_FAILURE;
+    syslog(LOG_ERR, "could not get absolute path of %s: %m",
+           redact(g_archive_filename));
+    return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
+  }
+
+  g_archive_fd = open(g_archive_realpath, O_RDONLY);
+  if (g_archive_fd < 0) {
+    syslog(LOG_ERR, "could not open %s: %m", redact(g_archive_filename));
+    return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
   }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
-    fprintf(stderr, "fuse-archive: could not stat %s\n",
-            redact(g_archive_filename));
+    syslog(LOG_ERR, "could not stat %s", redact(g_archive_filename));
     return EXIT_CODE_GENERIC_FAILURE;
   }
   g_archive_file_size = z.st_size;
@@ -1234,7 +1299,7 @@ pre_initialize() {
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
-    fprintf(stderr, "fuse-archive: out of memory\n");
+    syslog(LOG_ERR, "out of memory");
     return EXIT_CODE_GENERIC_FAILURE;
   }
   if (g_passphrase_length > 0) {
@@ -1244,9 +1309,8 @@ pre_initialize() {
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
   if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
-    fprintf(stderr, "fuse-archive: could not open %s: %s\n",
-            redact(g_archive_filename),
-            archive_error_string(g_initialize_archive));
+    syslog(LOG_ERR, "could not open %s: %s", redact(g_archive_filename),
+           archive_error_string(g_initialize_archive));
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
@@ -1259,14 +1323,13 @@ pre_initialize() {
                                           &g_initialize_archive_entry);
     g_initialize_index_within_archive++;
     if (status == ARCHIVE_WARN) {
-      fprintf(stderr, "fuse-archive: libarchive warning for %s: %s\n",
-              redact(g_archive_filename),
-              archive_error_string(g_initialize_archive));
+      syslog(LOG_ERR, "libarchive warning for %s: %s",
+             redact(g_archive_filename),
+             archive_error_string(g_initialize_archive));
     } else if (status != ARCHIVE_OK) {
       if (status != ARCHIVE_EOF) {
-        fprintf(stderr, "fuse-archive: invalid archive %s: %s\n",
-                redact(g_archive_filename),
-                archive_error_string(g_initialize_archive));
+        syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
+               archive_error_string(g_initialize_archive));
       }
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
@@ -1298,8 +1361,7 @@ pre_initialize() {
         g_initialize_archive = nullptr;
         g_initialize_archive_entry = nullptr;
         g_initialize_index_within_archive = -1;
-        fprintf(stderr, "fuse-archive: invalid raw archive: %s\n",
-                redact(g_archive_filename));
+        syslog(LOG_ERR, "invalid raw archive: %s", redact(g_archive_filename));
         return EXIT_CODE_INVALID_RAW_ARCHIVE;
       } else if (archive_filter_code(g_initialize_archive, i) !=
                  ARCHIVE_FILTER_NONE) {
@@ -1314,27 +1376,9 @@ pre_initialize() {
         g_initialize_archive,
         g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
-      int ret = determine_passphrase_exit_code(
-          g_initialize_archive, EXIT_CODE_INVALID_ARCHIVE_CONTENTS);
-      switch (ret) {
-        case EXIT_CODE_PASSPHRASE_REQUIRED:
-          fprintf(stderr, "fuse-archive: passphrase required for %s\n",
-                  redact(g_archive_filename));
-          break;
-        case EXIT_CODE_PASSPHRASE_INCORRECT:
-          fprintf(stderr, "fuse-archive: passphrase incorrect for %s\n",
-                  redact(g_archive_filename));
-          break;
-        case EXIT_CODE_PASSPHRASE_NOT_SUPPORTED:
-          fprintf(stderr, "fuse-archive: passphrase not supported for %s\n",
-                  redact(g_archive_filename));
-          break;
-        default:
-          fprintf(stderr, "fuse-archive: libarchive error for %s: %s\n",
-                  redact(g_archive_filename),
-                  archive_error_string(g_initialize_archive));
-          break;
-      }
+      const char* const e = archive_error_string(g_initialize_archive);
+      syslog(LOG_ERR, "%s: %s", redact(g_archive_filename), e);
+      const int ret = determine_passphrase_exit_code(e);
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
       g_initialize_archive_entry = nullptr;
@@ -1350,9 +1394,12 @@ static int  //
 post_initialize_sync() {
   if (g_initialize_status_code) {
     return g_initialize_status_code;
-  } else if (g_root_node != nullptr) {
+  }
+
+  if (g_root_node != nullptr) {
     return 0;
   }
+
   insert_root_node();
   g_initialize_status_code = build_tree();
   archive_read_free(g_initialize_archive);
@@ -1362,6 +1409,14 @@ post_initialize_sync() {
   if (g_archive_fd >= 0) {
     close(g_archive_fd);
     g_archive_fd = -1;
+  }
+  if (g_displayed_progress && (g_initialize_status_code == 0)) {
+    if (isatty(STDERR_FILENO)) {
+      fprintf(stderr, "\e[F\e[K");
+      fflush(stderr);
+    } else {
+      syslog(LOG_INFO, "Loaded 100%%");
+    }
   }
   return g_initialize_status_code;
 }
@@ -1496,24 +1551,27 @@ my_read(const char* pathname,
     return -EINVAL;
   }
   struct reader* r = reinterpret_cast<struct reader*>(ffi->fh);
-  if (!r || !r->archive || !r->archive_entry) {
+  if (!r || !r->archive || !r->archive_entry || (r->index_within_archive < 0)) {
     return -EIO;
   }
 
-  if (r->index_within_archive >= 0) {
-    uint64_t i = static_cast<uint64_t>(r->index_within_archive);
-    if (i < g_nodes_by_index.size()) {
-      struct node* n = g_nodes_by_index[i];
-      if (n) {
-        if (n->size <= offset) {
-          return 0;
-        }
-        uint64_t remaining = static_cast<uint64_t>(n->size - offset);
-        if (dst_len > remaining) {
-          dst_len = remaining;
-        }
-      }
-    }
+  uint64_t i = static_cast<uint64_t>(r->index_within_archive);
+  if (i >= g_nodes_by_index.size()) {
+    return -EIO;
+  }
+  struct node* n = g_nodes_by_index[i];
+  if (!n) {
+    return -EIO;
+  }
+  const int64_t size = n->size;
+  if (size < 0) {
+    return -EIO;
+  } else if (size <= offset) {
+    return 0;
+  }
+  uint64_t remaining = static_cast<uint64_t>(size - offset);
+  if (dst_len > remaining) {
+    dst_len = remaining;
   }
 
   if (dst_len == 0) {
@@ -1538,16 +1596,8 @@ my_read(const char* pathname,
     release_reader(std::move(ur));
   }
 
-  int64_t size = g_archive_is_raw ? g_raw_decompressed_size
-                                  : archive_entry_size(r->archive_entry);
-  if (size < 0) {
+  if (!r->advance_offset(offset, pathname)) {
     return -EIO;
-  } else if ((size <= offset) || (dst_len == 0)) {
-    return 0;
-  } else if (!r->advance_offset(offset, pathname)) {
-    return -EIO;
-  } else if (dst_len > static_cast<uint64_t>(size - offset)) {
-    dst_len = static_cast<uint64_t>(size - offset);
   }
   return r->read(dst_ptr, dst_len, pathname);
 }
@@ -1653,6 +1703,23 @@ static struct fuse_operations my_operations = {
 
 // ---- Main
 
+// innername returns the "bar.ext0" from "/foo/bar.ext0.ext1".
+const char*  //
+innername(const char* filename) {
+  if (!filename) {
+    return NULL;
+  }
+  const char* last_slash = strrchr(filename, '/');
+  if (last_slash) {
+    filename = last_slash + 1;
+  }
+  const char* last_dot = strrchr(filename, '.');
+  if (last_dot) {
+    return strndup(filename, last_dot - filename);
+  }
+  return strdup(filename);
+}
+
 static int  //
 my_opt_proc(void* private_data,
             const char* arg,
@@ -1666,12 +1733,16 @@ my_opt_proc(void* private_data,
     case FUSE_OPT_KEY_NONOPT:
       if (!g_archive_filename) {
         g_archive_filename = arg;
+        g_archive_innername = innername(arg);
         return discard;
       }
       break;
     case MY_KEY_HELP:
       g_options.help = true;
       return discard;
+    case MY_KEY_VERSION:
+      g_options.version = true;
+      return keep;
     case MY_KEY_ASYNCPROGRESS:
       if (!arg) {
         return error;
@@ -1685,17 +1756,21 @@ my_opt_proc(void* private_data,
         arg++;
       }
       if (!valid_pathname(arg, false) || (*arg == '\x00')) {
-        fprintf(stderr, "fuse-archive: invalid --asyncprogress=etc pathname\n");
+        syslog(LOG_ERR, "invalid --asyncprogress=etc pathname");
         return error;
       }
       g_options.asyncprogress = strdup(arg);
       if (!g_options.asyncprogress) {
-        fprintf(stderr, "fuse-archive: out of memory\n");
+        syslog(LOG_ERR, "out of memory");
         return error;
       }
       return discard;
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
+      return discard;
+    case MY_KEY_QUIET:
+      setlogmask(LOG_UPTO(LOG_ERR));
+      g_options.quiet = true;
       return discard;
     case MY_KEY_REDACT:
       g_options.redact = true;
@@ -1713,7 +1788,7 @@ ensure_utf_8_encoding() {
   //
   // Calling setlocale to enforce a UTF-8 encoding can avoid that. Try various
   // arguments and pick the first one that is supported and produces UTF-8.
-  static const char* locales[] = {
+  static const char* const locales[] = {
       // As of 2021, many systems (including Debian) support "C.UTF-8".
       "C.UTF-8",
       // However, "C.UTF-8" is not a POSIX standard and glibc 2.34 (released
@@ -1727,18 +1802,23 @@ ensure_utf_8_encoding() {
       // environment variables (LANG, LC_ALL, etc).
       "",
   };
-  for (size_t i = 0; i < ARRAY_SIZE(locales); i++) {
-    if (setlocale(LC_ALL, locales[i]) &&
+
+  for (const char* const locale : locales) {
+    if (setlocale(LC_ALL, locale) &&
         (strcmp("UTF-8", nl_langinfo(CODESET)) == 0)) {
       return 0;
     }
   }
-  fprintf(stderr, "fuse-archive: could not ensure UTF-8 encoding\n");
+
+  syslog(LOG_ERR, "could not ensure UTF-8 encoding");
   return EXIT_CODE_GENERIC_FAILURE;
 }
 
 int  //
 main(int argc, char** argv) {
+  openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
+  setlogmask(LOG_UPTO(LOG_INFO));
+
   // Initialize side buffers as invalid.
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
     g_side_buffer_metadata[i].index_within_archive = -1;
@@ -1747,14 +1827,14 @@ main(int argc, char** argv) {
     g_side_buffer_metadata[i].lru_priority = 0;
   }
 
-  TRY(ensure_utf_8_encoding());
+  TRY_EXIT_CODE(ensure_utf_8_encoding());
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if ((argc <= 0) || !argv) {
-    fprintf(stderr, "fuse-archive: missing command line arguments\n");
+    syslog(LOG_ERR, "missing command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
-    fprintf(stderr, "fuse-archive: could not parse command line arguments\n");
+    syslog(LOG_ERR, "could not parse command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
@@ -1770,45 +1850,43 @@ main(int argc, char** argv) {
 
   if (g_options.help) {
     g_initialize_status_code = -EIO;
-    fprintf(
-        stderr,
-        "usage: %s archive_filename mountpoint [options]\n"
-        "\n"
-        "general options:\n"
-        "    -o opt,[opt...]        mount options\n"
-        "    -h   --help            print help\n"
-        "    -V   --version         print version\n"
-        "\n"
-        "%s options:\n"
-        "         --asyncprogress=foo.bar   load the archive file immediately "
-        "and\n"
-        "                           asynchronously, instead of waiting until\n"
-        "                           serving the first FUSE request.\n"
-        "                           Progress can be watched from the "
-        "modification\n"
-        "                           time (via a stat syscall) of the "
-        "artificial\n"
-        "                           foo.bar file under the mountpoint. 0%% and "
-        "100%%\n"
-        "                           correspond to 0 and 1 million seconds "
-        "since\n"
-        "                           the Unix epoch, roughly 1 and 12 January "
-        "1970.\n"
-        "         -o asyncprogress=foo.bar  ditto\n"
-        "         --passphrase      passphrase given on stdin; 1023 bytes "
-        "max;\n"
-        "                           up to (excluding) first '\\n', '\\x00' or "
-        "EOF\n"
-        "         -o passphrase     ditto\n"
-        "         --redact          redact pathnames from log messages\n"
-        "         -o redact         ditto\n"
-        "\n",
-        argv[0], argv[0]);
+    fprintf(stderr,
+            R"(usage: %s archive_filename mountpoint [options]
+
+general options:
+    -o opt,[opt...]        mount options
+    -h   --help            print help
+    -V   --version         print version
+
+%s options:
+    -q   --quiet           do not print progress messages
+         --asyncprogress=foo.bar   load the archive file immediately and
+                           asynchronously, instead of waiting until
+                           serving the first FUSE request.
+                           Progress can be watched from the modification
+                           time (via a stat syscall) of the artificial
+                           foo.bar file under the mountpoint. 0%% and 100%%
+                           correspond to 0 and 1 million seconds since
+                           the Unix epoch, roughly 1 and 12 January 1970.
+         -o asyncprogress=foo.bar  ditto
+         --passphrase      passphrase given on stdin; 1023 bytes max;
+                           up to (excluding) first '\n', '\x00' or EOF
+         -o passphrase     ditto
+         --redact          redact pathnames from log messages
+         -o redact         ditto
+
+)",
+            PROGRAM_NAME, PROGRAM_NAME);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
+  } else if (g_options.version) {
+    fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
   } else {
-    TRY(pre_initialize());
+    TRY_EXIT_CODE(pre_initialize());
     g_uid = getuid();
     g_gid = getgid();
+    if (!g_options.asyncprogress) {
+      TRY_EXIT_CODE(post_initialize_sync());
+    }
   }
 
   int ret = fuse_main(args.argc, args.argv, &my_operations, NULL);
