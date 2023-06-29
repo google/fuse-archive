@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.13)
 
-set(FUSE_ARCHIVE_VERSION 0.0.1)
+set(FUSE_ARCHIVE_VERSION 0.1.14)
 set(PROJECT_NAME fuse-archive)
 project(${PROJECT_NAME} VERSION ${FUSE_ARCHIVE_VERSION} LANGUAGES CXX)
 include(GNUInstallDirs)
