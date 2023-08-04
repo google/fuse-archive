@@ -1129,7 +1129,14 @@ insert_leaf(struct archive* a,
   }
 
   std::string symlink;
-  mode_t mode = archive_entry_mode(e);
+  const mode_t mode = archive_entry_mode(e);
+
+  if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
+    syslog(LOG_ERR, "irregular file type in %s: %s",
+           redact(g_archive_filename), redact(pathname.c_str()));
+    return 0;
+  }
+
   if (S_ISLNK(mode)) {
     const char* s = archive_entry_symlink_utf8(e);
     if (!s) {
@@ -1143,10 +1150,6 @@ insert_leaf(struct archive* a,
              redact(pathname.c_str()));
       return 0;
     }
-  } else if (!S_ISREG(mode)) {
-    syslog(LOG_ERR, "irregular non-link file in %s: %s",
-           redact(g_archive_filename), redact(pathname.c_str()));
-    return 0;
   }
 
   int64_t size = archive_entry_size(e);
