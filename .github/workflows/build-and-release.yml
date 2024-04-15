@@ -20,25 +20,9 @@ jobs:
 
       # Build the project
       - name: Build
-        run: make
-
+        run: make 
       # Create a release and attach the binary
-      - name: Create Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for release creation
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}  # Create a release matching the tag name
-          release_name: Release ${{ github.ref }} 
-          body: 'Automated release build.' # Optional release notes
-          draft: false
-          prerelease: false  
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create-release.outputs.upload_url }} 
-          asset_path: ./out/fuse-archive
-          asset_name: fuse-archive
-          asset_content_type: application/octet-stream 
+          files: ./out/fuse-archive
