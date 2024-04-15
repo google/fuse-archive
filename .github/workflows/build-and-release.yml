@@ -1,0 +1,44 @@
+name: Build and Release
+
+# Trigger the workflow whenever a new tag is pushed:
+on:
+  push:
+    tags:
+      - 'v*'  # Example: Tags starting with 'v' (e.g., v1.0.0)
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest  # Use Ubuntu for Debian compatibility
+
+    steps:
+      # Checkout the code
+      - uses: actions/checkout@v3
+
+      # Install dependencies
+      - name: Install Dependencies
+        run: sudo apt-get install libarchive-dev libfuse-dev
+
+      # Build the project
+      - name: Build
+        run: make
+
+      # Create a release and attach the binary
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for release creation
+        with:
+          tag_name: ${{ github.ref }}  # Create a release matching the tag name
+          release_name: Release ${{ github.ref }} 
+          body: 'Automated release build.' # Optional release notes
+          draft: false
+          prerelease: false  
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-release.outputs.upload_url }} 
+          asset_path: ./out/fuse-archive
+          asset_name: fuse-archive
+          asset_content_type: application/octet-stream 
