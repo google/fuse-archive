@@ -10,14 +10,13 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest  # Use Ubuntu for Debian compatibility
-
     steps:
-      # Checkout the code
-      - uses: actions/checkout@v3
-
       # Install dependencies
       - name: Install Dependencies
         run: DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y libarchive-dev libfuse-dev
+      # Checkout the code
+      - uses: actions/checkout@v3
+
 
       # Build the project
       - name: Build
