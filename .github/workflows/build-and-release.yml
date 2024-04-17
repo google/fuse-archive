@@ -13,10 +13,12 @@ jobs:
     steps:
       # Install dependencies
       - name: Install Dependencies
-        run: DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y libarchive-dev libfuse-dev
+        run: |
+          export DEBIAN_FRONTEND=noninteractive 
+          sudo apt update 
+          sudo apt install -y libarchive-dev libfuse-dev
       # Checkout the code
-      - uses: actions/checkout@v3
-
+      - uses: actions/checkout@v4
 
       # Build the project
       - name: Build
