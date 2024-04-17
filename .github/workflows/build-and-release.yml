@@ -16,7 +16,7 @@ jobs:
 
       # Install dependencies
       - name: Install Dependencies
-        run: sudo apt-get install libarchive-dev libfuse-dev
+        run: DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y libarchive-dev libfuse-dev
 
       # Build the project
       - name: Build
