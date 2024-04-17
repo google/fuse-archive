@@ -5,6 +5,7 @@ on:
   push:
     tags:
       - 'v*'  # Example: Tags starting with 'v' (e.g., v1.0.0)
+  workflow_dispatch:
 
 jobs:
   build-and-release:
