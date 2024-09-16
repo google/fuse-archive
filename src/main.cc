@@ -1646,16 +1646,14 @@ static void* my_init(struct fuse_conn_info* conn) {
     // command line flag was passed for foreground operation), which can also
     // stop any threads started by the main function.
     g_shutting_down.store(false);
-    return new std::thread(post_initialize_async);
+    return new std::jthread(post_initialize_async);
   }
   return nullptr;
 }
 
 static void my_destroy(void* arg) {
-  if (arg) {
+  if (std::jthread* const t = static_cast<std::jthread*>(arg)) {
     g_shutting_down.store(true);
-    std::thread* t = static_cast<std::thread*>(arg);
-    t->join();
     delete t;
   }
 }
