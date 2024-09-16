@@ -34,22 +34,23 @@
 
 #include <archive.h>
 #include <archive_entry.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <fuse.h>
 #include <langinfo.h>
 #include <locale.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <syslog.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -146,7 +147,7 @@
 
 // ---- Globals
 
-static struct options {
+static struct {
   bool help;
   bool version;
 
@@ -381,31 +382,22 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 
 // ---- Libarchive Error Codes
 
-static bool starts_with(const char* s, const char* prefix) {
-  if (!s || !prefix) {
-    return false;
-  }
-  size_t ns = strlen(s);
-  size_t np = strlen(prefix);
-  return (ns >= np) && (strncmp(s, prefix, np) == 0);
-}
-
 // determine_passphrase_exit_code converts libarchive errors to fuse-archive
 // exit codes. libarchive doesn't have designated passphrase-related error
 // numbers. As for whether a particular archive file's encryption is supported,
 // libarchive isn't consistent in archive_read_has_encrypted_entries returning
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
-static int determine_passphrase_exit_code(const char* const e) {
-  if (starts_with(e, "Incorrect passphrase")) {
+static int determine_passphrase_exit_code(const std::string_view e) {
+  if (e.starts_with("Incorrect passphrase")) {
     return EXIT_CODE_PASSPHRASE_INCORRECT;
   }
 
-  if (starts_with(e, "Passphrase required")) {
+  if (e.starts_with("Passphrase required")) {
     return EXIT_CODE_PASSPHRASE_REQUIRED;
   }
 
-  static const char* const not_supported_prefixes[] = {
+  static const std::string_view not_supported_prefixes[] = {
       "Crypto codec not supported",
       "Decryption is unsupported",
       "Encrypted file is unsupported",
@@ -416,8 +408,8 @@ static int determine_passphrase_exit_code(const char* const e) {
       "Unsupported encryption format",
   };
 
-  for (const char* const prefix : not_supported_prefixes) {
-    if (starts_with(e, prefix)) {
+  for (const std::string_view prefix : not_supported_prefixes) {
+    if (e.starts_with(prefix)) {
       return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
     }
   }
