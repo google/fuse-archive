@@ -1135,8 +1135,8 @@ insert_leaf(struct archive* a,
   const mode_t mode = archive_entry_mode(e);
 
   if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
-    syslog(LOG_ERR, "irregular file type in %s: %s",
-           redact(g_archive_filename), redact(pathname.c_str()));
+    syslog(LOG_ERR, "irregular file type in %s: %s", redact(g_archive_filename),
+           redact(pathname.c_str()));
     return 0;
   }
 
