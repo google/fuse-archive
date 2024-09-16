@@ -285,6 +285,8 @@ static bool g_displayed_progress = false;
 static std::unordered_map<std::string, struct node*> g_nodes_by_name;
 static std::vector<struct node*> g_nodes_by_index;
 static struct node* g_root_node = nullptr;
+static constexpr blksize_t block_size = 512;
+static blkcnt_t g_block_count = 1;
 static std::atomic<bool> g_asyncprogress_complete;
 
 // g_shutting_down (when the --asyncprogress option is used) communicates to
@@ -903,7 +905,6 @@ struct node {
     z->st_gid = g_gid;
     z->st_size = this->size;
     z->st_mtime = this->mtime;
-    const blksize_t block_size = 512;
     z->st_blksize = block_size;
     z->st_blocks = (this->size + block_size - 1) / block_size;
   }
@@ -1059,6 +1060,7 @@ static int insert_leaf_node(std::string&& pathname,
     std::string abs_pathname(p, r - p);
     std::string rel_pathname(q, r - q);
     if (*r == 0) {
+      g_block_count += 1 + (size + block_size - 1) / block_size;
       // Insert an explicit leaf node (a regular file).
       node* n = new node(std::move(rel_pathname), std::move(symlink),
                          index_within_archive, size, mtime, leaf_mode);
@@ -1637,6 +1639,21 @@ static int my_readdir(const char* pathname,
   return 0;
 }
 
+static int my_statfs([[maybe_unused]] const char* const path,
+                     struct statvfs* const st) {
+  st->f_bsize = block_size;
+  st->f_frsize = block_size;
+  st->f_blocks = g_block_count;
+  st->f_bfree = 0;
+  st->f_bavail = 0;
+  st->f_files = g_nodes_by_name.size();
+  st->f_ffree = 0;
+  st->f_favail = 0;
+  st->f_flag = ST_RDONLY;
+  st->f_namemax = NAME_MAX;
+  return 0;
+}
+
 static void* my_init(struct fuse_conn_info* conn) {
   if (g_options.asyncprogress) {
     // Finish the initialization asynchronously, in a separate thread. This is
@@ -1663,6 +1680,7 @@ static struct fuse_operations my_operations = {
     .readlink = my_readlink,
     .open = my_open,
     .read = my_read,
+    .statfs = my_statfs,
     .release = my_release,
     .readdir = my_readdir,
     .init = my_init,
