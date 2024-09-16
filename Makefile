@@ -1,6 +1,8 @@
-PKG_CONFIG?=pkg-config
-pkgcflags=$(shell $(PKG_CONFIG) libarchive fuse --cflags)
-pkglibs=$(shell   $(PKG_CONFIG) libarchive fuse --libs)
+PKG_CONFIG ?= pkg-config
+DEPS = fuse libarchive
+CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
+LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
+CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter
 
 prefix=/usr
 bindir=$(prefix)/bin
@@ -22,6 +24,6 @@ uninstall:
 
 out/fuse-archive: src/main.cc
 	mkdir -p out
-	$(CXX) $(CXXFLAGS) $(pkgcflags) $< $(LDFLAGS) $(pkglibs) -o $@
+	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -o $@
 
 .PHONY: all check clean install uninstall
