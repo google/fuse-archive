@@ -921,6 +921,9 @@ struct node {
     z->st_gid = g_gid;
     z->st_size = this->size;
     z->st_mtime = this->mtime;
+    const blksize_t block_size = 512;
+    z->st_blksize = block_size;
+    z->st_blocks = (this->size + block_size - 1) / block_size;
   }
 };
 
