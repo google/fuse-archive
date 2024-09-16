@@ -381,8 +381,7 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 
 // ---- Libarchive Error Codes
 
-static bool  //
-starts_with(const char* s, const char* prefix) {
+static bool starts_with(const char* s, const char* prefix) {
   if (!s || !prefix) {
     return false;
   }
@@ -397,8 +396,7 @@ starts_with(const char* s, const char* prefix) {
 // libarchive isn't consistent in archive_read_has_encrypted_entries returning
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
-static int  //
-determine_passphrase_exit_code(const char* const e) {
+static int determine_passphrase_exit_code(const char* const e) {
   if (starts_with(e, "Incorrect passphrase")) {
     return EXIT_CODE_PASSPHRASE_INCORRECT;
   }
@@ -432,15 +430,13 @@ determine_passphrase_exit_code(const char* const e) {
 // redact replaces s with a placeholder string when the "--redact" command line
 // option was given. This may prevent Personally Identifiable Information (PII)
 // such as archive filenames or archive entry pathnames from being logged.
-static const char*  //
-redact(const char* s) {
+static const char* redact(const char* s) {
   return g_options.redact ? "[REDACTED]" : s;
 }
 
 // ---- Libarchive Read Callbacks
 
-static uint32_t  //
-initialization_progress_out_of_1000000() {
+static uint32_t initialization_progress_out_of_1000000() {
   int64_t m = g_archive_fd_position_hwm.load();
   int64_t n = g_archive_file_size;
   if ((m <= 0) || (n <= 0)) {
@@ -452,8 +448,7 @@ initialization_progress_out_of_1000000() {
   return ((uint32_t)(1000000 * x));
 }
 
-static void  //
-update_g_archive_fd_position_hwm() {
+static void update_g_archive_fd_position_hwm() {
   int64_t h = g_archive_fd_position_hwm.load();
   if (h < g_archive_fd_position_current) {
     g_archive_fd_position_hwm.store(g_archive_fd_position_current);
@@ -485,21 +480,20 @@ update_g_archive_fd_position_hwm() {
 // g_archive_fd_position_etc. The callback_data arguments are ignored in favor
 // of global variables.
 
-static int  //
-my_file_close(struct archive* a, void* callback_data) {
+static int my_file_close(struct archive* a, void* callback_data) {
   return ARCHIVE_OK;
 }
 
-static int  //
-my_file_open(struct archive* a, void* callback_data) {
+static int my_file_open(struct archive* a, void* callback_data) {
   g_archive_fd_position_current = 0;
   g_archive_fd_position_hwm.store(0);
   g_asyncprogress_complete.store(false);
   return ARCHIVE_OK;
 }
 
-static ssize_t  //
-my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
+static ssize_t my_file_read(struct archive* a,
+                            void* callback_data,
+                            const void** out_dst_ptr) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
@@ -525,11 +519,10 @@ my_file_read(struct archive* a, void* callback_data, const void** out_dst_ptr) {
   return ARCHIVE_FATAL;
 }
 
-static int64_t  //
-my_file_seek(struct archive* a,
-             void* callback_data,
-             int64_t offset,
-             int whence) {
+static int64_t my_file_seek(struct archive* a,
+                            void* callback_data,
+                            int64_t offset,
+                            int whence) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
@@ -548,8 +541,9 @@ my_file_seek(struct archive* a,
   return ARCHIVE_FATAL;
 }
 
-static int64_t  //
-my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
+static int64_t my_file_skip(struct archive* a,
+                            void* callback_data,
+                            int64_t delta) {
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
@@ -569,13 +563,13 @@ my_file_skip(struct archive* a, void* callback_data, int64_t delta) {
   return ARCHIVE_FATAL;
 }
 
-static int  //
-my_file_switch(struct archive* a, void* callback_data0, void* callback_data1) {
+static int my_file_switch(struct archive* a,
+                          void* callback_data0,
+                          void* callback_data1) {
   return ARCHIVE_OK;
 }
 
-static int  //
-my_archive_read_open(struct archive* a) {
+static int my_archive_read_open(struct archive* a) {
   TRY(archive_read_set_callback_data(a, nullptr));
   TRY(archive_read_set_close_callback(a, my_file_close));
   TRY(archive_read_set_open_callback(a, my_file_open));
@@ -590,8 +584,7 @@ my_archive_read_open(struct archive* a) {
 
 // acquire_side_buffer returns the index of the least recently used side
 // buffer. This indexes g_side_buffer_data and g_side_buffer_metadata.
-static int  //
-acquire_side_buffer() {
+static int acquire_side_buffer() {
   // The preprocessor already checks "#elif NUM_SIDE_BUFFERS <= 0".
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
@@ -608,11 +601,10 @@ acquire_side_buffer() {
   return oldest_i;
 }
 
-static bool  //
-read_from_side_buffer(int64_t index_within_archive,
-                      char* dst_ptr,
-                      size_t dst_len,
-                      int64_t offset_within_entry) {
+static bool read_from_side_buffer(int64_t index_within_archive,
+                                  char* dst_ptr,
+                                  size_t dst_len,
+                                  int64_t offset_within_entry) {
   // Find the longest side buffer that contains (index_within_archive,
   // offset_within_entry, dst_len).
   int best_i = -1;
@@ -777,11 +769,10 @@ struct reader {
 };
 
 // compare does a lexicographic comparison of the pairs (i0, o0) and (i1, o1).
-static int  //
-compare(int64_t index_within_archive0,
-        int64_t offset_within_entry0,
-        int64_t index_within_archive1,
-        int64_t offset_within_entry1) {
+static int compare(int64_t index_within_archive0,
+                   int64_t offset_within_entry0,
+                   int64_t index_within_archive1,
+                   int64_t offset_within_entry1) {
   if (index_within_archive0 < index_within_archive1) {
     return -1;
   } else if (index_within_archive0 > index_within_archive1) {
@@ -796,8 +787,8 @@ compare(int64_t index_within_archive0,
 
 // acquire_reader returns a reader positioned at the start (offset == 0) of the
 // given index'th entry of the archive.
-static std::unique_ptr<struct reader>  //
-acquire_reader(int64_t want_index_within_archive) {
+static std::unique_ptr<struct reader> acquire_reader(
+    int64_t want_index_within_archive) {
   if (want_index_within_archive < 0) {
     syslog(LOG_ERR, "negative index_within_archive");
     return nullptr;
@@ -852,8 +843,7 @@ acquire_reader(int64_t want_index_within_archive) {
 }
 
 // release_reader returns r to the reader cache.
-static void  //
-release_reader(std::unique_ptr<struct reader> r) {
+static void release_reader(std::unique_ptr<struct reader> r) {
   if (NUM_SAVED_READERS <= 0) {
     return;
   }
@@ -940,8 +930,7 @@ struct node {
 //    pq-r|      ||       |
 //    p   q------r|       |
 //    p           q-------r
-static bool  //
-valid_pathname(const char* const p, bool allow_slashes) {
+static bool valid_pathname(const char* const p, bool allow_slashes) {
   if (!p) {
     return false;
   }
@@ -989,8 +978,7 @@ valid_pathname(const char* const p, bool allow_slashes) {
 
 // normalize_pathname validates and returns e's pathname, prepending a leading
 // "/" if it didn't already have one.
-static std::string  //
-normalize_pathname(struct archive_entry* e) {
+static std::string normalize_pathname(struct archive_entry* e) {
   const char* s = archive_entry_pathname_utf8(e);
   if (!s) {
     s = archive_entry_pathname(e);
@@ -1023,13 +1011,12 @@ normalize_pathname(struct archive_entry* e) {
   return std::string("/") + std::string(s);
 }
 
-static int  //
-insert_leaf_node(std::string&& pathname,
-                 std::string&& symlink,
-                 int64_t index_within_archive,
-                 int64_t size,
-                 time_t mtime,
-                 mode_t mode) {
+static int insert_leaf_node(std::string&& pathname,
+                            std::string&& symlink,
+                            int64_t index_within_archive,
+                            int64_t size,
+                            time_t mtime,
+                            mode_t mode) {
   if (index_within_archive < 0) {
     syslog(LOG_ERR, "negative index_within_archive in %s: %s",
            redact(g_archive_filename), redact(pathname.c_str()));
@@ -1121,10 +1108,9 @@ insert_leaf_node(std::string&& pathname,
   return 0;
 }
 
-static int  //
-insert_leaf(struct archive* a,
-            struct archive_entry* e,
-            int64_t index_within_archive) {
+static int insert_leaf(struct archive* a,
+                       struct archive_entry* e,
+                       int64_t index_within_archive) {
   std::string pathname = normalize_pathname(e);
   if (pathname.empty()) {
     // normalize_pathname already printed a log message.
@@ -1186,8 +1172,7 @@ insert_leaf(struct archive* a,
                           mode);
 }
 
-static int  //
-build_tree() {
+static int build_tree() {
   if (g_initialize_index_within_archive < 0) {
     return -EIO;
   }
@@ -1233,8 +1218,7 @@ build_tree() {
 // This section (pre_initialize and post_initialize_etc) are the "two parts"
 // described in the "Building is split into two parts" comment above.
 
-static int  //
-read_passphrase_from_stdin() {
+static int read_passphrase_from_stdin() {
   static constexpr int stdin_fd = 0;
   while (g_passphrase_length < PASSPHRASE_BUFFER_LENGTH) {
     ssize_t n = read(stdin_fd, &g_passphrase_buffer[g_passphrase_length],
@@ -1265,15 +1249,13 @@ read_passphrase_from_stdin() {
   return -EIO;
 }
 
-static void  //
-insert_root_node() {
+static void insert_root_node() {
   static constexpr int64_t index_within_archive = -1;
   g_root_node = new node("", "", index_within_archive, 0, 0, S_IFDIR);
   g_nodes_by_name["/"] = g_root_node;
 }
 
-static int  //
-pre_initialize() {
+static int pre_initialize() {
   if (!g_archive_filename) {
     syslog(LOG_ERR, "missing archive_filename argument");
     return EXIT_CODE_GENERIC_FAILURE;
@@ -1396,8 +1378,7 @@ pre_initialize() {
   return 0;
 }
 
-static int  //
-post_initialize_sync() {
+static int post_initialize_sync() {
   if (g_initialize_status_code) {
     return g_initialize_status_code;
   }
@@ -1427,16 +1408,14 @@ post_initialize_sync() {
   return g_initialize_status_code;
 }
 
-static void  //
-post_initialize_async() {
+static void post_initialize_async() {
   post_initialize_sync();
   g_asyncprogress_complete.store(true);
 }
 
 // ---- FUSE Callbacks
 
-static int  //
-my_getattr(const char* pathname, struct stat* z) {
+static int my_getattr(const char* pathname, struct stat* z) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
@@ -1474,8 +1453,7 @@ my_getattr(const char* pathname, struct stat* z) {
   return 0;
 }
 
-static int  //
-my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
+static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
@@ -1502,8 +1480,7 @@ my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
   return 0;
 }
 
-static int  //
-my_open(const char* pathname, struct fuse_file_info* ffi) {
+static int my_open(const char* pathname, struct fuse_file_info* ffi) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
@@ -1539,12 +1516,11 @@ my_open(const char* pathname, struct fuse_file_info* ffi) {
   return 0;
 }
 
-static int  //
-my_read(const char* pathname,
-        char* dst_ptr,
-        size_t dst_len,
-        off_t offset,
-        struct fuse_file_info* ffi) {
+static int my_read(const char* pathname,
+                   char* dst_ptr,
+                   size_t dst_len,
+                   off_t offset,
+                   struct fuse_file_info* ffi) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
@@ -1608,8 +1584,7 @@ my_read(const char* pathname,
   return r->read(dst_ptr, dst_len, pathname);
 }
 
-static int  //
-my_release(const char* pathname, struct fuse_file_info* ffi) {
+static int my_release(const char* pathname, struct fuse_file_info* ffi) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
@@ -1626,12 +1601,11 @@ my_release(const char* pathname, struct fuse_file_info* ffi) {
   return 0;
 }
 
-static int  //
-my_readdir(const char* pathname,
-           void* buf,
-           fuse_fill_dir_t filler,
-           off_t offset,
-           struct fuse_file_info* ffi) {
+static int my_readdir(const char* pathname,
+                      void* buf,
+                      fuse_fill_dir_t filler,
+                      off_t offset,
+                      struct fuse_file_info* ffi) {
   if (!g_options.asyncprogress) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
@@ -1671,8 +1645,7 @@ my_readdir(const char* pathname,
   return 0;
 }
 
-static void*  //
-my_init(struct fuse_conn_info* conn) {
+static void* my_init(struct fuse_conn_info* conn) {
   if (g_options.asyncprogress) {
     // Finish the initialization asynchronously, in a separate thread. This is
     // kicked off here, in my_init, instead of the main function, because of
@@ -1686,8 +1659,7 @@ my_init(struct fuse_conn_info* conn) {
   return nullptr;
 }
 
-static void  //
-my_destroy(void* arg) {
+static void my_destroy(void* arg) {
   if (arg) {
     g_shutting_down.store(true);
     std::thread* t = static_cast<std::thread*>(arg);
@@ -1710,8 +1682,7 @@ static struct fuse_operations my_operations = {
 // ---- Main
 
 // innername returns the "bar.ext0" from "/foo/bar.ext0.ext1".
-const char*  //
-innername(const char* filename) {
+const char* innername(const char* filename) {
   if (!filename) {
     return NULL;
   }
@@ -1726,11 +1697,10 @@ innername(const char* filename) {
   return strdup(filename);
 }
 
-static int  //
-my_opt_proc(void* private_data,
-            const char* arg,
-            int key,
-            struct fuse_args* out_args) {
+static int my_opt_proc(void* private_data,
+                       const char* arg,
+                       int key,
+                       struct fuse_args* out_args) {
   static constexpr int error = -1;
   static constexpr int discard = 0;
   static constexpr int keep = 1;
@@ -1785,8 +1755,7 @@ my_opt_proc(void* private_data,
   return keep;
 }
 
-static int  //
-ensure_utf_8_encoding() {
+static int ensure_utf_8_encoding() {
   // libarchive (especially for reading 7z) has locale-dependent behavior.
   // Non-ASCII pathnames can trigger "Pathname cannot be converted from
   // UTF-16LE to current locale" warnings from archive_read_next_header and
@@ -1820,8 +1789,7 @@ ensure_utf_8_encoding() {
   return EXIT_CODE_GENERIC_FAILURE;
 }
 
-int  //
-main(int argc, char** argv) {
+int main(int argc, char** argv) {
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   setlogmask(LOG_UPTO(LOG_INFO));
 
