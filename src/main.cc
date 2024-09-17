@@ -366,7 +366,7 @@ static struct side_buffer_metadata {
     if ((this->index_within_archive >= 0) &&
         (this->index_within_archive == index_within_archive) &&
         (this->offset_within_entry <= offset_within_entry)) {
-      int64_t o = offset_within_entry - this->offset_within_entry;
+      const int64_t o = offset_within_entry - this->offset_within_entry;
       return (this->length >= o) && ((this->length - o) >= length);
     }
     return false;
@@ -431,14 +431,14 @@ static const char* redact(const char* s) {
 // ---- Libarchive Read Callbacks
 
 static uint32_t initialization_progress_out_of_1000000() {
-  int64_t m = g_archive_fd_position_hwm.load();
-  int64_t n = g_archive_file_size;
+  const int64_t m = g_archive_fd_position_hwm.load();
+  const int64_t n = g_archive_file_size;
   if ((m <= 0) || (n <= 0)) {
     return 0;
   } else if (m >= n) {
     return 1000000;
   }
-  double x = ((double)m) / ((double)n);
+  const double x = ((double)m) / ((double)n);
   return ((uint32_t)(1000000 * x));
 }
 
@@ -497,7 +497,7 @@ static ssize_t my_file_read(struct archive* a,
   }
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
   while (true) {
-    ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
+    const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
     if (n >= 0) {
       g_archive_fd_position_current += n;
       update_g_archive_fd_position_hwm();
@@ -545,8 +545,9 @@ static int64_t my_file_skip(struct archive* a,
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
-  int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
-  int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
+
+  const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
+  const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if ((o1 >= 0) && (o0 >= 0)) {
     g_archive_fd_position_current = o1;
     update_g_archive_fd_position_hwm();
@@ -658,7 +659,7 @@ struct reader {
       return false;
     }
     while (this->index_within_archive < want) {
-      int status =
+      const int status =
           archive_read_next_header(this->archive, &this->archive_entry);
       if (status == ARCHIVE_EOF) {
         syslog(LOG_ERR, "inconsistent archive %s", redact(g_archive_filename));
@@ -694,14 +695,14 @@ struct reader {
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
-    int sb = acquire_side_buffer();
+    const int sb = acquire_side_buffer();
     if ((sb < 0) || (NUM_SIDE_BUFFERS <= sb)) {
       return false;
     }
     uint8_t* dst_ptr = g_side_buffer_data[sb];
     struct side_buffer_metadata* meta = &g_side_buffer_metadata[sb];
     while (want > this->offset_within_entry) {
-      int64_t original_owe = this->offset_within_entry;
+      const int64_t original_owe = this->offset_within_entry;
       int64_t dst_len = want - original_owe;
       // If the amount we need to advance is greater than the SIDE_BUFFER_SIZE,
       // we need multiple this->read calls, but the total advance might not be
@@ -717,7 +718,7 @@ struct reader {
         }
       }
 
-      ssize_t n = this->read(dst_ptr, dst_len, pathname);
+      const ssize_t n = this->read(dst_ptr, dst_len, pathname);
       if (n < 0) {
         meta->index_within_archive = -1;
         meta->offset_within_entry = -1;
@@ -738,7 +739,7 @@ struct reader {
   //
   // The pathname is used for log messages.
   ssize_t read(void* dst_ptr, size_t dst_len, const char* pathname) {
-    ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
+    const ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
     if (n < 0) {
       syslog(LOG_ERR, "could not serve %s from %s: %s", redact(pathname),
              redact(g_archive_filename), archive_error_string(this->archive));
@@ -995,7 +996,7 @@ static int insert_leaf_node(std::string&& pathname,
            redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
   } else {
-    auto iter = g_nodes_by_name.find(pathname);
+    const auto iter = g_nodes_by_name.find(pathname);
     if (iter == g_nodes_by_name.end()) {
       // No-op.
     } else if (S_ISDIR(iter->second->mode) == S_ISDIR(mode)) {
@@ -1008,17 +1009,13 @@ static int insert_leaf_node(std::string&& pathname,
       return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
     }
   }
-  node* parent = g_root_node;
 
-  mode_t rx_bits = mode & 0555;
-  mode_t r_bits = rx_bits & 0444;
-  mode_t branch_mode = rx_bits | (r_bits >> 2) | S_IFDIR;
-  mode_t leaf_mode = rx_bits;
-  if (symlink.empty()) {
-    leaf_mode |= S_IFREG;
-  } else {
-    leaf_mode |= S_IFLNK;
-  }
+  struct node* parent = g_root_node;
+
+  const mode_t rx_bits = mode & 0555;
+  const mode_t r_bits = rx_bits & 0444;
+  const mode_t branch_mode = rx_bits | (r_bits >> 2) | S_IFDIR;
+  const mode_t leaf_mode = rx_bits | (symlink.empty() ? S_IFREG : S_IFLNK);
 
   // p, q and r point to pathname fragments per the valid_pathname comment.
   const char* p = pathname.c_str();
@@ -1042,8 +1039,8 @@ static int insert_leaf_node(std::string&& pathname,
     if (*r == 0) {
       g_block_count += 1 + (size + block_size - 1) / block_size;
       // Insert an explicit leaf node (a regular file).
-      node* n = new node(std::move(rel_pathname), std::move(symlink),
-                         index_within_archive, size, mtime, leaf_mode);
+      node* const n = new node(std::move(rel_pathname), std::move(symlink),
+                               index_within_archive, size, mtime, leaf_mode);
       parent->add_child(n);
       // Add to g_nodes_by_name.
       g_nodes_by_name.insert({std::move(abs_pathname), n});
@@ -1062,10 +1059,10 @@ static int insert_leaf_node(std::string&& pathname,
     q = r + 1;
 
     // Insert an implicit branch node (a directory).
-    auto iter = g_nodes_by_name.find(abs_pathname);
+    const auto iter = g_nodes_by_name.find(abs_pathname);
     if (iter == g_nodes_by_name.end()) {
-      node* n = new node(std::move(rel_pathname), std::move(symlink), -1, 0,
-                         mtime, branch_mode);
+      node* const n = new node(std::move(rel_pathname), std::move(symlink), -1,
+                               0, mtime, branch_mode);
       parent->add_child(n);
       g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
       parent = n;
@@ -1120,7 +1117,7 @@ static int insert_leaf(struct archive* a,
   // https://github.com/libarchive/libarchive/issues/1764
   if (!archive_entry_size_is_set(e)) {
     while (true) {
-      ssize_t n = archive_read_data(
+      const ssize_t n = archive_read_data(
           a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
           SIDE_BUFFER_SIZE);
       if (n == 0) {
@@ -1193,8 +1190,8 @@ static int build_tree() {
 static int read_passphrase_from_stdin() {
   static constexpr int stdin_fd = 0;
   while (g_passphrase_length < PASSPHRASE_BUFFER_LENGTH) {
-    ssize_t n = read(stdin_fd, &g_passphrase_buffer[g_passphrase_length],
-                     PASSPHRASE_BUFFER_LENGTH - g_passphrase_length);
+    const ssize_t n = read(stdin_fd, &g_passphrase_buffer[g_passphrase_length],
+                           PASSPHRASE_BUFFER_LENGTH - g_passphrase_length);
     if (n < 0) {
       if (errno == EINTR) {
         continue;
@@ -1314,7 +1311,7 @@ static int pre_initialize() {
   // data (e.g. foo.jpeg).
   if (archive_format(g_initialize_archive) == ARCHIVE_FORMAT_RAW) {
     g_archive_is_raw = true;
-    int n = archive_filter_count(g_initialize_archive);
+    const int n = archive_filter_count(g_initialize_archive);
     for (int i = 0; true; i++) {
       if (i == n) {
         archive_read_free(g_initialize_archive);
@@ -1417,7 +1414,7 @@ static int my_getattr(const char* pathname, struct stat* z) {
     return g_initialize_status_code;
   }
 
-  auto iter = g_nodes_by_name.find(pathname);
+  const auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
@@ -1440,11 +1437,11 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
     return g_initialize_status_code;
   }
 
-  auto iter = g_nodes_by_name.find(pathname);
+  const auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
-  node* n = iter->second;
+  const struct node* const n = iter->second;
   if (n->symlink.empty() || (dst_len == 0)) {
     return -ENOLINK;
   }
@@ -1468,7 +1465,7 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
     return g_initialize_status_code;
   }
 
-  auto iter = g_nodes_by_name.find(pathname);
+  const auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   } else if (S_ISDIR(iter->second->mode)) {
@@ -1504,7 +1501,8 @@ static int my_read(const char* pathname,
   if ((offset < 0) || (dst_len > INT_MAX)) {
     return -EINVAL;
   }
-  struct reader* r = reinterpret_cast<struct reader*>(ffi->fh);
+
+  struct reader* const r = reinterpret_cast<struct reader*>(ffi->fh);
   if (!r || !r->archive || !r->archive_entry || (r->index_within_archive < 0)) {
     return -EIO;
   }
@@ -1513,7 +1511,8 @@ static int my_read(const char* pathname,
   if (i >= g_nodes_by_index.size()) {
     return -EIO;
   }
-  struct node* n = g_nodes_by_index[i];
+
+  const struct node* const n = g_nodes_by_index[i];
   if (!n) {
     return -EIO;
   }
@@ -1566,7 +1565,7 @@ static int my_release(const char* pathname, struct fuse_file_info* ffi) {
     return g_initialize_status_code;
   }
 
-  struct reader* r = reinterpret_cast<struct reader*>(ffi->fh);
+  struct reader* const r = reinterpret_cast<struct reader*>(ffi->fh);
   if (!r) {
     return -EIO;
   }
@@ -1598,7 +1597,7 @@ static int my_readdir(const char* pathname,
     return g_initialize_status_code;
   }
 
-  auto iter = g_nodes_by_name.find(pathname);
+  const auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
@@ -1654,7 +1653,7 @@ static void my_destroy(void* arg) {
   }
 }
 
-static struct fuse_operations my_operations = {
+static const struct fuse_operations my_operations = {
     .getattr = my_getattr,
     .readlink = my_readlink,
     .open = my_open,
