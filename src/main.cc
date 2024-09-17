@@ -752,15 +752,15 @@ struct reader {
     this->offset_within_entry += n;
     return n;
   }
-
-  // swap swaps fields with another reader.
-  void swap(struct reader* that) {
-    std::swap(this->archive, that->archive);
-    std::swap(this->archive_entry, that->archive_entry);
-    std::swap(this->index_within_archive, that->index_within_archive);
-    std::swap(this->offset_within_entry, that->offset_within_entry);
-  }
 };
+
+// swap swaps fields of two readers.
+static void swap(reader& a, reader& b) {
+  std::swap(a.archive, b.archive);
+  std::swap(a.archive_entry, b.archive_entry);
+  std::swap(a.index_within_archive, b.index_within_archive);
+  std::swap(a.offset_within_entry, b.offset_within_entry);
+}
 
 // compare does a lexicographic comparison of the pairs (i0, o0) and (i1, o1).
 static int compare(int64_t index_within_archive0,
@@ -1568,7 +1568,7 @@ static int my_read(const char* pathname,
     if (!ur || !ur->archive || !ur->archive_entry) {
       return -EIO;
     }
-    r->swap(ur.get());
+    swap(*r, *ur);
     release_reader(std::move(ur));
   }
 
