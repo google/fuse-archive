@@ -195,12 +195,12 @@ static struct fuse_opt g_fuse_opts[] = {
 };
 
 // g_archive_filename is the command line argument naming the archive file.
-static const char* g_archive_filename = NULL;
+static const char* g_archive_filename = nullptr;
 
 // g_archive_innername is the base name of g_archive_filename, minus the file
 // extension suffix. For example, if g_archive_filename is "/foo/bar.ext0.ext1"
 // then g_archive_innername is "bar.ext0".
-static const char* g_archive_innername = NULL;
+static const char* g_archive_innername = nullptr;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
 static int g_archive_fd = -1;
@@ -224,7 +224,7 @@ static std::atomic<int64_t> g_archive_fd_position_hwm;
 // current working directory, so subsequent archive_read_open_filename calls
 // use this absolute filepath instead. g_archive_filename is still used for
 // logging. g_archive_realpath is allocated in pre_initialize and never freed.
-static const char* g_archive_realpath = NULL;
+static const char* g_archive_realpath = nullptr;
 
 // g_passphrase_buffer and g_passphrase_length combine to hold the passphrase,
 // if given. The buffer is NUL-terminated but g_passphrase_length excludes the
@@ -1255,7 +1255,7 @@ static int pre_initialize() {
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
-  g_archive_realpath = realpath(g_archive_filename, NULL);
+  g_archive_realpath = realpath(g_archive_filename, nullptr);
   if (!g_archive_realpath) {
     syslog(LOG_ERR, "could not get absolute path of %s: %m",
            redact(g_archive_filename));
@@ -1605,8 +1605,8 @@ static int my_readdir(const char* pathname,
   } else if (!g_asyncprogress_complete.load()) {
     if (*pathname == '/') {
       if (pathname[1] == '\x00') {
-        if (filler(buf, ".", NULL, 0) || filler(buf, "..", NULL, 0) ||
-            filler(buf, g_options.asyncprogress, NULL, 0)) {
+        if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0) ||
+            filler(buf, g_options.asyncprogress, nullptr, 0)) {
           return -ENOMEM;
         }
         return 0;
@@ -1626,7 +1626,7 @@ static int my_readdir(const char* pathname,
   node* n = iter->second;
   if (!S_ISDIR(n->mode)) {
     return -ENOTDIR;
-  } else if (filler(buf, ".", NULL, 0) || filler(buf, "..", NULL, 0)) {
+  } else if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0)) {
     return -ENOMEM;
   }
   struct stat z;
@@ -1692,7 +1692,7 @@ static struct fuse_operations my_operations = {
 // innername returns the "bar.ext0" from "/foo/bar.ext0.ext1".
 const char* innername(const char* filename) {
   if (!filename) {
-    return NULL;
+    return nullptr;
   }
   const char* last_slash = strrchr(filename, '/');
   if (last_slash) {
@@ -1871,7 +1871,7 @@ general options:
     }
   }
 
-  int ret = fuse_main(args.argc, args.argv, &my_operations, NULL);
+  int ret = fuse_main(args.argc, args.argv, &my_operations, nullptr);
   if (ret != 0) {
     // libfuse's fuse_main can return a variety of integer values. Collapse
     // them all to fuse-archive's EXIT_CODE_GENERIC_FAILURE to avoid colliding
