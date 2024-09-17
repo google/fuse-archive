@@ -1158,16 +1158,21 @@ static int insert_leaf(struct archive* a,
           SIDE_BUFFER_SIZE);
       if (n == 0) {
         break;
-      } else if (n < 0) {
+      }
+
+      if (n < 0) {
         syslog(LOG_ERR, "could not decompress %s: %s",
                redact(g_archive_filename), archive_error_string(a));
         return -EIO;
-      } else if (n > SIDE_BUFFER_SIZE) {
+      }
+
+      if (n > SIDE_BUFFER_SIZE) {
         syslog(LOG_ERR, "too much data decompressing %s",
                redact(g_archive_filename));
         // Something has gone wrong, possibly a buffer overflow, so abort.
         abort();
       }
+
       size += n;
     }
   }
@@ -1190,14 +1195,15 @@ static int build_tree() {
     if (first) {
       // The entry was already read by pre_initialize.
       first = false;
-
     } else {
       int status = archive_read_next_header(g_initialize_archive,
                                             &g_initialize_archive_entry);
       g_initialize_index_within_archive++;
       if (status == ARCHIVE_EOF) {
         break;
-      } else if (status == ARCHIVE_WARN) {
+      }
+
+      if (status == ARCHIVE_WARN) {
         syslog(LOG_ERR, "libarchive warning for %s: %s",
                redact(g_archive_filename),
                archive_error_string(g_initialize_archive));
@@ -1451,12 +1457,12 @@ static int my_getattr(const char* pathname, struct stat* z) {
     return g_initialize_status_code;
   }
 
-  const auto iter = g_nodes_by_name.find(pathname);
-  if (iter == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_name.find(pathname);
+  if (it == g_nodes_by_name.end()) {
     return -ENOENT;
   }
 
-  *z = iter->second->get_stat();
+  *z = it->second->get_stat();
   return 0;
 }
 
@@ -1475,12 +1481,13 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
     return g_initialize_status_code;
   }
 
-  const auto iter = g_nodes_by_name.find(pathname);
-  if (iter == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_name.find(pathname);
+  if (it == g_nodes_by_name.end()) {
     return -ENOENT;
   }
 
-  const Node* const n = iter->second;
+  const Node* const n = it->second;
+  assert(n);
   if (n->symlink.empty() || dst_len == 0) {
     return -ENOLINK;
   }
@@ -1508,18 +1515,26 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
     return g_initialize_status_code;
   }
 
-  const auto iter = g_nodes_by_name.find(pathname);
-  if (iter == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_name.find(pathname);
+  if (it == g_nodes_by_name.end()) {
     return -ENOENT;
-  } else if (S_ISDIR(iter->second->mode)) {
+  }
+
+  const Node* const n = it->second;
+  assert(n);
+  if (S_ISDIR(n->mode)) {
     return -EISDIR;
-  } else if (iter->second->index_within_archive < 0 || !ffi) {
+  }
+
+  if (n->index_within_archive < 0 || !ffi) {
     return -EIO;
-  } else if ((ffi->flags & O_ACCMODE) != O_RDONLY) {
+  }
+
+  if ((ffi->flags & O_ACCMODE) != O_RDONLY) {
     return -EACCES;
   }
-  std::unique_ptr<struct reader> ur =
-      acquire_reader(iter->second->index_within_archive);
+
+  std::unique_ptr<struct reader> ur = acquire_reader(n->index_within_archive);
   if (!ur) {
     return -EIO;
   }
