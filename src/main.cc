@@ -363,11 +363,11 @@ static struct side_buffer_metadata {
   bool contains(int64_t index_within_archive,
                 int64_t offset_within_entry,
                 uint64_t length) {
-    if ((this->index_within_archive >= 0) &&
-        (this->index_within_archive == index_within_archive) &&
-        (this->offset_within_entry <= offset_within_entry)) {
+    if (this->index_within_archive >= 0 &&
+        this->index_within_archive == index_within_archive &&
+        this->offset_within_entry <= offset_within_entry) {
       const int64_t o = offset_within_entry - this->offset_within_entry;
-      return (this->length >= o) && ((this->length - o) >= length);
+      return this->length >= o && (this->length - o) >= length;
     }
     return false;
   }
@@ -433,13 +433,16 @@ static const char* redact(const char* s) {
 static uint32_t initialization_progress_out_of_1000000() {
   const int64_t m = g_archive_fd_position_hwm.load();
   const int64_t n = g_archive_file_size;
-  if ((m <= 0) || (n <= 0)) {
+
+  if (m <= 0 || n <= 0) {
     return 0;
-  } else if (m >= n) {
+  }
+
+  if (m >= n) {
     return 1000000;
   }
-  const double x = ((double)m) / ((double)n);
-  return ((uint32_t)(1000000 * x));
+
+  return 1'000'000.0 * m / n;
 }
 
 static void update_g_archive_fd_position_hwm() {
@@ -503,9 +506,12 @@ static ssize_t my_file_read(struct archive* a,
       update_g_archive_fd_position_hwm();
       *out_dst_ptr = dst_ptr;
       return n;
-    } else if (errno == EINTR) {
+    }
+
+    if (errno == EINTR) {
       continue;
     }
+
     archive_set_error(a, errno, "could not read archive file: %s",
                       strerror(errno));
     break;
@@ -520,16 +526,20 @@ static int64_t my_file_seek(struct archive* a,
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
-  } else if (g_archive_fd < 0) {
+  }
+
+  if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
+
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
     g_archive_fd_position_current = o;
     update_g_archive_fd_position_hwm();
     return o;
   }
+
   archive_set_error(a, errno, "could not seek in archive file: %s",
                     strerror(errno));
   return ARCHIVE_FATAL;
@@ -541,18 +551,21 @@ static int64_t my_file_skip(struct archive* a,
   if (g_options.asyncprogress && g_shutting_down.load()) {
     archive_set_error(a, ECANCELED, "shutting down");
     return ARCHIVE_FATAL;
-  } else if (g_archive_fd < 0) {
+  }
+
+  if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
 
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
-  if ((o1 >= 0) && (o0 >= 0)) {
+  if (o1 >= 0 && o0 >= 0) {
     g_archive_fd_position_current = o1;
     update_g_archive_fd_position_hwm();
     return o1 - o0;
   }
+
   archive_set_error(a, errno, "could not seek in archive file: %s",
                     strerror(errno));
   return ARCHIVE_FATAL;
@@ -606,7 +619,7 @@ static bool read_from_side_buffer(int64_t index_within_archive,
   int64_t best_length = -1;
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
     struct side_buffer_metadata* meta = &g_side_buffer_metadata[i];
-    if ((meta->length > best_length) &&
+    if (meta->length > best_length &&
         meta->contains(index_within_archive, offset_within_entry, dst_len)) {
       best_i = i;
       best_length = meta->length;
@@ -658,20 +671,26 @@ struct reader {
     if (!this->archive) {
       return false;
     }
+
     while (this->index_within_archive < want) {
       const int status =
           archive_read_next_header(this->archive, &this->archive_entry);
+
       if (status == ARCHIVE_EOF) {
         syslog(LOG_ERR, "inconsistent archive %s", redact(g_archive_filename));
         return false;
-      } else if ((status != ARCHIVE_OK) && (status != ARCHIVE_WARN)) {
+      }
+
+      if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
         syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
                archive_error_string(this->archive));
         return false;
       }
+
       this->index_within_archive++;
       this->offset_within_entry = 0;
     }
+
     return true;
   }
 
@@ -685,10 +704,14 @@ struct reader {
   bool advance_offset(int64_t want, const char* pathname) {
     if (!this->archive || !this->archive_entry) {
       return false;
-    } else if (want < this->offset_within_entry) {
+    }
+
+    if (want < this->offset_within_entry) {
       // We can't walk backwards.
       return false;
-    } else if (want == this->offset_within_entry) {
+    }
+
+    if (want == this->offset_within_entry) {
       // We are exactly where we want to be.
       return true;
     }
@@ -696,7 +719,7 @@ struct reader {
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
     const int sb = acquire_side_buffer();
-    if ((sb < 0) || (NUM_SIDE_BUFFERS <= sb)) {
+    if (sb < 0 || NUM_SIDE_BUFFERS <= sb) {
       return false;
     }
     uint8_t* dst_ptr = g_side_buffer_data[sb];
@@ -726,11 +749,13 @@ struct reader {
         meta->lru_priority = 0;
         return false;
       }
+
       meta->index_within_archive = this->index_within_archive;
       meta->offset_within_entry = original_owe;
       meta->length = n;
       meta->lru_priority = ++side_buffer_metadata::next_lru_priority;
     }
+
     return true;
   }
 
@@ -744,12 +769,15 @@ struct reader {
       syslog(LOG_ERR, "could not serve %s from %s: %s", redact(pathname),
              redact(g_archive_filename), archive_error_string(this->archive));
       return -EIO;
-    } else if (n > dst_len) {
+    }
+
+    if (n > dst_len) {
       syslog(LOG_ERR, "too much data serving %s from %s", redact(pathname),
              redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so abort.
       abort();
     }
+
     this->offset_within_entry += n;
     return n;
   }
@@ -909,7 +937,7 @@ static bool valid_pathname(const char* const p, bool allow_slashes) {
     return false;
   }
   const char* q = p;
-  if ((q[0] == '.') && (q[1] == '/')) {
+  if (q[0] == '.' && q[1] == '/') {
     if (!allow_slashes) {
       return false;
     }
@@ -937,9 +965,9 @@ static bool valid_pathname(const char* const p, bool allow_slashes) {
     size_t len = r - q;
     if (len == 0) {
       return false;
-    } else if ((len == 1) && (q[0] == '.')) {
+    } else if (len == 1 && q[0] == '.') {
       return false;
-    } else if ((len == 2) && (q[0] == '.') && (q[1] == '.')) {
+    } else if (len == 2 && q[0] == '.' && q[1] == '.') {
       return false;
     }
     if (*r == 0) {
@@ -977,7 +1005,7 @@ static std::string normalize_pathname(struct archive_entry* e) {
            redact(g_archive_filename), redact(s));
     return "";
   }
-  if ((s[0] == '.') && (s[1] == '/')) {
+  if (s[0] == '.' && s[1] == '/') {
     return std::string(s + 1);
   } else if (*s == '/') {
     return std::string(s);
@@ -1010,6 +1038,7 @@ static int insert_leaf_node(std::string&& pathname,
     }
   }
 
+
   struct node* parent = g_root_node;
 
   const mode_t rx_bits = mode & 0555;
@@ -1019,9 +1048,10 @@ static int insert_leaf_node(std::string&& pathname,
 
   // p, q and r point to pathname fragments per the valid_pathname comment.
   const char* p = pathname.c_str();
-  if ((*p == 0) || (*p != '/')) {
+  if (*p == 0 || *p != '/') {
     return 0;
   }
+
   const char* q = p + 1;
   while (true) {
     // A directory's mtime is the oldest of its leaves' mtimes.
@@ -1031,9 +1061,10 @@ static int insert_leaf_node(std::string&& pathname,
     parent->mode |= branch_mode;
 
     const char* r = q;
-    while ((*r != 0) && (*r != '/')) {
+    while (*r != 0 && *r != '/') {
       r++;
     }
+
     std::string abs_pathname(p, r - p);
     std::string rel_pathname(q, r - q);
     if (*r == 0) {
@@ -1074,6 +1105,7 @@ static int insert_leaf_node(std::string&& pathname,
       parent = iter->second;
     }
   }
+
   return 0;
 }
 
@@ -1205,8 +1237,7 @@ static int read_passphrase_from_stdin() {
 
     int j = g_passphrase_length + n;
     for (int i = g_passphrase_length; i < j; i++) {
-      if ((g_passphrase_buffer[i] == '\n') ||
-          (g_passphrase_buffer[i] == '\x00')) {
+      if (g_passphrase_buffer[i] == '\n' || g_passphrase_buffer[i] == '\x00') {
         g_passphrase_buffer[i] = '\x00';
         g_passphrase_length = i;
         return 0;
@@ -1398,7 +1429,9 @@ static int my_getattr(const char* pathname, struct stat* z) {
         z->st_size = 0;
         z->st_mtime = 0;
         return 0;
-      } else if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
+      }
+
+      if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
         memset(z, 0, sizeof(*z));
         z->st_mode = 0000 | S_IFREG;
         z->st_nlink = 1;
@@ -1409,6 +1442,7 @@ static int my_getattr(const char* pathname, struct stat* z) {
         return 0;
       }
     }
+
     return -ENOENT;
   } else if (g_initialize_status_code) {
     return g_initialize_status_code;
@@ -1418,6 +1452,7 @@ static int my_getattr(const char* pathname, struct stat* z) {
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
+
   iter->second->fill_stat(z);
   return 0;
 }
@@ -1427,8 +1462,8 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
     TRY(post_initialize_sync());
   } else if (!g_asyncprogress_complete.load()) {
     if (*pathname == '/') {
-      if ((pathname[1] == '\x00') ||
-          (strcmp(pathname + 1, g_options.asyncprogress) == 0)) {
+      if (pathname[1] == '\x00' ||
+          strcmp(pathname + 1, g_options.asyncprogress) == 0) {
         return -ENOLINK;
       }
     }
@@ -1441,10 +1476,12 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
+
   const struct node* const n = iter->second;
   if (n->symlink.empty() || (dst_len == 0)) {
     return -ENOLINK;
   }
+
   snprintf(dst_ptr, dst_len, "%s", n->symlink.c_str());
   return 0;
 }
@@ -1456,10 +1493,13 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
     if (*pathname == '/') {
       if (pathname[1] == '\x00') {
         return -EISDIR;
-      } else if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
+      }
+
+      if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
         return -EACCES;
       }
     }
+
     return -ENOENT;
   } else if (g_initialize_status_code) {
     return g_initialize_status_code;
@@ -1470,7 +1510,7 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
     return -ENOENT;
   } else if (S_ISDIR(iter->second->mode)) {
     return -EISDIR;
-  } else if ((iter->second->index_within_archive < 0) || !ffi) {
+  } else if (iter->second->index_within_archive < 0 || !ffi) {
     return -EIO;
   } else if ((ffi->flags & O_ACCMODE) != O_RDONLY) {
     return -EACCES;
@@ -1480,6 +1520,7 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
   if (!ur) {
     return -EIO;
   }
+
   ffi->keep_cache = 1;
   ffi->fh = reinterpret_cast<uintptr_t>(ur.release());
   return 0;
@@ -1498,12 +1539,12 @@ static int my_read(const char* pathname,
     return g_initialize_status_code;
   }
 
-  if ((offset < 0) || (dst_len > INT_MAX)) {
+  if (offset < 0 || dst_len > INT_MAX) {
     return -EINVAL;
   }
 
   struct reader* const r = reinterpret_cast<struct reader*>(ffi->fh);
-  if (!r || !r->archive || !r->archive_entry || (r->index_within_archive < 0)) {
+  if (!r || !r->archive || !r->archive_entry) {
     return -EIO;
   }
 
@@ -1516,10 +1557,13 @@ static int my_read(const char* pathname,
   if (!n) {
     return -EIO;
   }
+
   const int64_t size = n->size;
   if (size < 0) {
     return -EIO;
-  } else if (size <= offset) {
+  }
+
+  if (size <= offset) {
     return 0;
   }
 
@@ -1530,8 +1574,10 @@ static int my_read(const char* pathname,
 
   if (dst_len == 0) {
     return 0;
-  } else if (read_from_side_buffer(r->index_within_archive, dst_ptr, dst_len,
-                                   offset)) {
+  }
+
+  if (read_from_side_buffer(r->index_within_archive, dst_ptr, dst_len,
+                            offset)) {
     return dst_len;
   }
 
@@ -1553,6 +1599,7 @@ static int my_read(const char* pathname,
   if (!r->advance_offset(offset, pathname)) {
     return -EIO;
   }
+
   return r->read(dst_ptr, dst_len, pathname);
 }
 
@@ -1790,10 +1837,12 @@ int main(int argc, char** argv) {
   TRY_EXIT_CODE(ensure_utf_8_encoding());
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-  if ((argc <= 0) || !argv) {
+  if (argc <= 0 || !argv) {
     syslog(LOG_ERR, "missing command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
-  } else if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
+  }
+
+  if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     syslog(LOG_ERR, "could not parse command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   }
