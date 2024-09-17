@@ -763,23 +763,6 @@ static void swap(reader& a, reader& b) {
   std::swap(a.offset_within_entry, b.offset_within_entry);
 }
 
-// compare does a lexicographic comparison of the pairs (i0, o0) and (i1, o1).
-static int compare(int64_t index_within_archive0,
-                   int64_t offset_within_entry0,
-                   int64_t index_within_archive1,
-                   int64_t offset_within_entry1) {
-  if (index_within_archive0 < index_within_archive1) {
-    return -1;
-  } else if (index_within_archive0 > index_within_archive1) {
-    return +1;
-  } else if (offset_within_entry0 < offset_within_entry1) {
-    return -1;
-  } else if (offset_within_entry0 > offset_within_entry1) {
-    return +1;
-  }
-  return 0;
-}
-
 // acquire_reader returns a reader positioned at the start (offset == 0) of the
 // given index'th entry of the archive.
 static std::unique_ptr<struct reader> acquire_reader(
@@ -793,12 +776,12 @@ static std::unique_ptr<struct reader> acquire_reader(
   int64_t best_index_within_archive = -1;
   int64_t best_offset_within_entry = -1;
   for (int i = 0; i < NUM_SAVED_READERS; i++) {
-    struct reader* sri = g_saved_readers[i].first.get();
+    const struct reader* const sri = g_saved_readers[i].first.get();
     if (sri &&
-        (compare(best_index_within_archive, best_offset_within_entry,
-                 sri->index_within_archive, sri->offset_within_entry) < 0) &&
-        (compare(sri->index_within_archive, sri->offset_within_entry,
-                 want_index_within_archive, 0) <= 0)) {
+        std::pair(best_index_within_archive, best_offset_within_entry) <
+            std::pair(sri->index_within_archive, sri->offset_within_entry) &&
+        std::pair(sri->index_within_archive, sri->offset_within_entry) <=
+            std::pair(want_index_within_archive, int64_t(0))) {
       best_i = i;
       best_index_within_archive = sri->index_within_archive;
       best_offset_within_entry = sri->offset_within_entry;
