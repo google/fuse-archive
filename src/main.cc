@@ -53,6 +53,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // fuse_file_info.fh is a uint64_t. Check that it can hold a pointer.
@@ -864,9 +865,9 @@ struct node {
   time_t mtime;
   mode_t mode;
 
-  node* last_child;
-  node* first_child;
-  node* next_sibling;
+  node* last_child = nullptr;
+  node* first_child = nullptr;
+  node* next_sibling = nullptr;
 
   node(std::string&& _rel_name,
        std::string&& _symlink,
@@ -874,15 +875,12 @@ struct node {
        int64_t _size,
        time_t _mtime,
        mode_t _mode)
-      : rel_name(_rel_name),
-        symlink(_symlink),
+      : rel_name(std::move(_rel_name)),
+        symlink(std::move(_symlink)),
         index_within_archive(_index_within_archive),
         size(_size),
         mtime(_mtime),
-        mode(_mode),
-        last_child(nullptr),
-        first_child(nullptr),
-        next_sibling(nullptr) {}
+        mode(_mode) {}
 
   void add_child(node* n) {
     if (this->last_child == nullptr) {
