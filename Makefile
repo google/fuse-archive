@@ -2,7 +2,7 @@ PKG_CONFIG ?= pkg-config
 DEPS = fuse libarchive
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
-CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter
+CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
 
 prefix=/usr
 bindir=$(prefix)/bin

@@ -367,8 +367,7 @@ static struct side_buffer_metadata {
         (this->index_within_archive == index_within_archive) &&
         (this->offset_within_entry <= offset_within_entry)) {
       int64_t o = offset_within_entry - this->offset_within_entry;
-      return (this->length >= o) &&
-             (static_cast<uint64_t>(this->length - o) >= length);
+      return (this->length >= o) && ((this->length - o) >= length);
     }
     return false;
   }
@@ -744,7 +743,7 @@ struct reader {
       syslog(LOG_ERR, "could not serve %s from %s: %s", redact(pathname),
              redact(g_archive_filename), archive_error_string(this->archive));
       return -EIO;
-    } else if (static_cast<size_t>(n) > dst_len) {
+    } else if (n > dst_len) {
       syslog(LOG_ERR, "too much data serving %s from %s", redact(pathname),
              redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so abort.
@@ -1049,12 +1048,10 @@ static int insert_leaf_node(std::string&& pathname,
       // Add to g_nodes_by_name.
       g_nodes_by_name.insert({std::move(abs_pathname), n});
       // Add to g_nodes_by_index.
-      while (g_nodes_by_index.size() <
-             static_cast<uint64_t>(index_within_archive)) {
+      while (g_nodes_by_index.size() < index_within_archive) {
         g_nodes_by_index.push_back(nullptr);
       }
-      if (g_nodes_by_index.size() >
-          static_cast<uint64_t>(index_within_archive)) {
+      if (g_nodes_by_index.size() > index_within_archive) {
         syslog(LOG_ERR, "index_within_archive out of order in %s: %s",
                redact(g_archive_filename), redact(pathname.c_str()));
         return -EIO;
@@ -1512,7 +1509,7 @@ static int my_read(const char* pathname,
     return -EIO;
   }
 
-  uint64_t i = static_cast<uint64_t>(r->index_within_archive);
+  const uint64_t i = r->index_within_archive;
   if (i >= g_nodes_by_index.size()) {
     return -EIO;
   }
@@ -1526,7 +1523,8 @@ static int my_read(const char* pathname,
   } else if (size <= offset) {
     return 0;
   }
-  uint64_t remaining = static_cast<uint64_t>(size - offset);
+
+  const uint64_t remaining = size - offset;
   if (dst_len > remaining) {
     dst_len = remaining;
   }
