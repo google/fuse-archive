@@ -38,9 +38,11 @@
 #include <fuse.h>
 #include <langinfo.h>
 #include <locale.h>
+#include <sys/stat.h>
 #include <syslog.h>
 
 #include <atomic>
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <climits>
@@ -877,6 +879,7 @@ struct Node {
   time_t mtime;
   mode_t mode;
 
+  Node* parent = nullptr;
   Node* last_child = nullptr;
   Node* first_child = nullptr;
   Node* next_sibling = nullptr;
@@ -894,13 +897,21 @@ struct Node {
         mtime(_mtime),
         mode(_mode) {}
 
+  Node(const Node&) = delete;
+
+  bool is_dir() const { return S_ISDIR(mode); }
+
   void add_child(Node* n) {
-    if (this->last_child == nullptr) {
-      this->last_child = n;
-      this->first_child = n;
+    assert(n);
+    assert(!n->parent);
+    assert(is_dir());
+    n->parent = this;
+    if (last_child == nullptr) {
+      last_child = n;
+      first_child = n;
     } else {
-      this->last_child->next_sibling = n;
-      this->last_child = n;
+      last_child->next_sibling = n;
+      last_child = n;
     }
   }
 
@@ -909,14 +920,14 @@ struct Node {
       return;
     }
     memset(z, 0, sizeof(*z));
-    z->st_mode = this->mode;
+    z->st_mode = mode;
     z->st_nlink = 1;
     z->st_uid = g_uid;
     z->st_gid = g_gid;
-    z->st_size = this->size;
-    z->st_mtime = this->mtime;
+    z->st_size = size;
+    z->st_mtime = mtime;
     z->st_blksize = block_size;
-    z->st_blocks = (this->size + block_size - 1) / block_size;
+    z->st_blocks = (size + block_size - 1) / block_size;
   }
 };
 
