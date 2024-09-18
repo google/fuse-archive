@@ -905,6 +905,8 @@ struct Node {
     assert(n);
     assert(!n->parent);
     assert(is_dir());
+    // Count one "block" for each directory entry.
+    size += block_size;
     n->parent = this;
     if (last_child == nullptr) {
       last_child = n;
@@ -915,19 +917,21 @@ struct Node {
     }
   }
 
-  void fill_stat(struct stat* z) const {
-    if (!z) {
-      return;
-    }
-    memset(z, 0, sizeof(*z));
-    z->st_mode = mode;
-    z->st_nlink = 1;
-    z->st_uid = g_uid;
-    z->st_gid = g_gid;
-    z->st_size = size;
-    z->st_mtime = mtime;
-    z->st_blksize = block_size;
-    z->st_blocks = (size + block_size - 1) / block_size;
+  int64_t get_block_count() const {
+    return (size + (block_size - 1)) / block_size;
+  }
+
+  struct stat get_stat() const {
+    struct stat z = {};
+    z.st_mode = mode;
+    z.st_nlink = 1;
+    z.st_uid = g_uid;
+    z.st_gid = g_gid;
+    z.st_size = size;
+    z.st_mtime = mtime;
+    z.st_blksize = block_size;
+    z.st_blocks = get_block_count();
+    return z;
   }
 };
 
@@ -1079,11 +1083,13 @@ static int insert_leaf_node(std::string&& pathname,
     std::string abs_pathname(p, r - p);
     std::string rel_pathname(q, r - q);
     if (*r == 0) {
-      g_block_count += 1 + (size + block_size - 1) / block_size;
       // Insert an explicit leaf node (a regular file).
       Node* const n = new Node(std::move(rel_pathname), std::move(symlink),
                                index_within_archive, size, mtime, leaf_mode);
       parent->add_child(n);
+      g_block_count += n->get_block_count();
+      g_block_count += 1;
+
       // Add to g_nodes_by_name.
       g_nodes_by_name.insert({std::move(abs_pathname), n});
       // Add to g_nodes_by_index.
@@ -1106,6 +1112,7 @@ static int insert_leaf_node(std::string&& pathname,
       Node* const n = new Node(std::move(rel_pathname), std::move(symlink), -1,
                                0, mtime, branch_mode);
       parent->add_child(n);
+      g_block_count += 1;
       g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
       parent = n;
     } else if (!S_ISDIR(iter->second->mode)) {
@@ -1463,7 +1470,7 @@ static int my_getattr(const char* pathname, struct stat* z) {
     return -ENOENT;
   }
 
-  iter->second->fill_stat(z);
+  *z = iter->second->get_stat();
   return 0;
 }
 
@@ -1669,8 +1676,7 @@ static int my_readdir(const char* pathname,
   }
 
   for (Node* p = n->first_child; p; p = p->next_sibling) {
-    struct stat z;
-    p->fill_stat(&z);
+    const struct stat z = p->get_stat();
     if (filler(buf, p->rel_name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
