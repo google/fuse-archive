@@ -143,13 +143,13 @@
 // ---- Globals
 
 static struct {
-  bool help;
-  bool version;
-
-  bool passphrase;
-  bool quiet;
-  bool redact;
-} g_options = {};
+  int arg_count = 0;
+  bool help = false;
+  bool version = false;
+  bool passphrase = false;
+  bool quiet = false;
+  bool redact = false;
+} g_options;
 
 enum {
   // Options shared with libfuse's helper.c.
@@ -192,6 +192,8 @@ static const char* g_archive_filename = nullptr;
 // extension suffix. For example, if g_archive_filename is "/foo/bar.ext0.ext1"
 // then g_archive_innername is "bar.ext0".
 static const char* g_archive_innername = nullptr;
+
+static std::string g_mount_point;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
 static int g_archive_fd = -1;
@@ -1573,39 +1575,56 @@ const char* innername(const char* filename) {
   return strdup(filename);
 }
 
-static int my_opt_proc(void* private_data,
+static int my_opt_proc(void* /*private_data*/,
                        const char* arg,
                        int key,
-                       struct fuse_args* out_args) {
-  constexpr int discard = 0;
-  constexpr int keep = 1;
+                       struct fuse_args* /*out_args*/) {
+  constexpr int KEEP = 1;
+  constexpr int DISCARD = 0;
+  constexpr int ERROR = -1;
 
   switch (key) {
     case FUSE_OPT_KEY_NONOPT:
-      if (!g_archive_filename) {
-        g_archive_filename = arg;
-        g_archive_innername = innername(arg);
-        return discard;
+      switch (++g_options.arg_count) {
+        case 1:
+          g_archive_filename = arg;
+          g_archive_innername = innername(arg);
+          return DISCARD;
+
+        case 2:
+          g_mount_point = arg;
+          return KEEP;
+
+        default:
+          fprintf(stderr,
+                  "%s: only two arguments allowed: filename and mountpoint\n",
+                  PROGRAM_NAME);
+          return ERROR;
       }
-      break;
+
     case MY_KEY_HELP:
       g_options.help = true;
-      return discard;
+      return DISCARD;
+
     case MY_KEY_VERSION:
       g_options.version = true;
-      return keep;
+      return DISCARD;
+
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
-      return discard;
+      return DISCARD;
+
     case MY_KEY_QUIET:
       setlogmask(LOG_UPTO(LOG_ERR));
       g_options.quiet = true;
-      return discard;
+      return DISCARD;
+
     case MY_KEY_REDACT:
       g_options.redact = true;
-      return discard;
+      return DISCARD;
   }
-  return keep;
+
+  return KEEP;
 }
 
 static int ensure_utf_8_encoding() {
@@ -1642,6 +1661,32 @@ static int ensure_utf_8_encoding() {
   return EXIT_CODE_GENERIC_FAILURE;
 }
 
+// Removes directory `mount_point` in destructor.
+struct Cleanup {
+  const int dirfd = open(".", O_DIRECTORY | O_PATH);
+  fuse_args* args = nullptr;
+  std::string mount_point;
+
+  ~Cleanup() {
+    if (!mount_point.empty()) {
+      if (unlinkat(dirfd, mount_point.c_str(), AT_REMOVEDIR) == 0) {
+        syslog(LOG_DEBUG, "Removed mount point %s", mount_point.c_str());
+      } else {
+        syslog(LOG_ERR, "Cannot remove mount point %s: %s", mount_point.c_str(),
+               strerror(errno));
+      }
+    }
+
+    if (args) {
+      fuse_opt_free_args(args);
+    }
+
+    if (close(dirfd) < 0) {
+      syslog(LOG_ERR, "Cannot close file descriptor: %s", strerror(errno));
+    }
+  }
+};
+
 int main(int argc, char** argv) {
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   setlogmask(LOG_UPTO(LOG_INFO));
@@ -1657,6 +1702,8 @@ int main(int argc, char** argv) {
   TRY_EXIT_CODE(ensure_utf_8_encoding());
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+  Cleanup cleanup{.args = &args};
+
   if (argc <= 0 || !argv) {
     syslog(LOG_ERR, "missing command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
@@ -1679,7 +1726,7 @@ int main(int argc, char** argv) {
 
   if (g_options.help) {
     fprintf(stderr,
-            R"(usage: %s archive_filename mountpoint [options]
+            R"(usage: %s [options] <archive_file> [mount_point]
 
 general options:
     -o opt,[opt...]        mount options
@@ -1697,21 +1744,60 @@ general options:
 )",
             PROGRAM_NAME, PROGRAM_NAME);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
-  } else if (g_options.version) {
-    fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
-  } else {
-    g_uid = getuid();
-    g_gid = getgid();
-    TRY_EXIT_CODE(pre_initialize());
-    TRY_EXIT_CODE(post_initialize_sync());
+    fuse_main(args.argc, args.argv, &my_operations, nullptr);
+    return EXIT_SUCCESS;
   }
 
-  int ret = fuse_main(args.argc, args.argv, &my_operations, nullptr);
-  if (ret != 0) {
-    // libfuse's fuse_main can return a variety of integer values. Collapse
-    // them all to fuse-archive's EXIT_CODE_GENERIC_FAILURE to avoid colliding
-    // with fuse-archive's other EXIT_CODE_ETC values.
-    return EXIT_CODE_GENERIC_FAILURE;
+  if (g_options.version) {
+    fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
+    fuse_opt_add_arg(&args, "--version");
+    fuse_main(args.argc, args.argv, &my_operations, nullptr);
+    return EXIT_SUCCESS;
   }
-  return 0;
+
+  g_uid = getuid();
+  g_gid = getgid();
+  TRY_EXIT_CODE(pre_initialize());
+
+  if (!g_mount_point.empty()) {
+    // Try to create the mount point directory if it doesn't exist.
+    if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
+      syslog(LOG_DEBUG, "Created mount point %s", g_mount_point.c_str());
+      cleanup.mount_point = g_mount_point;
+    } else if (errno == EEXIST) {
+      syslog(LOG_DEBUG, "Mount point %s  already exists",
+             g_mount_point.c_str());
+    } else {
+      syslog(LOG_ERR, "Cannot create mount point %s: %s", g_mount_point.c_str(),
+             strerror(errno));
+    }
+  } else {
+    g_mount_point = g_archive_innername;
+    const auto n = g_mount_point.size();
+
+    for (int i = 0;;) {
+      if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
+        syslog(LOG_INFO, "Created mount point %s", g_mount_point.c_str());
+        cleanup.mount_point = g_mount_point;
+        fuse_opt_add_arg(&args, g_mount_point.c_str());
+        break;
+      }
+
+      if (errno != EEXIST) {
+        syslog(LOG_ERR, "Cannot create mount point %s: %s",
+               g_mount_point.c_str(), strerror(errno));
+        return EXIT_FAILURE;
+      }
+
+      syslog(LOG_DEBUG, "Mount point %s already exists", g_mount_point.c_str());
+      g_mount_point.resize(n);
+      g_mount_point += " (";
+      g_mount_point += std::to_string(++i);
+      g_mount_point += ")";
+    }
+  }
+
+  TRY_EXIT_CODE(post_initialize_sync());
+
+  return fuse_main(args.argc, args.argv, &my_operations, nullptr);
 }
