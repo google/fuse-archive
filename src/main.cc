@@ -105,12 +105,6 @@
 #define EXIT_CODE_INVALID_RAW_ARCHIVE 30
 #define EXIT_CODE_INVALID_ARCHIVE_HEADER 31
 #define EXIT_CODE_INVALID_ARCHIVE_CONTENTS 32
-// Duplicate entries can be explicit (where "/foo/bar" appears twice in the
-// archive's entry list) or implicit (where "/foo/bar" might appear as a
-// regular *file* in the entry list, but "/foo/bar/baz.txt" also being present
-// implies that "/foo/bar" is a *directory*).
-#define EXIT_CODE_INVALID_EXPLICIT_DUPLICATE_ENTRY 33
-#define EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY 34
 
 // ---- Compile-time Configuration
 
@@ -1039,19 +1033,6 @@ static int insert_leaf_node(std::string&& pathname,
     syslog(LOG_ERR, "negative index_within_archive in %s: %s",
            redact(g_archive_filename), redact(pathname.c_str()));
     return -EIO;
-  } else {
-    const auto iter = g_nodes_by_name.find(pathname);
-    if (iter == g_nodes_by_name.end()) {
-      // No-op.
-    } else if (S_ISDIR(iter->second->mode) == S_ISDIR(mode)) {
-      syslog(LOG_ERR, "duplicate pathname in %s: %s",
-             redact(g_archive_filename), redact(pathname.c_str()));
-      return EXIT_CODE_INVALID_EXPLICIT_DUPLICATE_ENTRY;
-    } else {
-      syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
-             redact(g_archive_filename), redact(pathname.c_str()));
-      return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
-    }
   }
 
   Node* parent = g_root_node;
@@ -1086,42 +1067,47 @@ static int insert_leaf_node(std::string&& pathname,
       // Insert an explicit leaf node (a regular file).
       Node* const n = new Node(std::move(rel_pathname), std::move(symlink),
                                index_within_archive, size, mtime, leaf_mode);
+
+      // Add to g_nodes_by_name.
+      const auto [_, ok] =
+          g_nodes_by_name.try_emplace(std::move(abs_pathname), n);
+      if (!ok) {
+        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname.c_str()));
+        delete n;
+        return 0;
+      }
+
       parent->add_child(n);
       g_block_count += n->get_block_count();
       g_block_count += 1;
 
-      // Add to g_nodes_by_name.
-      g_nodes_by_name.insert({std::move(abs_pathname), n});
       // Add to g_nodes_by_index.
-      while (g_nodes_by_index.size() < index_within_archive) {
-        g_nodes_by_index.push_back(nullptr);
-      }
       if (g_nodes_by_index.size() > index_within_archive) {
         syslog(LOG_ERR, "index_within_archive out of order in %s: %s",
                redact(g_archive_filename), redact(pathname.c_str()));
         return -EIO;
       }
+
+      g_nodes_by_index.resize(index_within_archive);
       g_nodes_by_index.push_back(n);
       break;
     }
     q = r + 1;
 
     // Insert an implicit branch node (a directory).
-    const auto iter = g_nodes_by_name.find(abs_pathname);
-    if (iter == g_nodes_by_name.end()) {
-      Node* const n = new Node(std::move(rel_pathname), std::move(symlink), -1,
-                               0, mtime, branch_mode);
+    Node*& n = g_nodes_by_name[abs_pathname];
+    if (n) {
+      if (!n->is_dir()) {
+        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname.c_str()));
+        return 0;
+      }
+    } else {
+      n = new Node(std::move(rel_pathname), "", -1, 0, mtime, branch_mode);
       parent->add_child(n);
       g_block_count += 1;
-      g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
-      parent = n;
-    } else if (!S_ISDIR(iter->second->mode)) {
-      syslog(LOG_ERR, "simultaneous directory and regular file in %s: %s",
-             redact(g_archive_filename), redact(abs_pathname.c_str()));
-      return EXIT_CODE_INVALID_IMPLICIT_DUPLICATE_ENTRY;
-    } else {
-      parent = iter->second;
     }
+
+    parent = n;
   }
 
   return 0;
