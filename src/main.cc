@@ -283,9 +283,10 @@ static bool g_displayed_progress = false;
 // the first FUSE request (such as a top-level "ls") instantaneous, at the
 // expense of making it harder (at the file system level) to determine when the
 // initialization is complete and the actual directory tree is being served.
-static std::unordered_map<std::string, struct node*> g_nodes_by_name;
-static std::vector<struct node*> g_nodes_by_index;
-static struct node* g_root_node = nullptr;
+struct Node;
+static std::unordered_map<std::string, Node*> g_nodes_by_name;
+static std::vector<Node*> g_nodes_by_index;
+static Node* g_root_node = nullptr;
 static constexpr blksize_t block_size = 512;
 static blkcnt_t g_block_count = 1;
 static std::atomic<bool> g_asyncprogress_complete;
@@ -868,7 +869,7 @@ static void release_reader(std::unique_ptr<struct reader> r) {
 
 // ---- In-Memory Directory Tree
 
-struct node {
+struct Node {
   std::string rel_name;  // Relative (not absolute) pathname.
   std::string symlink;
   int64_t index_within_archive;
@@ -876,11 +877,11 @@ struct node {
   time_t mtime;
   mode_t mode;
 
-  node* last_child = nullptr;
-  node* first_child = nullptr;
-  node* next_sibling = nullptr;
+  Node* last_child = nullptr;
+  Node* first_child = nullptr;
+  Node* next_sibling = nullptr;
 
-  node(std::string&& _rel_name,
+  Node(std::string&& _rel_name,
        std::string&& _symlink,
        int64_t _index_within_archive,
        int64_t _size,
@@ -893,7 +894,7 @@ struct node {
         mtime(_mtime),
         mode(_mode) {}
 
-  void add_child(node* n) {
+  void add_child(Node* n) {
     if (this->last_child == nullptr) {
       this->last_child = n;
       this->first_child = n;
@@ -1038,8 +1039,7 @@ static int insert_leaf_node(std::string&& pathname,
     }
   }
 
-
-  struct node* parent = g_root_node;
+  Node* parent = g_root_node;
 
   const mode_t rx_bits = mode & 0555;
   const mode_t r_bits = rx_bits & 0444;
@@ -1070,7 +1070,7 @@ static int insert_leaf_node(std::string&& pathname,
     if (*r == 0) {
       g_block_count += 1 + (size + block_size - 1) / block_size;
       // Insert an explicit leaf node (a regular file).
-      node* const n = new node(std::move(rel_pathname), std::move(symlink),
+      Node* const n = new Node(std::move(rel_pathname), std::move(symlink),
                                index_within_archive, size, mtime, leaf_mode);
       parent->add_child(n);
       // Add to g_nodes_by_name.
@@ -1092,7 +1092,7 @@ static int insert_leaf_node(std::string&& pathname,
     // Insert an implicit branch node (a directory).
     const auto iter = g_nodes_by_name.find(abs_pathname);
     if (iter == g_nodes_by_name.end()) {
-      node* const n = new node(std::move(rel_pathname), std::move(symlink), -1,
+      Node* const n = new Node(std::move(rel_pathname), std::move(symlink), -1,
                                0, mtime, branch_mode);
       parent->add_child(n);
       g_nodes_by_name.insert(iter, {std::move(abs_pathname), n});
@@ -1250,8 +1250,7 @@ static int read_passphrase_from_stdin() {
 }
 
 static void insert_root_node() {
-  static constexpr int64_t index_within_archive = -1;
-  g_root_node = new node("", "", index_within_archive, 0, 0, S_IFDIR);
+  g_root_node = new Node("", "", -1, 0, 0, S_IFDIR);
   g_nodes_by_name["/"] = g_root_node;
 }
 
@@ -1477,8 +1476,8 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
     return -ENOENT;
   }
 
-  const struct node* const n = iter->second;
-  if (n->symlink.empty() || (dst_len == 0)) {
+  const Node* const n = iter->second;
+  if (n->symlink.empty() || dst_len == 0) {
     return -ENOLINK;
   }
 
@@ -1553,7 +1552,7 @@ static int my_read(const char* pathname,
     return -EIO;
   }
 
-  const struct node* const n = g_nodes_by_index[i];
+  const Node* const n = g_nodes_by_index[i];
   if (!n) {
     return -EIO;
   }
@@ -1648,19 +1647,24 @@ static int my_readdir(const char* pathname,
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
-  node* n = iter->second;
+
+  Node* const n = iter->second;
   if (!S_ISDIR(n->mode)) {
     return -ENOTDIR;
-  } else if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0)) {
+  }
+
+  if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0)) {
     return -ENOMEM;
   }
-  struct stat z;
-  for (n = n->first_child; n; n = n->next_sibling) {
-    n->fill_stat(&z);
-    if (filler(buf, n->rel_name.c_str(), &z, 0)) {
+
+  for (Node* p = n->first_child; p; p = p->next_sibling) {
+    struct stat z;
+    p->fill_stat(&z);
+    if (filler(buf, p->rel_name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
   }
+
   return 0;
 }
 
