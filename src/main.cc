@@ -41,7 +41,6 @@
 #include <sys/stat.h>
 #include <syslog.h>
 
-#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -53,7 +52,6 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -151,7 +149,6 @@ static struct {
   bool passphrase;
   bool quiet;
   bool redact;
-  const char* asyncprogress;
 } g_options = {};
 
 enum {
@@ -160,7 +157,6 @@ enum {
   MY_KEY_VERSION = 101,
 
   // Options exclusive to fuse-archive.
-  MY_KEY_ASYNCPROGRESS = 200,
   MY_KEY_EAGER = 201,
   MY_KEY_PASSPHRASE = 202,
   MY_KEY_QUIET = 203,
@@ -168,18 +164,16 @@ enum {
 };
 
 static struct fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", MY_KEY_HELP),                           //
-    FUSE_OPT_KEY("--help", MY_KEY_HELP),                       //
-    FUSE_OPT_KEY("-V", MY_KEY_VERSION),                        //
-    FUSE_OPT_KEY("--version", MY_KEY_VERSION),                 //
-    FUSE_OPT_KEY("--asyncprogress=%s", MY_KEY_ASYNCPROGRESS),  //
-    FUSE_OPT_KEY("asyncprogress=%s", MY_KEY_ASYNCPROGRESS),    //
-    FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),           //
-    FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),             //
-    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),                     //
-    FUSE_OPT_KEY("-q", MY_KEY_QUIET),                          //
-    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),                   //
-    FUSE_OPT_KEY("redact", MY_KEY_REDACT),                     //
+    FUSE_OPT_KEY("-h", MY_KEY_HELP),                  //
+    FUSE_OPT_KEY("--help", MY_KEY_HELP),              //
+    FUSE_OPT_KEY("-V", MY_KEY_VERSION),               //
+    FUSE_OPT_KEY("--version", MY_KEY_VERSION),        //
+    FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),  //
+    FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),    //
+    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),            //
+    FUSE_OPT_KEY("-q", MY_KEY_QUIET),                 //
+    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),          //
+    FUSE_OPT_KEY("redact", MY_KEY_REDACT),            //
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
@@ -213,7 +207,7 @@ static int64_t g_archive_file_size = 0;
 // decompression pass (as they do not have a table of contents within to
 // explicitly record the decompressed file size).
 static int64_t g_archive_fd_position_current = 0;
-static std::atomic<int64_t> g_archive_fd_position_hwm;
+static int64_t g_archive_fd_position_hwm = 0;
 
 // g_archive_realpath holds the canonicalised absolute path of the archive
 // file. The command line argument may give a relative filename (one that
@@ -248,16 +242,6 @@ static gid_t g_gid = 0;
 
 // We serve ls and stat requests from an in-memory directory tree of nodes.
 // Building that tree is one of the first things that we do.
-//
-// Building is split into two parts and the bulk of it is done in the second
-// part, lazily (unless the --asyncprogress flag is set), so that the main
-// function can call fuse_main (to bind the mountpoint and daemonize) as fast as
-// possible (although the main function still does a preliminary check that the
-// archive_filename command line argument actually names an existing file that
-// looks like a valid archive).
-//
-// These global variables connect those two parts.
-static int g_initialize_status_code = 0;
 static struct archive* g_initialize_archive = nullptr;
 static struct archive_entry* g_initialize_archive_entry = nullptr;
 static int64_t g_initialize_index_within_archive = -1;
@@ -267,43 +251,17 @@ static bool g_displayed_progress = false;
 
 // These global variables are the in-memory directory tree of nodes.
 //
-// g_root_node being non-nullptr means that initialization is complete (when
-// the --asyncprogress option is not used).
-//
-// g_asyncprogress_complete being true means that initialization is complete
-// (when the --asyncprogress option is used).
-//
 // Building the directory tree can take minutes, for archive file formats like
 // .tar.gz that are compressed but also do not contain an explicit on-disk
-// directory of archive entries. Using the --asyncprogress option makes serving
-// the first FUSE request (such as a top-level "ls") instantaneous, at the
-// expense of making it harder (at the file system level) to determine when the
-// initialization is complete and the actual directory tree is being served.
+// directory of archive entries.
 struct Node;
 static std::unordered_map<std::string, Node*> g_nodes_by_name;
 static std::vector<Node*> g_nodes_by_index;
+
+// g_root_node being non-nullptr means that initialization is complete .
 static Node* g_root_node = nullptr;
 static constexpr blksize_t block_size = 512;
 static blkcnt_t g_block_count = 1;
-static std::atomic<bool> g_asyncprogress_complete;
-
-// g_shutting_down (when the --asyncprogress option is used) communicates to
-// the worker thread that the main thread is shutting down.
-//
-// Normally, the worker thread populates the g_nodes_by_etc containers, then
-// flips g_asyncprogress_complete, then the main thread reads those containers.
-// All of the container reads happen after all of the container writes, even
-// though reads and writes happen in different threads.
-//
-// However, if the mountpoint is unmounted (e.g. by "fusermount -u") before the
-// worker thread is done, the main thread's main function's return can trigger
-// those containers' destructors and we now have concurrent and racy writes on
-// those global variables.
-//
-// To avoid a segfault (or other undefined behavior), g_shutting_down tells the
-// worker thread to stop early and the main thread then joins it before
-// implicitly running the g_nodes_by_etc destructors.
-static std::atomic<bool> g_shutting_down;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
@@ -428,7 +386,7 @@ static const char* redact(const char* s) {
 // ---- Libarchive Read Callbacks
 
 static uint32_t initialization_progress_out_of_1000000() {
-  const int64_t m = g_archive_fd_position_hwm.load();
+  const int64_t m = g_archive_fd_position_hwm;
   const int64_t n = g_archive_file_size;
 
   if (m <= 0 || n <= 0) {
@@ -443,9 +401,9 @@ static uint32_t initialization_progress_out_of_1000000() {
 }
 
 static void update_g_archive_fd_position_hwm() {
-  int64_t h = g_archive_fd_position_hwm.load();
+  int64_t h = g_archive_fd_position_hwm;
   if (h < g_archive_fd_position_current) {
-    g_archive_fd_position_hwm.store(g_archive_fd_position_current);
+    g_archive_fd_position_hwm = g_archive_fd_position_current;
   }
 
   const auto period = std::chrono::seconds(1);
@@ -480,18 +438,14 @@ static int my_file_close(struct archive* a, void* callback_data) {
 
 static int my_file_open(struct archive* a, void* callback_data) {
   g_archive_fd_position_current = 0;
-  g_archive_fd_position_hwm.store(0);
-  g_asyncprogress_complete.store(false);
+  g_archive_fd_position_hwm = 0;
   return ARCHIVE_OK;
 }
 
 static ssize_t my_file_read(struct archive* a,
                             void* callback_data,
                             const void** out_dst_ptr) {
-  if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "shutting down");
-    return ARCHIVE_FATAL;
-  } else if (g_archive_fd < 0) {
+  if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
   }
@@ -520,11 +474,6 @@ static int64_t my_file_seek(struct archive* a,
                             void* callback_data,
                             int64_t offset,
                             int whence) {
-  if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "shutting down");
-    return ARCHIVE_FATAL;
-  }
-
   if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
@@ -545,11 +494,6 @@ static int64_t my_file_seek(struct archive* a,
 static int64_t my_file_skip(struct archive* a,
                             void* callback_data,
                             int64_t delta) {
-  if (g_options.asyncprogress && g_shutting_down.load()) {
-    archive_set_error(a, ECANCELED, "shutting down");
-    return ARCHIVE_FATAL;
-  }
-
   if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
@@ -1188,10 +1132,6 @@ static int build_tree() {
   }
   bool first = true;
   while (true) {
-    if (g_options.asyncprogress && g_shutting_down.load()) {
-      return -ECANCELED;
-    }
-
     if (first) {
       // The entry was already read by pre_initialize.
       first = false;
@@ -1360,12 +1300,12 @@ static int pre_initialize() {
         g_initialize_index_within_archive = -1;
         syslog(LOG_ERR, "invalid raw archive: %s", redact(g_archive_filename));
         return EXIT_CODE_INVALID_RAW_ARCHIVE;
-      } else if (archive_filter_code(g_initialize_archive, i) !=
-                 ARCHIVE_FILTER_NONE) {
+      }
+
+      if (archive_filter_code(g_initialize_archive, i) != ARCHIVE_FILTER_NONE) {
         break;
       }
     }
-
   } else {
     // Otherwise, reading the first byte of the first non-directory entry will
     // reveal whether we also need a passphrase.
@@ -1388,16 +1328,12 @@ static int pre_initialize() {
 }
 
 static int post_initialize_sync() {
-  if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
-  if (g_root_node != nullptr) {
+  if (g_root_node) {
     return 0;
   }
 
   insert_root_node();
-  g_initialize_status_code = build_tree();
+  const int error = build_tree();
   archive_read_free(g_initialize_archive);
   g_initialize_archive = nullptr;
   g_initialize_archive_entry = nullptr;
@@ -1406,7 +1342,8 @@ static int post_initialize_sync() {
     close(g_archive_fd);
     g_archive_fd = -1;
   }
-  if (g_displayed_progress && (g_initialize_status_code == 0)) {
+
+  if (g_displayed_progress && error == 0) {
     if (isatty(STDERR_FILENO)) {
       fprintf(stderr, "\e[F\e[K");
       fflush(stderr);
@@ -1414,49 +1351,13 @@ static int post_initialize_sync() {
       syslog(LOG_INFO, "Loaded 100%%");
     }
   }
-  return g_initialize_status_code;
-}
 
-static void post_initialize_async() {
-  post_initialize_sync();
-  g_asyncprogress_complete.store(true);
+  return error;
 }
 
 // ---- FUSE Callbacks
 
 static int my_getattr(const char* pathname, struct stat* z) {
-  if (!g_options.asyncprogress) {
-    TRY(post_initialize_sync());
-  } else if (!g_asyncprogress_complete.load()) {
-    if (*pathname == '/') {
-      if (pathname[1] == '\x00') {
-        memset(z, 0, sizeof(*z));
-        z->st_mode = 0555 | S_IFDIR;
-        z->st_nlink = 1;
-        z->st_uid = g_uid;
-        z->st_gid = g_gid;
-        z->st_size = 0;
-        z->st_mtime = 0;
-        return 0;
-      }
-
-      if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
-        memset(z, 0, sizeof(*z));
-        z->st_mode = 0000 | S_IFREG;
-        z->st_nlink = 1;
-        z->st_uid = g_uid;
-        z->st_gid = g_gid;
-        z->st_size = 0;
-        z->st_mtime = initialization_progress_out_of_1000000();
-        return 0;
-      }
-    }
-
-    return -ENOENT;
-  } else if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
   const auto it = g_nodes_by_name.find(pathname);
   if (it == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1467,20 +1368,6 @@ static int my_getattr(const char* pathname, struct stat* z) {
 }
 
 static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
-  if (!g_options.asyncprogress) {
-    TRY(post_initialize_sync());
-  } else if (!g_asyncprogress_complete.load()) {
-    if (*pathname == '/') {
-      if (pathname[1] == '\x00' ||
-          strcmp(pathname + 1, g_options.asyncprogress) == 0) {
-        return -ENOLINK;
-      }
-    }
-    return -ENOENT;
-  } else if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
   const auto it = g_nodes_by_name.find(pathname);
   if (it == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1497,24 +1384,6 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
 }
 
 static int my_open(const char* pathname, struct fuse_file_info* ffi) {
-  if (!g_options.asyncprogress) {
-    TRY(post_initialize_sync());
-  } else if (!g_asyncprogress_complete.load()) {
-    if (*pathname == '/') {
-      if (pathname[1] == '\x00') {
-        return -EISDIR;
-      }
-
-      if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
-        return -EACCES;
-      }
-    }
-
-    return -ENOENT;
-  } else if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
   const auto it = g_nodes_by_name.find(pathname);
   if (it == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1549,14 +1418,6 @@ static int my_read(const char* pathname,
                    size_t dst_len,
                    off_t offset,
                    struct fuse_file_info* ffi) {
-  if (!g_options.asyncprogress) {
-    TRY(post_initialize_sync());
-  } else if (!g_asyncprogress_complete.load()) {
-    return -EIO;
-  } else if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
   if (offset < 0 || dst_len > INT_MAX) {
     return -EINVAL;
   }
@@ -1622,14 +1483,6 @@ static int my_read(const char* pathname,
 }
 
 static int my_release(const char* pathname, struct fuse_file_info* ffi) {
-  if (!g_options.asyncprogress) {
-    TRY(post_initialize_sync());
-  } else if (!g_asyncprogress_complete.load()) {
-    return -EIO;
-  } else if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
   struct reader* const r = reinterpret_cast<struct reader*>(ffi->fh);
   if (!r) {
     return -EIO;
@@ -1643,25 +1496,6 @@ static int my_readdir(const char* pathname,
                       fuse_fill_dir_t filler,
                       off_t offset,
                       struct fuse_file_info* ffi) {
-  if (!g_options.asyncprogress) {
-    TRY(post_initialize_sync());
-  } else if (!g_asyncprogress_complete.load()) {
-    if (*pathname == '/') {
-      if (pathname[1] == '\x00') {
-        if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0) ||
-            filler(buf, g_options.asyncprogress, nullptr, 0)) {
-          return -ENOMEM;
-        }
-        return 0;
-      } else if (strcmp(pathname + 1, g_options.asyncprogress) == 0) {
-        return -ENOTDIR;
-      }
-    }
-    return -ENOENT;
-  } else if (g_initialize_status_code) {
-    return g_initialize_status_code;
-  }
-
   const auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
@@ -1702,24 +1536,11 @@ static int my_statfs([[maybe_unused]] const char* const path,
 }
 
 static void* my_init(struct fuse_conn_info* conn) {
-  if (g_options.asyncprogress) {
-    // Finish the initialization asynchronously, in a separate thread. This is
-    // kicked off here, in my_init, instead of the main function, because of
-    // the fuse_main call in between. fuse_main (which calls fuse_daemonize,
-    // inside libfuse) can fork-and-kill the current process (unless the -f
-    // command line flag was passed for foreground operation), which can also
-    // stop any threads started by the main function.
-    g_shutting_down.store(false);
-    return new std::jthread(post_initialize_async);
-  }
   return nullptr;
 }
 
 static void my_destroy(void* arg) {
-  if (std::jthread* const t = static_cast<std::jthread*>(arg)) {
-    g_shutting_down.store(true);
-    delete t;
-  }
+  assert(!arg);
 }
 
 static const struct fuse_operations my_operations = {
@@ -1756,9 +1577,8 @@ static int my_opt_proc(void* private_data,
                        const char* arg,
                        int key,
                        struct fuse_args* out_args) {
-  static constexpr int error = -1;
-  static constexpr int discard = 0;
-  static constexpr int keep = 1;
+  constexpr int discard = 0;
+  constexpr int keep = 1;
 
   switch (key) {
     case FUSE_OPT_KEY_NONOPT:
@@ -1774,28 +1594,6 @@ static int my_opt_proc(void* private_data,
     case MY_KEY_VERSION:
       g_options.version = true;
       return keep;
-    case MY_KEY_ASYNCPROGRESS:
-      if (!arg) {
-        return error;
-      }
-      for (; (*arg != '\x00') && (*arg != '='); arg++) {
-      }
-      if (*arg == '=') {
-        arg++;
-      }
-      if (*arg == '/') {
-        arg++;
-      }
-      if (!valid_pathname(arg, false) || (*arg == '\x00')) {
-        syslog(LOG_ERR, "invalid --asyncprogress=etc pathname");
-        return error;
-      }
-      g_options.asyncprogress = strdup(arg);
-      if (!g_options.asyncprogress) {
-        syslog(LOG_ERR, "out of memory");
-        return error;
-      }
-      return discard;
     case MY_KEY_PASSPHRASE:
       g_options.passphrase = true;
       return discard;
@@ -1880,7 +1678,6 @@ int main(int argc, char** argv) {
   fuse_opt_add_arg(&args, "ro");
 
   if (g_options.help) {
-    g_initialize_status_code = -EIO;
     fprintf(stderr,
             R"(usage: %s archive_filename mountpoint [options]
 
@@ -1891,15 +1688,6 @@ general options:
 
 %s options:
     -q   --quiet           do not print progress messages
-         --asyncprogress=foo.bar   load the archive file immediately and
-                           asynchronously, instead of waiting until
-                           serving the first FUSE request.
-                           Progress can be watched from the modification
-                           time (via a stat syscall) of the artificial
-                           foo.bar file under the mountpoint. 0%% and 100%%
-                           correspond to 0 and 1 million seconds since
-                           the Unix epoch, roughly 1 and 12 January 1970.
-         -o asyncprogress=foo.bar  ditto
          --passphrase      passphrase given on stdin; 1023 bytes max;
                            up to (excluding) first '\n', '\x00' or EOF
          -o passphrase     ditto
@@ -1912,12 +1700,10 @@ general options:
   } else if (g_options.version) {
     fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
   } else {
-    TRY_EXIT_CODE(pre_initialize());
     g_uid = getuid();
     g_gid = getgid();
-    if (!g_options.asyncprogress) {
-      TRY_EXIT_CODE(post_initialize_sync());
-    }
+    TRY_EXIT_CODE(pre_initialize());
+    TRY_EXIT_CODE(post_initialize_sync());
   }
 
   int ret = fuse_main(args.argc, args.argv, &my_operations, nullptr);
