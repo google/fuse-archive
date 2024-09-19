@@ -108,27 +108,11 @@ enum {
 #define FUSE_ARCHIVE_VERSION "0.1.14"
 #endif
 
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 16384
-#endif
-
-#ifndef NUM_SAVED_READERS
-#define NUM_SAVED_READERS 8
-#endif
-
-#ifndef NUM_SIDE_BUFFERS
-#define NUM_SIDE_BUFFERS 8
-#elif NUM_SIDE_BUFFERS <= 0
-#error "invalid NUM_SIDE_BUFFERS"
-#endif
+static constexpr int NUM_SIDE_BUFFERS = 8;
 
 // This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
 // Linux, that seems to be the largest buffer size passed to my_read.
-#ifndef SIDE_BUFFER_SIZE
-#define SIDE_BUFFER_SIZE 131072
-#elif SIDE_BUFFER_SIZE <= 0
-#error "invalid SIDE_BUFFER_SIZE"
-#endif
+static constexpr ssize_t SIDE_BUFFER_SIZE = 131072;
 
 // ---- Platform specifics
 
@@ -282,6 +266,7 @@ static blkcnt_t g_block_count = 1;
 // Higher/lower values are more/less recently used and the release_reader
 // function evicts the array element with the lowest LRU priority value.
 struct Reader;
+static constexpr int NUM_SAVED_READERS = 8;
 static std::pair<std::unique_ptr<Reader>, uint64_t>
     g_saved_readers[NUM_SAVED_READERS] = {};
 
@@ -328,9 +313,6 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 // (decompressed) buffers during the initial pass over the archive file.
 #define SIDE_BUFFER_INDEX_COMPRESSED 0
 #define SIDE_BUFFER_INDEX_DECOMPRESSED 1
-#if NUM_SIDE_BUFFERS <= 1
-#error "invalid NUM_SIDE_BUFFERS"
-#endif
 
 // ---- Libarchive Error Codes
 
@@ -594,7 +576,6 @@ static int my_archive_read_open(struct archive* a) {
 // acquire_side_buffer returns the index of the least recently used side
 // buffer. This indexes g_side_buffer_data and g_side_buffer_metadata.
 static int acquire_side_buffer() {
-  // The preprocessor already checks "#elif NUM_SIDE_BUFFERS <= 0".
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
   for (int i = 1; i < NUM_SIDE_BUFFERS; i++) {
@@ -835,7 +816,7 @@ static std::unique_ptr<Reader> acquire_reader(
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
     archive_read_support_format_raw(a);
-    if (archive_read_open_filename(a, g_archive_realpath, BLOCK_SIZE) !=
+    if (archive_read_open_filename(a, g_archive_realpath, 16384) !=
         ARCHIVE_OK) {
       syslog(LOG_ERR, "could not read %s: %s", redact(g_archive_filename),
              archive_error_string(a));
@@ -854,9 +835,6 @@ static std::unique_ptr<Reader> acquire_reader(
 
 // release_reader returns r to the reader cache.
 static void release_reader(std::unique_ptr<Reader> r) {
-  if (NUM_SAVED_READERS <= 0) {
-    return;
-  }
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_saved_readers[0].second;
   for (int i = 1; i < NUM_SAVED_READERS; i++) {
