@@ -84,9 +84,7 @@ func run(archiveFilename string, directIO bool, passphrase string) error {
 	if directIO {
 		args = append(args, "-o", "direct_io")
 	}
-	if passphrase != "" {
-		args = append(args, "--passphrase")
-	}
+
 	// The -f flag means to run in the foreground (not as a daemon).
 	args = append(args, "-o", "nonempty", "-f", archiveFilename, "test/mnt")
 

@@ -40,6 +40,8 @@
 #include <locale.h>
 #include <sys/stat.h>
 #include <syslog.h>
+#include <termios.h>
+#include <unistd.h>
 
 #include <cassert>
 #include <cerrno>
@@ -49,6 +51,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -146,7 +149,6 @@ static struct {
   int arg_count = 0;
   bool help = false;
   bool version = false;
-  bool passphrase = false;
   bool quiet = false;
   bool redact = false;
 } g_options;
@@ -158,30 +160,29 @@ enum {
 
   // Options exclusive to fuse-archive.
   MY_KEY_EAGER = 201,
-  MY_KEY_PASSPHRASE = 202,
   MY_KEY_QUIET = 203,
   MY_KEY_REDACT = 204,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", MY_KEY_HELP),                  //
-    FUSE_OPT_KEY("--help", MY_KEY_HELP),              //
-    FUSE_OPT_KEY("-V", MY_KEY_VERSION),               //
-    FUSE_OPT_KEY("--version", MY_KEY_VERSION),        //
-    FUSE_OPT_KEY("--passphrase", MY_KEY_PASSPHRASE),  //
-    FUSE_OPT_KEY("passphrase", MY_KEY_PASSPHRASE),    //
-    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),            //
-    FUSE_OPT_KEY("-q", MY_KEY_QUIET),                 //
-    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),          //
-    FUSE_OPT_KEY("redact", MY_KEY_REDACT),            //
+    FUSE_OPT_KEY("-h", MY_KEY_HELP),            //
+    FUSE_OPT_KEY("--help", MY_KEY_HELP),        //
+    FUSE_OPT_KEY("-V", MY_KEY_VERSION),         //
+    FUSE_OPT_KEY("--version", MY_KEY_VERSION),  //
+    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),      //
+    FUSE_OPT_KEY("-q", MY_KEY_QUIET),           //
+    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),    //
+    FUSE_OPT_KEY("redact", MY_KEY_REDACT),      //
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
     // archives automatically and only supports read-only, not read-write.
-    FUSE_OPT_KEY("formatraw", FUSE_OPT_KEY_DISCARD),  //
-    FUSE_OPT_KEY("nobackup", FUSE_OPT_KEY_DISCARD),   //
-    FUSE_OPT_KEY("nosave", FUSE_OPT_KEY_DISCARD),     //
-    FUSE_OPT_KEY("readonly", FUSE_OPT_KEY_DISCARD),   //
+    FUSE_OPT_KEY("--passphrase", FUSE_OPT_KEY_DISCARD),  //
+    FUSE_OPT_KEY("passphrase", FUSE_OPT_KEY_DISCARD),    //
+    FUSE_OPT_KEY("formatraw", FUSE_OPT_KEY_DISCARD),     //
+    FUSE_OPT_KEY("nobackup", FUSE_OPT_KEY_DISCARD),      //
+    FUSE_OPT_KEY("nosave", FUSE_OPT_KEY_DISCARD),        //
+    FUSE_OPT_KEY("readonly", FUSE_OPT_KEY_DISCARD),      //
     FUSE_OPT_END,
 };
 
@@ -219,12 +220,11 @@ static int64_t g_archive_fd_position_hwm = 0;
 // logging. g_archive_realpath is allocated in pre_initialize and never freed.
 static const char* g_archive_realpath = nullptr;
 
-// g_passphrase_buffer and g_passphrase_length combine to hold the passphrase,
-// if given. The buffer is NUL-terminated but g_passphrase_length excludes the
-// final '\0'. If no passphrase was given, g_passphrase_length is zero.
-#define PASSPHRASE_BUFFER_LENGTH 1024
-static char g_passphrase_buffer[PASSPHRASE_BUFFER_LENGTH] = {};
-static int g_passphrase_length = 0;
+// Decryption password.
+static std::string password;
+
+// Number of times the decryption password has been requested.
+static int password_count = 0;
 
 // g_archive_is_raw is whether the archive file is 'cooked' or 'raw'.
 //
@@ -383,6 +383,67 @@ static int determine_passphrase_exit_code(const std::string_view e) {
 // such as archive filenames or archive entry pathnames from being logged.
 static const char* redact(const char* s) {
   return g_options.redact ? "[REDACTED]" : s;
+}
+
+// Temporarily suppresses the echo on the terminal.
+// Used when waiting for password to be typed.
+class SuppressEcho {
+ public:
+  explicit SuppressEcho() {
+    if (tcgetattr(STDIN_FILENO, &tattr_) < 0) {
+      return;
+    }
+
+    struct termios tattr = tattr_;
+    tattr.c_lflag &= ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
+    reset_ = true;
+  }
+
+  ~SuppressEcho() {
+    if (reset_) {
+      tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr_);
+    }
+  }
+
+  explicit operator bool() const { return reset_; }
+
+ private:
+  struct termios tattr_;
+  bool reset_ = false;
+};
+
+const char* read_password_from_stdin(struct archive*, void* /*data*/) {
+  if (password_count++) {
+    return nullptr;
+  }
+
+  const SuppressEcho guard;
+  if (guard) {
+    std::cout << "Password > " << std::flush;
+  }
+
+  // Read password from standard input.
+  if (!std::getline(std::cin, password)) {
+    password.clear();
+  }
+
+  if (guard) {
+    std::cout << "Got it!" << std::endl;
+  }
+
+  // Remove newline at the end of password.
+  while (password.ends_with('\n')) {
+    password.pop_back();
+  }
+
+  if (password.empty()) {
+    syslog(LOG_DEBUG, "Got an empty password");
+    return nullptr;
+  }
+
+  syslog(LOG_DEBUG, "Got a password of %zd bytes", password.size());
+  return password.c_str();
 }
 
 // ---- Libarchive Read Callbacks
@@ -764,14 +825,16 @@ static std::unique_ptr<struct reader> acquire_reader(
     r = std::move(g_saved_readers[best_i].first);
     g_saved_readers[best_i].second = 0;
   } else {
-    struct archive* a = archive_read_new();
+    struct archive* const a = archive_read_new();
     if (!a) {
       syslog(LOG_ERR, "out of memory");
       return nullptr;
     }
-    if (g_passphrase_length > 0) {
-      archive_read_add_passphrase(a, g_passphrase_buffer);
+
+    if (!password.empty()) {
+      archive_read_add_passphrase(a, password.c_str());
     }
+
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
     archive_read_support_format_raw(a);
@@ -788,6 +851,7 @@ static std::unique_ptr<struct reader> acquire_reader(
   if (!r->advance_index(want_index_within_archive)) {
     return nullptr;
   }
+
   return r;
 }
 
@@ -1171,36 +1235,6 @@ static int build_tree() {
 // This section (pre_initialize and post_initialize_etc) are the "two parts"
 // described in the "Building is split into two parts" comment above.
 
-static int read_passphrase_from_stdin() {
-  static constexpr int stdin_fd = 0;
-  while (g_passphrase_length < PASSPHRASE_BUFFER_LENGTH) {
-    const ssize_t n = read(stdin_fd, &g_passphrase_buffer[g_passphrase_length],
-                           PASSPHRASE_BUFFER_LENGTH - g_passphrase_length);
-    if (n < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      syslog(LOG_ERR, "could not read passphrase from stdin: %m");
-      return -errno;
-    } else if (n == 0) {
-      g_passphrase_buffer[g_passphrase_length] = '\x00';
-      return 0;
-    }
-
-    int j = g_passphrase_length + n;
-    for (int i = g_passphrase_length; i < j; i++) {
-      if (g_passphrase_buffer[i] == '\n' || g_passphrase_buffer[i] == '\x00') {
-        g_passphrase_buffer[i] = '\x00';
-        g_passphrase_length = i;
-        return 0;
-      }
-    }
-    g_passphrase_length = j;
-  }
-  syslog(LOG_ERR, "passphrase was too long");
-  return -EIO;
-}
-
 static void insert_root_node() {
   g_root_node = new Node("", "", -1, 0, 0, S_IFDIR);
   g_nodes_by_name["/"] = g_root_node;
@@ -1232,18 +1266,14 @@ static int pre_initialize() {
   }
   g_archive_file_size = z.st_size;
 
-  if (g_options.passphrase) {
-    TRY(read_passphrase_from_stdin());
-  }
-
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     syslog(LOG_ERR, "out of memory");
     return EXIT_CODE_GENERIC_FAILURE;
   }
-  if (g_passphrase_length > 0) {
-    archive_read_add_passphrase(g_initialize_archive, g_passphrase_buffer);
-  }
+
+  archive_read_set_passphrase_callback(g_initialize_archive, nullptr,
+                                       &read_password_from_stdin);
   archive_read_support_filter_all(g_initialize_archive);
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
@@ -1610,10 +1640,6 @@ static int my_opt_proc(void* /*private_data*/,
       g_options.version = true;
       return DISCARD;
 
-    case MY_KEY_PASSPHRASE:
-      g_options.passphrase = true;
-      return DISCARD;
-
     case MY_KEY_QUIET:
       setlogmask(LOG_UPTO(LOG_ERR));
       g_options.quiet = true;
@@ -1735,9 +1761,6 @@ general options:
 
 %s options:
     -q   --quiet           do not print progress messages
-         --passphrase      passphrase given on stdin; 1023 bytes max;
-                           up to (excluding) first '\n', '\x00' or EOF
-         -o passphrase     ditto
          --redact          redact pathnames from log messages
          -o redact         ditto
 
