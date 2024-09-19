@@ -59,11 +59,6 @@
 #include <utility>
 #include <vector>
 
-// fuse_file_info.fh is a uint64_t. Check that it can hold a pointer.
-#if UINTPTR_MAX > UINT64_MAX
-#error "fuse-archive requires that casting a uintptr_t to uint64_t is lossless"
-#endif
-
 #define TRY(operation)               \
   do {                               \
     int try_status_code = operation; \
@@ -273,7 +268,7 @@ static blkcnt_t g_block_count = 1;
 //    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
 //  - Saving readers in an LRU (Least Recently Used) cache (calling
 //    release_reader when each FUSE file is closed) allows just 110 iterations
-//    (60 + 40 + 10) in total. The reader for "/bar" can be re-used for "/baz".
+//    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for "/baz".
 //
 // Re-use eligibility is based on the archive entries' sequential numerical
 // indexes within the archive, not on their string pathnames.
@@ -283,15 +278,16 @@ static blkcnt_t g_block_count = 1;
 // readers means that the overall time can be linear instead of quadratic.
 //
 // Each array element is a pair. The first half of the pair is a unique_ptr for
-// the reader. The second half of the pair is a uint64_t LRU priority value.
+// the Reader. The second half of the pair is a uint64_t LRU priority value.
 // Higher/lower values are more/less recently used and the release_reader
 // function evicts the array element with the lowest LRU priority value.
-static std::pair<std::unique_ptr<struct reader>, uint64_t>
+struct Reader;
+static std::pair<std::unique_ptr<Reader>, uint64_t>
     g_saved_readers[NUM_SAVED_READERS] = {};
 
 // g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
 // statically allocated buffers used as a destination for decompressed bytes
-// when reader::advance_offset isn't a no-op. These buffers are roughly
+// when Reader::advance_offset isn't a no-op. These buffers are roughly
 // equivalent to Unix's /dev/null or Go's io.Discard as a first approximation.
 // However, since we are already producing valid decompressed bytes, by saving
 // them (and their metadata), we may be able to serve some subsequent my_read
@@ -304,7 +300,7 @@ static std::pair<std::unique_ptr<struct reader>, uint64_t>
 // conceptually consecutive reads are swapped. With side buffers, we can serve
 // the second-to-arrive request by a cheap memcpy instead of an expensive
 // "re-do decompression from the start". That side-buffer was filled by a
-// reader::advance_offset side-effect from serving the first-to-arrive request.
+// Reader::advance_offset side-effect from serving the first-to-arrive request.
 static uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
 static struct side_buffer_metadata {
   int64_t index_within_archive;
@@ -643,33 +639,33 @@ static bool read_from_side_buffer(int64_t index_within_archive,
 
 // ---- Reader
 
-// reader bundles libarchive concepts (an archive and an archive entry) and
+// Reader bundles libarchive concepts (an archive and an archive entry) and
 // other state to point to a particular offset (in decompressed space) of a
 // particular archive entry (identified by its index) in an archive.
 //
-// A reader is backed by its own archive_read_open_filename call, managed by
+// A Reader is backed by its own archive_read_open_filename call, managed by
 // libarchive, so each can be positioned independently.
-struct reader {
+struct Reader {
   struct archive* archive;
   struct archive_entry* archive_entry;
   int64_t index_within_archive;
   int64_t offset_within_entry;
 
-  reader(struct archive* _archive)
+  Reader(struct archive* _archive)
       : archive(_archive),
         archive_entry(nullptr),
         index_within_archive(-1),
         offset_within_entry(0) {}
 
-  ~reader() {
+  ~Reader() {
     if (this->archive) {
       archive_read_free(this->archive);
     }
   }
 
   // advance_index walks forward until positioned at the want'th index. An
-  // index identifies an archive entry. If this reader wasn't already
-  // positioned at that index, it also resets the reader's offset to zero.
+  // index identifies an archive entry. If this Reader wasn't already
+  // positioned at that index, it also resets the Reader's offset to zero.
   //
   // It returns success (true) or failure (false).
   bool advance_index(int64_t want) {
@@ -765,7 +761,7 @@ struct reader {
   }
 
   // read copies from the archive entry's decompressed contents to the
-  // destination buffer. It also advances the reader's offset_within_entry.
+  // destination buffer. It also advances the Reader's offset_within_entry.
   //
   // The pathname is used for log messages.
   ssize_t read(void* dst_ptr, size_t dst_len, const char* pathname) {
@@ -789,16 +785,16 @@ struct reader {
 };
 
 // swap swaps fields of two readers.
-static void swap(reader& a, reader& b) {
+static void swap(Reader& a, Reader& b) {
   std::swap(a.archive, b.archive);
   std::swap(a.archive_entry, b.archive_entry);
   std::swap(a.index_within_archive, b.index_within_archive);
   std::swap(a.offset_within_entry, b.offset_within_entry);
 }
 
-// acquire_reader returns a reader positioned at the start (offset == 0) of the
+// acquire_reader returns a Reader positioned at the start (offset == 0) of the
 // given index'th entry of the archive.
-static std::unique_ptr<struct reader> acquire_reader(
+static std::unique_ptr<Reader> acquire_reader(
     int64_t want_index_within_archive) {
   if (want_index_within_archive < 0) {
     syslog(LOG_ERR, "negative index_within_archive");
@@ -809,7 +805,7 @@ static std::unique_ptr<struct reader> acquire_reader(
   int64_t best_index_within_archive = -1;
   int64_t best_offset_within_entry = -1;
   for (int i = 0; i < NUM_SAVED_READERS; i++) {
-    const struct reader* const sri = g_saved_readers[i].first.get();
+    const Reader* const sri = g_saved_readers[i].first.get();
     if (sri &&
         std::pair(best_index_within_archive, best_offset_within_entry) <
             std::pair(sri->index_within_archive, sri->offset_within_entry) &&
@@ -821,7 +817,7 @@ static std::unique_ptr<struct reader> acquire_reader(
     }
   }
 
-  std::unique_ptr<struct reader> r;
+  std::unique_ptr<Reader> r;
   if (best_i >= 0) {
     r = std::move(g_saved_readers[best_i].first);
     g_saved_readers[best_i].second = 0;
@@ -846,7 +842,7 @@ static std::unique_ptr<struct reader> acquire_reader(
       archive_read_free(a);
       return nullptr;
     }
-    r = std::make_unique<struct reader>(a);
+    r = std::make_unique<Reader>(a);
   }
 
   if (!r->advance_index(want_index_within_archive)) {
@@ -857,7 +853,7 @@ static std::unique_ptr<struct reader> acquire_reader(
 }
 
 // release_reader returns r to the reader cache.
-static void release_reader(std::unique_ptr<struct reader> r) {
+static void release_reader(std::unique_ptr<Reader> r) {
   if (NUM_SAVED_READERS <= 0) {
     return;
   }
@@ -1431,12 +1427,14 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
     return -EACCES;
   }
 
-  std::unique_ptr<struct reader> ur = acquire_reader(n->index_within_archive);
+  std::unique_ptr<Reader> ur = acquire_reader(n->index_within_archive);
   if (!ur) {
     return -EIO;
   }
 
   ffi->keep_cache = 1;
+
+  static_assert(sizeof(ffi->fh) >= sizeof(Reader*));
   ffi->fh = reinterpret_cast<uintptr_t>(ur.release());
   return 0;
 }
@@ -1450,7 +1448,7 @@ static int my_read(const char* pathname,
     return -EINVAL;
   }
 
-  struct reader* const r = reinterpret_cast<struct reader*>(ffi->fh);
+  Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
   if (!r || !r->archive || !r->archive_entry) {
     return -EIO;
   }
@@ -1491,11 +1489,11 @@ static int my_read(const char* pathname,
   // libarchive is designed for streaming access, not random access. If we
   // need to seek backwards, there's more work to do.
   if (offset < r->offset_within_entry) {
-    // Acquire a new reader, swap it with r and release the new reader. We
+    // Acquire a new Reader, swap it with r and release the new Reader. We
     // swap (modify r in-place) instead of updating ffi->fh to point to the
-    // new reader, because libfuse ignores any changes to the ffi->fh value
+    // new Reader, because libfuse ignores any changes to the ffi->fh value
     // after this function returns (this function is not an 'open' callback).
-    std::unique_ptr<struct reader> ur = acquire_reader(r->index_within_archive);
+    std::unique_ptr<Reader> ur = acquire_reader(r->index_within_archive);
     if (!ur || !ur->archive || !ur->archive_entry) {
       return -EIO;
     }
@@ -1511,11 +1509,11 @@ static int my_read(const char* pathname,
 }
 
 static int my_release(const char* pathname, struct fuse_file_info* ffi) {
-  struct reader* const r = reinterpret_cast<struct reader*>(ffi->fh);
+  Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
   if (!r) {
     return -EIO;
   }
-  release_reader(std::unique_ptr<struct reader>(r));
+  release_reader(std::unique_ptr<Reader>(r));
   return 0;
 }
 
