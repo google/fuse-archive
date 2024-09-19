@@ -154,25 +154,24 @@ static struct {
 } g_options;
 
 enum {
-  // Options shared with libfuse's helper.c.
-  MY_KEY_HELP = 100,
-  MY_KEY_VERSION = 101,
-
-  // Options exclusive to fuse-archive.
-  MY_KEY_EAGER = 201,
-  MY_KEY_QUIET = 203,
-  MY_KEY_REDACT = 204,
+  KEY_HELP,
+  KEY_VERSION,
+  KEY_QUIET,
+  KEY_VERBOSE,
+  KEY_REDACT,
 };
 
 static struct fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", MY_KEY_HELP),            //
-    FUSE_OPT_KEY("--help", MY_KEY_HELP),        //
-    FUSE_OPT_KEY("-V", MY_KEY_VERSION),         //
-    FUSE_OPT_KEY("--version", MY_KEY_VERSION),  //
-    FUSE_OPT_KEY("--quiet", MY_KEY_QUIET),      //
-    FUSE_OPT_KEY("-q", MY_KEY_QUIET),           //
-    FUSE_OPT_KEY("--redact", MY_KEY_REDACT),    //
-    FUSE_OPT_KEY("redact", MY_KEY_REDACT),      //
+    FUSE_OPT_KEY("-h", KEY_HELP),            //
+    FUSE_OPT_KEY("--help", KEY_HELP),        //
+    FUSE_OPT_KEY("-V", KEY_VERSION),         //
+    FUSE_OPT_KEY("--version", KEY_VERSION),  //
+    FUSE_OPT_KEY("--quiet", KEY_QUIET),      //
+    FUSE_OPT_KEY("-q", KEY_QUIET),           //
+    FUSE_OPT_KEY("--verbose", KEY_VERBOSE),  //
+    FUSE_OPT_KEY("-v", KEY_VERBOSE),         //
+    FUSE_OPT_KEY("--redact", KEY_REDACT),    //
+    FUSE_OPT_KEY("redact", KEY_REDACT),      //
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
@@ -382,7 +381,11 @@ static int determine_passphrase_exit_code(const std::string_view e) {
 // option was given. This may prevent Personally Identifiable Information (PII)
 // such as archive filenames or archive entry pathnames from being logged.
 static const char* redact(const char* s) {
-  return g_options.redact ? "[REDACTED]" : s;
+  return g_options.redact ? "(redacted)" : s;
+}
+
+static const char* redact(const std::string& s) {
+  return redact(s.c_str());
 }
 
 // Temporarily suppresses the echo on the terminal.
@@ -1041,7 +1044,7 @@ static int insert_leaf_node(std::string&& pathname,
                             mode_t mode) {
   if (index_within_archive < 0) {
     syslog(LOG_ERR, "negative index_within_archive in %s: %s",
-           redact(g_archive_filename), redact(pathname.c_str()));
+           redact(g_archive_filename), redact(pathname));
     return -EIO;
   }
 
@@ -1082,7 +1085,7 @@ static int insert_leaf_node(std::string&& pathname,
       const auto [_, ok] =
           g_nodes_by_name.try_emplace(std::move(abs_pathname), n);
       if (!ok) {
-        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname.c_str()));
+        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname));
         delete n;
         return 0;
       }
@@ -1094,7 +1097,7 @@ static int insert_leaf_node(std::string&& pathname,
       // Add to g_nodes_by_index.
       if (g_nodes_by_index.size() > index_within_archive) {
         syslog(LOG_ERR, "index_within_archive out of order in %s: %s",
-               redact(g_archive_filename), redact(pathname.c_str()));
+               redact(g_archive_filename), redact(pathname));
         return -EIO;
       }
 
@@ -1108,7 +1111,7 @@ static int insert_leaf_node(std::string&& pathname,
     Node*& n = g_nodes_by_name[abs_pathname];
     if (n) {
       if (!n->is_dir()) {
-        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname.c_str()));
+        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname));
         return 0;
       }
     } else {
@@ -1137,7 +1140,7 @@ static int insert_leaf(struct archive* a,
 
   if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
     syslog(LOG_ERR, "irregular file type in %s: %s", redact(g_archive_filename),
-           redact(pathname.c_str()));
+           redact(pathname));
     return 0;
   }
 
@@ -1151,7 +1154,7 @@ static int insert_leaf(struct archive* a,
     }
     if (symlink.empty()) {
       syslog(LOG_ERR, "empty link in %s: %s", redact(g_archive_filename),
-             redact(pathname.c_str()));
+             redact(pathname));
       return 0;
     }
   }
@@ -1632,20 +1635,24 @@ static int my_opt_proc(void* /*private_data*/,
           return ERROR;
       }
 
-    case MY_KEY_HELP:
+    case KEY_HELP:
       g_options.help = true;
       return DISCARD;
 
-    case MY_KEY_VERSION:
+    case KEY_VERSION:
       g_options.version = true;
       return DISCARD;
 
-    case MY_KEY_QUIET:
+    case KEY_QUIET:
       setlogmask(LOG_UPTO(LOG_ERR));
       g_options.quiet = true;
       return DISCARD;
 
-    case MY_KEY_REDACT:
+    case KEY_VERBOSE:
+      setlogmask(LOG_UPTO(LOG_DEBUG));
+      return DISCARD;
+
+    case KEY_REDACT:
       g_options.redact = true;
       return DISCARD;
   }
@@ -1696,9 +1703,9 @@ struct Cleanup {
   ~Cleanup() {
     if (!mount_point.empty()) {
       if (unlinkat(dirfd, mount_point.c_str(), AT_REMOVEDIR) == 0) {
-        syslog(LOG_DEBUG, "Removed mount point %s", mount_point.c_str());
+        syslog(LOG_DEBUG, "Removed mount point %s", redact(mount_point));
       } else {
-        syslog(LOG_ERR, "Cannot remove mount point %s: %s", mount_point.c_str(),
+        syslog(LOG_ERR, "Cannot remove mount point %s: %s", redact(mount_point),
                strerror(errno));
       }
     }
@@ -1761,6 +1768,7 @@ general options:
 
 %s options:
     -q   --quiet           do not print progress messages
+    -v   --verbose         print more log messages
          --redact          redact pathnames from log messages
          -o redact         ditto
 
@@ -1785,13 +1793,12 @@ general options:
   if (!g_mount_point.empty()) {
     // Try to create the mount point directory if it doesn't exist.
     if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
-      syslog(LOG_DEBUG, "Created mount point %s", g_mount_point.c_str());
+      syslog(LOG_DEBUG, "Created mount point %s", redact(g_mount_point));
       cleanup.mount_point = g_mount_point;
     } else if (errno == EEXIST) {
-      syslog(LOG_DEBUG, "Mount point %s  already exists",
-             g_mount_point.c_str());
+      syslog(LOG_DEBUG, "Mount point %s already exists", redact(g_mount_point));
     } else {
-      syslog(LOG_ERR, "Cannot create mount point %s: %s", g_mount_point.c_str(),
+      syslog(LOG_ERR, "Cannot create mount point %s: %s", redact(g_mount_point),
              strerror(errno));
     }
   } else {
@@ -1800,7 +1807,7 @@ general options:
 
     for (int i = 0;;) {
       if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
-        syslog(LOG_INFO, "Created mount point %s", g_mount_point.c_str());
+        syslog(LOG_INFO, "Created mount point %s", redact(g_mount_point));
         cleanup.mount_point = g_mount_point;
         fuse_opt_add_arg(&args, g_mount_point.c_str());
         break;
@@ -1808,11 +1815,11 @@ general options:
 
       if (errno != EEXIST) {
         syslog(LOG_ERR, "Cannot create mount point %s: %s",
-               g_mount_point.c_str(), strerror(errno));
+               redact(g_mount_point), strerror(errno));
         return EXIT_FAILURE;
       }
 
-      syslog(LOG_DEBUG, "Mount point %s already exists", g_mount_point.c_str());
+      syslog(LOG_DEBUG, "Mount point %s already exists", redact(g_mount_point));
       g_mount_point.resize(n);
       g_mount_point += " (";
       g_mount_point += std::to_string(++i);
