@@ -1085,7 +1085,7 @@ static int insert_leaf_node(std::string&& pathname,
       const auto [_, ok] =
           g_nodes_by_name.try_emplace(std::move(abs_pathname), n);
       if (!ok) {
-        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname));
+        syslog(LOG_WARNING, "name collision: %s", redact(abs_pathname));
         delete n;
         return 0;
       }
@@ -1095,12 +1095,7 @@ static int insert_leaf_node(std::string&& pathname,
       g_block_count += 1;
 
       // Add to g_nodes_by_index.
-      if (g_nodes_by_index.size() > index_within_archive) {
-        syslog(LOG_ERR, "index_within_archive out of order in %s: %s",
-               redact(g_archive_filename), redact(pathname));
-        return -EIO;
-      }
-
+      assert(g_nodes_by_index.size() <= index_within_archive);
       g_nodes_by_index.resize(index_within_archive);
       g_nodes_by_index.push_back(n);
       break;
@@ -1111,7 +1106,7 @@ static int insert_leaf_node(std::string&& pathname,
     Node*& n = g_nodes_by_name[abs_pathname];
     if (n) {
       if (!n->is_dir()) {
-        syslog(LOG_ERR, "name collision: %s", redact(abs_pathname));
+        syslog(LOG_WARNING, "name collision: %s", redact(abs_pathname));
         return 0;
       }
     } else {
