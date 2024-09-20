@@ -170,6 +170,7 @@ static const char* g_archive_filename = nullptr;
 // then g_archive_innername is "bar.ext0".
 static const char* g_archive_innername = nullptr;
 
+// Path of the mount point.
 static std::string g_mount_point;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
@@ -427,21 +428,6 @@ const char* read_password_from_stdin(struct archive*, void* /*data*/) {
 
 // ---- Libarchive Read Callbacks
 
-static uint32_t initialization_progress_out_of_1000000() {
-  const int64_t m = g_archive_fd_position_hwm;
-  const int64_t n = g_archive_file_size;
-
-  if (m <= 0 || n <= 0) {
-    return 0;
-  }
-
-  if (m >= n) {
-    return 1000000;
-  }
-
-  return 1'000'000.0 * m / n;
-}
-
 static void update_g_archive_fd_position_hwm() {
   int64_t h = g_archive_fd_position_hwm;
   if (h < g_archive_fd_position_current) {
@@ -451,9 +437,14 @@ static void update_g_archive_fd_position_hwm() {
   const auto period = std::chrono::seconds(1);
   static auto next = std::chrono::steady_clock::now() + period;
   const auto now = std::chrono::steady_clock::now();
-  if (!g_options.quiet && (now >= next)) {
+  if (!g_options.quiet && now >= next) {
     next = now + period;
-    const int percent = initialization_progress_out_of_1000000() / 10000;
+    const int percent = g_archive_file_size > 0
+                            ? 100 *
+                                  std::clamp<int64_t>(g_archive_fd_position_hwm,
+                                                      0, g_archive_file_size) /
+                                  g_archive_file_size
+                            : 0;
     if (isatty(STDERR_FILENO)) {
       if (g_displayed_progress) {
         fprintf(stderr, "\e[F\e[K");
