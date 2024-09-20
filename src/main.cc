@@ -628,15 +628,11 @@ static bool read_from_side_buffer(int64_t index_within_archive,
 // libarchive, so each can be positioned independently.
 struct Reader {
   struct archive* archive;
-  struct archive_entry* archive_entry;
-  int64_t index_within_archive;
-  int64_t offset_within_entry;
+  struct archive_entry* archive_entry = nullptr;
+  int64_t index_within_archive = -1;
+  int64_t offset_within_entry = 0;
 
-  Reader(struct archive* _archive)
-      : archive(_archive),
-        archive_entry(nullptr),
-        index_within_archive(-1),
-        offset_within_entry(0) {}
+  Reader(struct archive* _archive) : archive(_archive) {}
 
   ~Reader() {
     if (this->archive) {
@@ -851,32 +847,18 @@ static void release_reader(std::unique_ptr<Reader> r) {
 // ---- In-Memory Directory Tree
 
 struct Node {
-  std::string rel_name;  // Relative (not absolute) pathname.
+  std::string name;
   std::string symlink;
-  int64_t index_within_archive;
-  int64_t size;
-  time_t mtime;
   mode_t mode;
+  int64_t index_within_archive = -1;
+  int64_t size = 0;
+  time_t mtime = 0;
+  int nlink = 0;
 
   Node* parent = nullptr;
   Node* last_child = nullptr;
   Node* first_child = nullptr;
   Node* next_sibling = nullptr;
-
-  Node(std::string&& _rel_name,
-       std::string&& _symlink,
-       int64_t _index_within_archive,
-       int64_t _size,
-       time_t _mtime,
-       mode_t _mode)
-      : rel_name(std::move(_rel_name)),
-        symlink(std::move(_symlink)),
-        index_within_archive(_index_within_archive),
-        size(_size),
-        mtime(_mtime),
-        mode(_mode) {}
-
-  Node(const Node&) = delete;
 
   bool is_dir() const { return S_ISDIR(mode); }
 
@@ -886,6 +868,8 @@ struct Node {
     assert(is_dir());
     // Count one "block" for each directory entry.
     size += block_size;
+    n->nlink += 1;
+    nlink += n->is_dir();
     n->parent = this;
     if (last_child == nullptr) {
       last_child = n;
@@ -902,6 +886,7 @@ struct Node {
 
   struct stat get_stat() const {
     struct stat z = {};
+    z.st_nlink = nlink;
     z.st_mode = mode;
     z.st_nlink = 1;
     z.st_uid = g_uid;
@@ -1050,8 +1035,12 @@ static int insert_leaf_node(std::string&& pathname,
     std::string rel_pathname(q, r - q);
     if (*r == 0) {
       // Insert an explicit leaf node (a regular file).
-      Node* const n = new Node(std::move(rel_pathname), std::move(symlink),
-                               index_within_archive, size, mtime, leaf_mode);
+      Node* const n = new Node{.name = std::move(rel_pathname),
+                               .symlink = std::move(symlink),
+                               .mode = leaf_mode,
+                               .index_within_archive = index_within_archive,
+                               .size = size,
+                               .mtime = mtime};
 
       // Add to g_nodes_by_name.
       const auto [_, ok] =
@@ -1082,7 +1071,10 @@ static int insert_leaf_node(std::string&& pathname,
         return 0;
       }
     } else {
-      n = new Node(std::move(rel_pathname), "", -1, 0, mtime, branch_mode);
+      n = new Node{.name = std::move(rel_pathname),
+                   .mode = branch_mode,
+                   .mtime = mtime,
+                   .nlink = 1};
       parent->add_child(n);
       g_block_count += 1;
     }
@@ -1206,7 +1198,7 @@ static int build_tree() {
 // described in the "Building is split into two parts" comment above.
 
 static void insert_root_node() {
-  g_root_node = new Node("", "", -1, 0, 0, S_IFDIR);
+  g_root_node = new Node{.mode = S_IFDIR, .nlink = 1};
   g_nodes_by_name["/"] = g_root_node;
 }
 
@@ -1498,15 +1490,15 @@ static int my_release(const char* pathname, struct fuse_file_info* ffi) {
 static int my_readdir(const char* pathname,
                       void* buf,
                       fuse_fill_dir_t filler,
-                      off_t offset,
-                      struct fuse_file_info* ffi) {
+                      off_t /*offset*/,
+                      struct fuse_file_info* /*ffi*/) {
   const auto iter = g_nodes_by_name.find(pathname);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
 
-  Node* const n = iter->second;
-  if (!S_ISDIR(n->mode)) {
+  const Node* const n = iter->second;
+  if (!n->is_dir()) {
     return -ENOTDIR;
   }
 
@@ -1514,9 +1506,9 @@ static int my_readdir(const char* pathname,
     return -ENOMEM;
   }
 
-  for (Node* p = n->first_child; p; p = p->next_sibling) {
+  for (const Node* p = n->first_child; p; p = p->next_sibling) {
     const struct stat z = p->get_stat();
-    if (filler(buf, p->rel_name.c_str(), &z, 0)) {
+    if (filler(buf, p->name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
   }
@@ -1524,8 +1516,7 @@ static int my_readdir(const char* pathname,
   return 0;
 }
 
-static int my_statfs([[maybe_unused]] const char* const path,
-                     struct statvfs* const st) {
+static int my_statfs(const char* const /*path*/, struct statvfs* const st) {
   st->f_bsize = block_size;
   st->f_frsize = block_size;
   st->f_blocks = g_block_count;
