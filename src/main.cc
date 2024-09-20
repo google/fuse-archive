@@ -53,9 +53,11 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -352,6 +354,206 @@ static int determine_passphrase_exit_code(const std::string_view e) {
   return EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
 }
 
+template <typename... Args>
+static std::string StrCat(Args&&... args) {
+  std::ostringstream out;
+  (out << ... << std::forward<Args>(args));
+  return std::move(out).str();
+}
+
+// Path manipulations.
+class Path : public std::string_view {
+ public:
+  Path(const char* path) : std::string_view(path) {}
+  Path(std::string_view path) : std::string_view(path) {}
+
+  // Removes trailing separators.
+  Path WithoutTrailingSeparator() const {
+    Path path = *this;
+
+    // Don't remove the first character, even if it is a '/'.
+    while (path.size() > 1 && path.back() == '/')
+      path.remove_suffix(1);
+
+    return path;
+  }
+
+  // Gets the position of the dot where the filename extension starts, or
+  // `size()` if there is no extension.
+  //
+  // If the path ends with a slash, then it does not have an extension:
+  // * "/" -> no extension
+  // * "foo/" -> no extension
+  // * "a.b/" -> no extension
+  //
+  // If the path ends with a dot, then it does not have an extension:
+  // * "." -> no extension
+  // * ".." -> no extension
+  // * "..." -> no extension
+  // * "foo." -> no extension
+  // * "foo..." -> no extension
+  //
+  // If the filename starts with a dot or a sequence of dots, but does not have
+  // any other dot after that, then it does not have an extension:
+  // ".foo" -> no extension
+  // "...foo" -> no extension
+  // "a.b/...foo" -> no extension
+  //
+  // An extension cannot contain a space:
+  // * "foo. " -> no extension
+  // * "foo.a b" -> no extension
+  // * "foo. (1)" -> no extension
+  //
+  // An extension cannot be longer than 6 bytes, including the leading dot:
+  // * "foo.tool" -> ".tool"
+  // * "foo.toolong" -> no extension
+  size_type FinalExtensionPosition() const {
+    const size_type last_dot = find_last_of("/. ");
+    if (last_dot == npos || at(last_dot) != '.' || last_dot == 0 ||
+        last_dot == size() - 1 || size() - last_dot > 6)
+      return size();
+
+    if (const size_type i = find_last_not_of('.', last_dot - 1);
+        i == npos || at(i) == '/')
+      return size();
+
+    return last_dot;
+  }
+
+  // Same as FinalExtensionPosition, but also takes in account some double
+  // extensions such as ".tar.gz".
+  size_type ExtensionPosition() const {
+    const size_type last_dot = FinalExtensionPosition();
+    if (last_dot >= size())
+      return last_dot;
+
+    // Extract extension without dot and in ASCII lowercase.
+    assert(at(last_dot) == '.');
+    std::string ext(substr(last_dot + 1));
+    for (char& c : ext) {
+      if ('A' <= c && c <= 'Z')
+        c += 'a' - 'A';
+    }
+
+    // Is it a special extension?
+    static const std::unordered_set<std::string_view> special_exts = {
+        "z", "gz", "bz", "bz2", "xz", "zst", "lz", "lzma"};
+    if (special_exts.count(ext)) {
+      return Path(substr(0, last_dot)).FinalExtensionPosition();
+    }
+
+    return last_dot;
+  }
+
+  // Removes the extension, if any.
+  Path WithoutExtension() const { return substr(0, ExtensionPosition()); }
+
+  // Gets a safe truncation position `x` such that `0 <= x && x <= i`. Avoids
+  // truncating in the middle of a multi-byte UTF-8 sequence. Returns `size()`
+  // if `i >= size()`.
+  size_type TruncationPosition(size_type i) const {
+    if (i >= size())
+      return size();
+
+    while (true) {
+      // Avoid truncating at a UTF-8 trailing byte.
+      while (i > 0 && (at(i) & 0b1100'0000) == 0b1000'0000)
+        --i;
+
+      if (i == 0)
+        return i;
+
+      const std::string_view zero_width_joiner = "\u200D";
+
+      // Avoid truncating at a zero-width joiner.
+      if (substr(i).starts_with(zero_width_joiner)) {
+        --i;
+        continue;
+      }
+
+      // Avoid truncating just after a zero-width joiner.
+      if (substr(0, i).ends_with(zero_width_joiner)) {
+        i -= zero_width_joiner.size();
+        if (i > 0) {
+          --i;
+          continue;
+        }
+      }
+
+      return i;
+    }
+  }
+
+  // Splits path between parent path and basename.
+  std::pair<Path, Path> Split() const {
+    const std::string_view::size_type i = find_last_of('/') + 1;
+    return {Path(substr(0, i)).WithoutTrailingSeparator(), substr(i)};
+  }
+
+  // Appends the |tail| path to |*head|. If |tail| is an absolute path, then
+  // |*head| takes the value of |tail|. If |tail| is a relative path, then it is
+  // appended to |*head|. A '/' separator is added if |*head| doesn't already
+  // end with one.
+  static void Append(std::string* head, std::string_view tail) {
+    assert(head);
+
+    if (tail.empty())
+      return;
+
+    if (head->empty() || tail.starts_with('/')) {
+      *head = tail;
+      return;
+    }
+
+    assert(!head->empty());
+    assert(!tail.empty());
+
+    if (!head->ends_with('/'))
+      *head += '/';
+
+    *head += tail;
+  }
+
+  // Normalizes path.
+  std::string Normalize() const {
+    if (empty())
+      return std::string();
+
+    Path in = *this;
+    std::string result = "/";
+
+    while (in.starts_with("./")) {
+      in.remove_prefix(2);
+    }
+
+    while (in.starts_with("../")) {
+      result += "UP";
+      in.remove_prefix(3);
+    }
+
+    // Extract part after part
+    size_type i;
+    while ((i = in.find_first_not_of('/')) != npos) {
+      in.remove_prefix(i);
+      assert(!in.empty());
+
+      i = in.find_first_of('/');
+      std::string_view part = in.substr(0, i);
+      assert(!part.empty());
+      in.remove_prefix(part.size());
+
+      part = part.substr(0, Path(part).TruncationPosition(NAME_MAX));
+
+      if (part.empty() || part == "." || part == "..")
+        part = "-";
+
+      Append(&result, part);
+    }
+
+    return result;
+  }
+};
+
 // ---- Logging
 
 // redact replaces s with a placeholder string when the "--redact" command line
@@ -478,10 +680,6 @@ static int my_file_open(struct archive* a, void* /*data*/) {
 static ssize_t my_file_read(struct archive* a,
                             void* /*data*/,
                             const void** out_dst_ptr) {
-  if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "invalid g_archive_fd");
-    return ARCHIVE_FATAL;
-  }
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
   while (true) {
     const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
@@ -507,11 +705,6 @@ static int64_t my_file_seek(struct archive* a,
                             void* /*data*/,
                             int64_t offset,
                             int whence) {
-  if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "invalid g_archive_fd");
-    return ARCHIVE_FATAL;
-  }
-
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
     g_archive_fd_position_current = o;
@@ -525,11 +718,6 @@ static int64_t my_file_seek(struct archive* a,
 }
 
 static int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
-  if (g_archive_fd < 0) {
-    archive_set_error(a, EIO, "invalid g_archive_fd");
-    return ARCHIVE_FATAL;
-  }
-
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if (o1 >= 0 && o0 >= 0) {
@@ -543,9 +731,7 @@ static int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
   return ARCHIVE_FATAL;
 }
 
-static int my_file_switch(struct archive* a,
-                          void* callback_data0,
-                          void* callback_data1) {
+static int my_file_switch(struct archive*, void* /*data0*/, void* /*data1*/) {
   return ARCHIVE_OK;
 }
 
@@ -888,98 +1074,26 @@ struct Node {
   }
 };
 
-// valid_pathname returns whether the C string p is neither "", "./" or "/"
-// and, when splitting on '/' into path fragments, no fragment is "", "."
-// or ".." other than a possibly leading "" or "." fragment when p starts with
-// "/" or "./".
-//
-// If allow_slashes is false then p must not contain "/".
-//
-// When iterating over fragments, the p pointer does not move but the q and r
-// pointers bracket each fragment:
-//   "/an/example/pathname"
-//    pq-r|      ||       |
-//    p   q------r|       |
-//    p           q-------r
-static bool valid_pathname(const char* const p, bool allow_slashes) {
-  if (!p) {
-    return false;
-  }
-  const char* q = p;
-  if (q[0] == '.' && q[1] == '/') {
-    if (!allow_slashes) {
-      return false;
-    }
-    q += 2;
-  } else if (*q == '/') {
-    if (!allow_slashes) {
-      return false;
-    }
-    q++;
-  }
-  if (*q == 0) {
-    return false;
-  }
-  while (true) {
-    const char* r = q;
-    while (*r != 0) {
-      if (*r != '/') {
-        r++;
-      } else if (!allow_slashes) {
-        return false;
-      } else {
-        break;
-      }
-    }
-    size_t len = r - q;
-    if (len == 0) {
-      return false;
-    } else if (len == 1 && q[0] == '.') {
-      return false;
-    } else if (len == 2 && q[0] == '.' && q[1] == '.') {
-      return false;
-    }
-    if (*r == 0) {
-      break;
-    }
-    q = r + 1;
-  }
-  return true;
-}
-
 // normalize_pathname validates and returns e's pathname, prepending a leading
 // "/" if it didn't already have one.
 static std::string normalize_pathname(struct archive_entry* e) {
-  const char* s = archive_entry_pathname_utf8(e);
+  const char* const s =
+      archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
   if (!s) {
-    s = archive_entry_pathname(e);
-    if (!s) {
-      syslog(LOG_ERR, "archive entry in %s has empty pathname",
-             redact(g_archive_filename));
-      return "";
-    }
-  }
-
-  // For 'raw' archives, libarchive defaults to "data" when the compression
-  // file format doesn't contain the original file's name. For fuse-archive, we
-  // use the archive filename's innername instead. Given an archive filename of
-  // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive_is_raw && g_archive_innername &&
-      (g_archive_innername[0] != '\x00') && (strcmp(s, "data") == 0)) {
-    s = g_archive_innername;
-  }
-
-  if (!valid_pathname(s, true)) {
-    syslog(LOG_ERR, "archive entry in %s has invalid pathname: %s",
-           redact(g_archive_filename), redact(s));
+    syslog(LOG_ERR, "entry has an empty path");
     return "";
   }
-  if (s[0] == '.' && s[1] == '/') {
-    return std::string(s + 1);
-  } else if (*s == '/') {
-    return std::string(s);
+
+  // For 'raw' archives, libarchive defaults to "data" when the compression file
+  // format doesn't contain the original file's name. For fuse-archive, we use
+  // the archive filename's innername instead. Given an archive filename of
+  // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
+  if (g_archive_is_raw && g_archive_innername && *g_archive_innername &&
+      std::string_view("data") == s) {
+    return Path(g_archive_innername).Normalize();
   }
-  return std::string("/") + std::string(s);
+
+  return Path(s).Normalize();
 }
 
 static int insert_leaf_node(std::string&& pathname,
@@ -995,7 +1109,7 @@ static int insert_leaf_node(std::string&& pathname,
   const mode_t branch_mode = rx_bits | (r_bits >> 2) | S_IFDIR;
   const mode_t leaf_mode = rx_bits | (symlink.empty() ? S_IFREG : S_IFLNK);
 
-  // p, q and r point to pathname fragments per the valid_pathname comment.
+  // p, q and r point to pathname fragments.
   const char* p = pathname.c_str();
   if (*p == 0 || *p != '/') {
     return 0;
@@ -1071,21 +1185,26 @@ static int insert_leaf_node(std::string&& pathname,
 static int insert_leaf(struct archive* a,
                        struct archive_entry* e,
                        int64_t index_within_archive) {
-  std::string pathname = normalize_pathname(e);
-  if (pathname.empty()) {
-    // normalize_pathname already printed a log message.
+  std::string path = normalize_pathname(e);
+  if (path.empty()) {
+    syslog(LOG_DEBUG, "skipped entry with invalid path %s",
+           redact(archive_entry_pathname_utf8(e)));
+    return 0;
+  }
+
+  const mode_t mode = archive_entry_mode(e);
+
+  if (S_ISDIR(mode)) {
+    syslog(LOG_DEBUG, "skipped dir %s", redact(path));
+    return 0;
+  }
+
+  if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
+    syslog(LOG_WARNING, "skipped special file %s", redact(path));
     return 0;
   }
 
   std::string symlink;
-  const mode_t mode = archive_entry_mode(e);
-
-  if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
-    syslog(LOG_ERR, "irregular file type in %s: %s", redact(g_archive_filename),
-           redact(pathname));
-    return 0;
-  }
-
   if (S_ISLNK(mode)) {
     const char* s = archive_entry_symlink_utf8(e);
     if (!s) {
@@ -1094,9 +1213,9 @@ static int insert_leaf(struct archive* a,
     if (s) {
       symlink = std::string(s);
     }
+
     if (symlink.empty()) {
-      syslog(LOG_ERR, "empty link in %s: %s", redact(g_archive_filename),
-             redact(pathname));
+      syslog(LOG_ERR, "skipped empty link %s", redact(path));
       return 0;
     }
   }
@@ -1107,32 +1226,24 @@ static int insert_leaf(struct archive* a,
   // explicitly record this (at the time archive_read_next_header returns). See
   // https://github.com/libarchive/libarchive/issues/1764
   if (!archive_entry_size_is_set(e)) {
-    while (true) {
-      const ssize_t n = archive_read_data(
-          a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
-          SIDE_BUFFER_SIZE);
-      if (n == 0) {
-        break;
-      }
+    syslog(LOG_INFO, "extracting %s", redact(path));
 
+    size = 0;
+    while (const ssize_t n = archive_read_data(
+               a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
+               SIDE_BUFFER_SIZE)) {
       if (n < 0) {
-        syslog(LOG_ERR, "could not decompress %s: %s",
-               redact(g_archive_filename), archive_error_string(a));
+        syslog(LOG_ERR, "cannot extract %s: %s", redact(path),
+               archive_error_string(a));
         return -EIO;
       }
 
-      if (n > SIDE_BUFFER_SIZE) {
-        syslog(LOG_ERR, "too much data decompressing %s",
-               redact(g_archive_filename));
-        // Something has gone wrong, possibly a buffer overflow, so abort.
-        abort();
-      }
-
+      assert(n <= SIDE_BUFFER_SIZE);
       size += n;
     }
   }
 
-  return insert_leaf_node(std::move(pathname), std::move(symlink),
+  return insert_leaf_node(std::move(path), std::move(symlink),
                           index_within_archive, size, archive_entry_mtime(e),
                           mode);
 }
@@ -1163,10 +1274,6 @@ static int build_tree() {
                archive_error_string(g_initialize_archive));
         return -EIO;
       }
-    }
-
-    if (S_ISDIR(archive_entry_mode(g_initialize_archive_entry))) {
-      continue;
     }
 
     TRY(insert_leaf(g_initialize_archive, g_initialize_archive_entry,
