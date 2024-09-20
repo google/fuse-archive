@@ -471,21 +471,21 @@ static void update_g_archive_fd_position_hwm() {
 // through the archive to build the node tree, based on the g_archive_fd file
 // descriptor that stays open for the lifetime of the process. They are like
 // libarchive's built-in "read from a file" callbacks but also update
-// g_archive_fd_position_etc. The callback_data arguments are ignored in favor
-// of global variables.
+// g_archive_fd_position_etc. The data arguments are ignored in favor of global
+// variables.
 
-static int my_file_close(struct archive* a, void* callback_data) {
+static int my_file_close(struct archive* a, void* /*data*/) {
   return ARCHIVE_OK;
 }
 
-static int my_file_open(struct archive* a, void* callback_data) {
+static int my_file_open(struct archive* a, void* /*data*/) {
   g_archive_fd_position_current = 0;
   g_archive_fd_position_hwm = 0;
   return ARCHIVE_OK;
 }
 
 static ssize_t my_file_read(struct archive* a,
-                            void* callback_data,
+                            void* /*data*/,
                             const void** out_dst_ptr) {
   if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
@@ -513,7 +513,7 @@ static ssize_t my_file_read(struct archive* a,
 }
 
 static int64_t my_file_seek(struct archive* a,
-                            void* callback_data,
+                            void* /*data*/,
                             int64_t offset,
                             int whence) {
   if (g_archive_fd < 0) {
@@ -533,9 +533,7 @@ static int64_t my_file_seek(struct archive* a,
   return ARCHIVE_FATAL;
 }
 
-static int64_t my_file_skip(struct archive* a,
-                            void* callback_data,
-                            int64_t delta) {
+static int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
   if (g_archive_fd < 0) {
     archive_set_error(a, EIO, "invalid g_archive_fd");
     return ARCHIVE_FATAL;
@@ -740,17 +738,17 @@ struct Reader {
   // read copies from the archive entry's decompressed contents to the
   // destination buffer. It also advances the Reader's offset_within_entry.
   //
-  // The pathname is used for log messages.
-  ssize_t read(void* dst_ptr, size_t dst_len, const char* pathname) {
+  // The path is used for log messages.
+  ssize_t read(void* dst_ptr, size_t dst_len, const char* path) {
     const ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
     if (n < 0) {
-      syslog(LOG_ERR, "could not serve %s from %s: %s", redact(pathname),
+      syslog(LOG_ERR, "could not serve %s from %s: %s", redact(path),
              redact(g_archive_filename), archive_error_string(this->archive));
       return -EIO;
     }
 
     if (n > dst_len) {
-      syslog(LOG_ERR, "too much data serving %s from %s", redact(pathname),
+      syslog(LOG_ERR, "too much data serving %s from %s", redact(path),
              redact(g_archive_filename));
       // Something has gone wrong, possibly a buffer overflow, so abort.
       abort();
@@ -900,7 +898,7 @@ struct Node {
 };
 
 // valid_pathname returns whether the C string p is neither "", "./" or "/"
-// and, when splitting on '/' into pathname fragments, no fragment is "", "."
+// and, when splitting on '/' into path fragments, no fragment is "", "."
 // or ".." other than a possibly leading "" or "." fragment when p starts with
 // "/" or "./".
 //
@@ -999,12 +997,6 @@ static int insert_leaf_node(std::string&& pathname,
                             int64_t size,
                             time_t mtime,
                             mode_t mode) {
-  if (index_within_archive < 0) {
-    syslog(LOG_ERR, "negative index_within_archive in %s: %s",
-           redact(g_archive_filename), redact(pathname));
-    return -EIO;
-  }
-
   Node* parent = g_root_node;
 
   const mode_t rx_bits = mode & 0555;
@@ -1032,10 +1024,10 @@ static int insert_leaf_node(std::string&& pathname,
     }
 
     std::string abs_pathname(p, r - p);
-    std::string rel_pathname(q, r - q);
+    std::string name(q, r - q);
     if (*r == 0) {
       // Insert an explicit leaf node (a regular file).
-      Node* const n = new Node{.name = std::move(rel_pathname),
+      Node* const n = new Node{.name = std::move(name),
                                .symlink = std::move(symlink),
                                .mode = leaf_mode,
                                .index_within_archive = index_within_archive,
@@ -1071,7 +1063,7 @@ static int insert_leaf_node(std::string&& pathname,
         return 0;
       }
     } else {
-      n = new Node{.name = std::move(rel_pathname),
+      n = new Node{.name = std::move(name),
                    .mode = branch_mode,
                    .mtime = mtime,
                    .nlink = 1};
@@ -1351,8 +1343,8 @@ static int post_initialize_sync() {
 
 // ---- FUSE Callbacks
 
-static int my_getattr(const char* pathname, struct stat* z) {
-  const auto it = g_nodes_by_name.find(pathname);
+static int my_getattr(const char* path, struct stat* z) {
+  const auto it = g_nodes_by_name.find(path);
   if (it == g_nodes_by_name.end()) {
     return -ENOENT;
   }
@@ -1361,8 +1353,8 @@ static int my_getattr(const char* pathname, struct stat* z) {
   return 0;
 }
 
-static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
-  const auto it = g_nodes_by_name.find(pathname);
+static int my_readlink(const char* path, char* dst_ptr, size_t dst_len) {
+  const auto it = g_nodes_by_name.find(path);
   if (it == g_nodes_by_name.end()) {
     return -ENOENT;
   }
@@ -1377,15 +1369,15 @@ static int my_readlink(const char* pathname, char* dst_ptr, size_t dst_len) {
   return 0;
 }
 
-static int my_open(const char* pathname, struct fuse_file_info* ffi) {
-  const auto it = g_nodes_by_name.find(pathname);
+static int my_open(const char* path, fuse_file_info* ffi) {
+  const auto it = g_nodes_by_name.find(path);
   if (it == g_nodes_by_name.end()) {
     return -ENOENT;
   }
 
   const Node* const n = it->second;
   assert(n);
-  if (S_ISDIR(n->mode)) {
+  if (n->is_dir()) {
     return -EISDIR;
   }
 
@@ -1409,11 +1401,11 @@ static int my_open(const char* pathname, struct fuse_file_info* ffi) {
   return 0;
 }
 
-static int my_read(const char* pathname,
+static int my_read(const char* path,
                    char* dst_ptr,
                    size_t dst_len,
                    off_t offset,
-                   struct fuse_file_info* ffi) {
+                   fuse_file_info* ffi) {
   if (offset < 0 || dst_len > INT_MAX) {
     return -EINVAL;
   }
@@ -1471,14 +1463,14 @@ static int my_read(const char* pathname,
     release_reader(std::move(ur));
   }
 
-  if (!r->advance_offset(offset, pathname)) {
+  if (!r->advance_offset(offset, path)) {
     return -EIO;
   }
 
-  return r->read(dst_ptr, dst_len, pathname);
+  return r->read(dst_ptr, dst_len, path);
 }
 
-static int my_release(const char* pathname, struct fuse_file_info* ffi) {
+static int my_release(const char* /*path*/, fuse_file_info* ffi) {
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
   if (!r) {
     return -EIO;
@@ -1487,12 +1479,12 @@ static int my_release(const char* pathname, struct fuse_file_info* ffi) {
   return 0;
 }
 
-static int my_readdir(const char* pathname,
+static int my_readdir(const char* path,
                       void* buf,
                       fuse_fill_dir_t filler,
                       off_t /*offset*/,
-                      struct fuse_file_info* /*ffi*/) {
-  const auto iter = g_nodes_by_name.find(pathname);
+                      fuse_file_info* /*ffi*/) {
+  const auto iter = g_nodes_by_name.find(path);
   if (iter == g_nodes_by_name.end()) {
     return -ENOENT;
   }
@@ -1516,7 +1508,7 @@ static int my_readdir(const char* pathname,
   return 0;
 }
 
-static int my_statfs(const char* const /*path*/, struct statvfs* const st) {
+static int my_statfs(const char* /*path*/, struct statvfs* st) {
   st->f_bsize = block_size;
   st->f_frsize = block_size;
   st->f_blocks = g_block_count;
