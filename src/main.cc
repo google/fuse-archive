@@ -43,6 +43,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
