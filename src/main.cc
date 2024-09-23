@@ -52,11 +52,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -357,9 +360,32 @@ static int determine_passphrase_exit_code(const std::string_view e) {
 
 template <typename... Args>
 static std::string StrCat(Args&&... args) {
-  std::ostringstream out;
-  (out << ... << std::forward<Args>(args));
-  return std::move(out).str();
+  return (std::ostringstream() << ... << std::forward<Args>(args)).str();
+}
+
+// Logs a debug or error message.
+//
+// `priority` is one of:
+// LOG_ERR        error conditions
+// LOG_WARNING    warning conditions
+// LOG_NOTICE     normal, but significant, condition
+// LOG_INFO       informational message
+// LOG_DEBUG      debug-level message
+template <typename... Args>
+static void Log(int priority, Args&&... args) noexcept {
+  try {
+    syslog(priority, "%s", StrCat(std::forward<Args>(args)...).c_str());
+  } catch (const std::exception& e) {
+    syslog(LOG_ERR, "Cannot log message: %s", e.what());
+  }
+}
+
+// Throws an std::system_error with the current errno.
+template <typename... Args>
+[[noreturn]] static void ThrowSystemError(Args&&... args) {
+  const int err = errno;
+  throw std::system_error(err, std::system_category(),
+                          StrCat(std::forward<Args>(args)...));
 }
 
 // Path manipulations.
@@ -557,15 +583,31 @@ class Path : public std::string_view {
 
 // ---- Logging
 
-// redact replaces s with a placeholder string when the "--redact" command line
-// option was given. This may prevent Personally Identifiable Information (PII)
-// such as archive filenames or archive entry pathnames from being logged.
-static const char* redact(const char* s) {
-  return g_options.redact ? "(redacted)" : s;
-}
+static std::ostream& operator<<(std::ostream& out, const Path path) {
+  if (g_options.redact)
+    return out << "(redacted)";
 
-static const char* redact(const std::string& s) {
-  return redact(s.c_str());
+  out.put('\'');
+  for (const char c : path) {
+    switch (c) {
+      case '\\':
+      case '\'':
+        out.put('\\');
+        out.put(c);
+        break;
+      default:
+        const int i = static_cast<unsigned char>(c);
+        if (std::iscntrl(i)) {
+          out << "\\x" << std::hex << std::setw(2) << std::setfill('0') << i
+              << std::dec;
+        } else {
+          out.put(c);
+        }
+    }
+  }
+
+  out.put('\'');
+  return out;
 }
 
 // Temporarily suppresses the echo on the terminal.
@@ -621,11 +663,11 @@ const char* read_password_from_stdin(struct archive*, void* /*data*/) {
   }
 
   if (password.empty()) {
-    syslog(LOG_DEBUG, "Got an empty password");
+    Log(LOG_DEBUG, "Got an empty password");
     return nullptr;
   }
 
-  syslog(LOG_DEBUG, "Got a password of %zd bytes", password.size());
+  Log(LOG_DEBUG, "Got a password of ", password.size(), " bytes");
   return password.c_str();
 }
 
@@ -655,7 +697,7 @@ static void update_g_archive_fd_position_hwm() {
       fprintf(stderr, "Loading %d%%\n", percent);
       fflush(stderr);
     } else {
-      syslog(LOG_INFO, "Loading %d%%", percent);
+      Log(LOG_INFO, "Loading ", percent, "%");
     }
     g_displayed_progress = true;
   }
@@ -831,13 +873,13 @@ struct Reader {
           archive_read_next_header(this->archive, &this->archive_entry);
 
       if (status == ARCHIVE_EOF) {
-        syslog(LOG_ERR, "inconsistent archive %s", redact(g_archive_filename));
+        Log(LOG_ERR, "Inconsistent archive");
         return false;
       }
 
       if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
-        syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
-               archive_error_string(this->archive));
+        Log(LOG_ERR, "Invalid archive: %s",
+            archive_error_string(this->archive));
         return false;
       }
 
@@ -920,18 +962,12 @@ struct Reader {
   ssize_t read(void* dst_ptr, size_t dst_len, const char* path) {
     const ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
     if (n < 0) {
-      syslog(LOG_ERR, "could not serve %s from %s: %s", redact(path),
-             redact(g_archive_filename), archive_error_string(this->archive));
+      Log(LOG_ERR,
+          "Cannot read archive: ", archive_error_string(this->archive));
       return -EIO;
     }
 
-    if (n > dst_len) {
-      syslog(LOG_ERR, "too much data serving %s from %s", redact(path),
-             redact(g_archive_filename));
-      // Something has gone wrong, possibly a buffer overflow, so abort.
-      abort();
-    }
-
+    assert(n <= dst_len);
     this->offset_within_entry += n;
     return n;
   }
@@ -950,7 +986,7 @@ static void swap(Reader& a, Reader& b) {
 static std::unique_ptr<Reader> acquire_reader(
     int64_t want_index_within_archive) {
   if (want_index_within_archive < 0) {
-    syslog(LOG_ERR, "negative index_within_archive");
+    Log(LOG_ERR, "Negative index_within_archive");
     return nullptr;
   }
 
@@ -977,7 +1013,7 @@ static std::unique_ptr<Reader> acquire_reader(
   } else {
     struct archive* const a = archive_read_new();
     if (!a) {
-      syslog(LOG_ERR, "out of memory");
+      Log(LOG_ERR, "Out of memory");
       return nullptr;
     }
 
@@ -990,8 +1026,7 @@ static std::unique_ptr<Reader> acquire_reader(
     archive_read_support_format_raw(a);
     if (archive_read_open_filename(a, g_archive_realpath, 16384) !=
         ARCHIVE_OK) {
-      syslog(LOG_ERR, "could not read %s: %s", redact(g_archive_filename),
-             archive_error_string(a));
+      Log(LOG_ERR, "Cannot read archive: ", archive_error_string(a));
       archive_read_free(a);
       return nullptr;
     }
@@ -1081,7 +1116,7 @@ static std::string normalize_pathname(struct archive_entry* e) {
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
   if (!s) {
-    syslog(LOG_ERR, "entry has an empty path");
+    Log(LOG_ERR, "entry has an empty path");
     return "";
   }
 
@@ -1144,7 +1179,7 @@ static int insert_leaf_node(std::string&& pathname,
       const auto [_, ok] =
           g_nodes_by_name.try_emplace(std::move(abs_pathname), n);
       if (!ok) {
-        syslog(LOG_WARNING, "name collision: %s", redact(abs_pathname));
+        Log(LOG_WARNING, "Name collision ", Path(abs_pathname));
         delete n;
         return 0;
       }
@@ -1165,7 +1200,7 @@ static int insert_leaf_node(std::string&& pathname,
     Node*& n = g_nodes_by_name[abs_pathname];
     if (n) {
       if (!n->is_dir()) {
-        syslog(LOG_WARNING, "name collision: %s", redact(abs_pathname));
+        Log(LOG_WARNING, "Name collision ", Path(abs_pathname));
         return 0;
       }
     } else {
@@ -1188,20 +1223,20 @@ static int insert_leaf(struct archive* a,
                        int64_t index_within_archive) {
   std::string path = normalize_pathname(e);
   if (path.empty()) {
-    syslog(LOG_DEBUG, "skipped entry with invalid path %s",
-           redact(archive_entry_pathname_utf8(e)));
+    Log(LOG_DEBUG, "Skipped entry with invalid path ",
+        Path(archive_entry_pathname_utf8(e)));
     return 0;
   }
 
   const mode_t mode = archive_entry_mode(e);
 
   if (S_ISDIR(mode)) {
-    syslog(LOG_DEBUG, "skipped dir %s", redact(path));
+    Log(LOG_DEBUG, "Skipped dir ", Path(path));
     return 0;
   }
 
   if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
-    syslog(LOG_WARNING, "skipped special file %s", redact(path));
+    Log(LOG_WARNING, "Skipped special file ", Path(path));
     return 0;
   }
 
@@ -1216,7 +1251,7 @@ static int insert_leaf(struct archive* a,
     }
 
     if (symlink.empty()) {
-      syslog(LOG_ERR, "skipped empty link %s", redact(path));
+      Log(LOG_ERR, "Skipped empty link ", Path(path));
       return 0;
     }
   }
@@ -1227,15 +1262,15 @@ static int insert_leaf(struct archive* a,
   // explicitly record this (at the time archive_read_next_header returns). See
   // https://github.com/libarchive/libarchive/issues/1764
   if (!archive_entry_size_is_set(e)) {
-    syslog(LOG_INFO, "extracting %s", redact(path));
+    Log(LOG_INFO, "Extracting ", Path(path));
 
     size = 0;
     while (const ssize_t n = archive_read_data(
                a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
                SIDE_BUFFER_SIZE)) {
       if (n < 0) {
-        syslog(LOG_ERR, "cannot extract %s: %s", redact(path),
-               archive_error_string(a));
+        Log(LOG_ERR, "Cannot extract ", Path(path), ": ",
+            archive_error_string(a));
         return -EIO;
       }
 
@@ -1267,12 +1302,10 @@ static int build_tree() {
       }
 
       if (status == ARCHIVE_WARN) {
-        syslog(LOG_ERR, "libarchive warning for %s: %s",
-               redact(g_archive_filename),
-               archive_error_string(g_initialize_archive));
+        Log(LOG_WARNING, archive_error_string(g_initialize_archive));
       } else if (status != ARCHIVE_OK) {
-        syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
-               archive_error_string(g_initialize_archive));
+        Log(LOG_ERR,
+            "Invalid archive: ", archive_error_string(g_initialize_archive));
         return -EIO;
       }
     }
@@ -1295,33 +1328,35 @@ static void insert_root_node() {
 
 static int pre_initialize() {
   if (!g_archive_filename) {
-    syslog(LOG_ERR, "missing archive_filename argument");
+    Log(LOG_ERR, "Missing archive_filename argument");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
   g_archive_realpath = realpath(g_archive_filename, nullptr);
   if (!g_archive_realpath) {
-    syslog(LOG_ERR, "could not get absolute path of %s: %m",
-           redact(g_archive_filename));
+    Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_filename), ": ",
+        strerror(errno));
     return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
   }
 
   g_archive_fd = open(g_archive_realpath, O_RDONLY);
   if (g_archive_fd < 0) {
-    syslog(LOG_ERR, "could not open %s: %m", redact(g_archive_filename));
+    Log(LOG_ERR, "Cannot open ", Path(g_archive_filename), ": ",
+        strerror(errno));
     return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
   }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
-    syslog(LOG_ERR, "could not stat %s", redact(g_archive_filename));
+    Log(LOG_ERR, "Cannot stat ", Path(g_archive_filename), ": ",
+        strerror(errno));
     return EXIT_CODE_GENERIC_FAILURE;
   }
   g_archive_file_size = z.st_size;
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
-    syslog(LOG_ERR, "out of memory");
+    Log(LOG_ERR, "Out of memory");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
@@ -1331,8 +1366,8 @@ static int pre_initialize() {
   archive_read_support_format_all(g_initialize_archive);
   archive_read_support_format_raw(g_initialize_archive);
   if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
-    syslog(LOG_ERR, "could not open %s: %s", redact(g_archive_filename),
-           archive_error_string(g_initialize_archive));
+    Log(LOG_ERR,
+        "Cannot open archive: ", archive_error_string(g_initialize_archive));
     archive_read_free(g_initialize_archive);
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
@@ -1345,13 +1380,11 @@ static int pre_initialize() {
                                           &g_initialize_archive_entry);
     g_initialize_index_within_archive++;
     if (status == ARCHIVE_WARN) {
-      syslog(LOG_ERR, "libarchive warning for %s: %s",
-             redact(g_archive_filename),
-             archive_error_string(g_initialize_archive));
+      Log(LOG_WARNING, archive_error_string(g_initialize_archive));
     } else if (status != ARCHIVE_OK) {
       if (status != ARCHIVE_EOF) {
-        syslog(LOG_ERR, "invalid archive %s: %s", redact(g_archive_filename),
-               archive_error_string(g_initialize_archive));
+        Log(LOG_ERR,
+            "Invalid archive: ", archive_error_string(g_initialize_archive));
       }
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
@@ -1383,7 +1416,7 @@ static int pre_initialize() {
         g_initialize_archive = nullptr;
         g_initialize_archive_entry = nullptr;
         g_initialize_index_within_archive = -1;
-        syslog(LOG_ERR, "invalid raw archive: %s", redact(g_archive_filename));
+        Log(LOG_ERR, "Invalid raw archive");
         return EXIT_CODE_INVALID_RAW_ARCHIVE;
       }
 
@@ -1399,7 +1432,7 @@ static int pre_initialize() {
         g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
       const char* const e = archive_error_string(g_initialize_archive);
-      syslog(LOG_ERR, "%s: %s", redact(g_archive_filename), e);
+      Log(LOG_ERR, e);
       const int ret = determine_passphrase_exit_code(e);
       archive_read_free(g_initialize_archive);
       g_initialize_archive = nullptr;
@@ -1433,7 +1466,7 @@ static int post_initialize_sync() {
       fprintf(stderr, "\e[F\e[K");
       fflush(stderr);
     } else {
-      syslog(LOG_INFO, "Loaded 100%%");
+      Log(LOG_INFO, "Loaded 100%");
     }
   }
 
@@ -1741,7 +1774,7 @@ static int ensure_utf_8_encoding() {
     }
   }
 
-  syslog(LOG_ERR, "could not ensure UTF-8 encoding");
+  Log(LOG_ERR, "Cannot ensure UTF-8 encoding");
   return EXIT_CODE_GENERIC_FAILURE;
 }
 
@@ -1754,10 +1787,10 @@ struct Cleanup {
   ~Cleanup() {
     if (!mount_point.empty()) {
       if (unlinkat(dirfd, mount_point.c_str(), AT_REMOVEDIR) == 0) {
-        syslog(LOG_DEBUG, "Removed mount point %s", redact(mount_point));
+        Log(LOG_DEBUG, "Removed mount point ", Path(mount_point));
       } else {
-        syslog(LOG_ERR, "Cannot remove mount point %s: %s", redact(mount_point),
-               strerror(errno));
+        Log(LOG_ERR, "Cannot remove mount point ", Path(mount_point), ": ",
+            strerror(errno));
       }
     }
 
@@ -1766,12 +1799,12 @@ struct Cleanup {
     }
 
     if (close(dirfd) < 0) {
-      syslog(LOG_ERR, "Cannot close file descriptor: %s", strerror(errno));
+      Log(LOG_ERR, "Cannot close file descriptor: ", strerror(errno));
     }
   }
 };
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   setlogmask(LOG_UPTO(LOG_INFO));
 
@@ -1789,12 +1822,12 @@ int main(int argc, char** argv) {
   Cleanup cleanup{.args = &args};
 
   if (argc <= 0 || !argv) {
-    syslog(LOG_ERR, "missing command line arguments");
+    Log(LOG_ERR, "Missing command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
   if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
-    syslog(LOG_ERR, "could not parse command line arguments");
+    Log(LOG_ERR, "Cannot parse command line arguments");
     return EXIT_CODE_GENERIC_FAILURE;
   }
 
@@ -1844,13 +1877,13 @@ general options:
   if (!g_mount_point.empty()) {
     // Try to create the mount point directory if it doesn't exist.
     if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
-      syslog(LOG_DEBUG, "Created mount point %s", redact(g_mount_point));
+      Log(LOG_DEBUG, "Created mount point ", Path(g_mount_point));
       cleanup.mount_point = g_mount_point;
     } else if (errno == EEXIST) {
-      syslog(LOG_DEBUG, "Mount point %s already exists", redact(g_mount_point));
+      Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
     } else {
-      syslog(LOG_ERR, "Cannot create mount point %s: %s", redact(g_mount_point),
-             strerror(errno));
+      Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
+          strerror(errno));
     }
   } else {
     g_mount_point = g_archive_innername;
@@ -1858,19 +1891,19 @@ general options:
 
     for (int i = 0;;) {
       if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
-        syslog(LOG_INFO, "Created mount point %s", redact(g_mount_point));
+        Log(LOG_INFO, "Created mount point ", Path(g_mount_point));
         cleanup.mount_point = g_mount_point;
         fuse_opt_add_arg(&args, g_mount_point.c_str());
         break;
       }
 
       if (errno != EEXIST) {
-        syslog(LOG_ERR, "Cannot create mount point %s: %s",
-               redact(g_mount_point), strerror(errno));
+        Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
+            strerror(errno));
         return EXIT_FAILURE;
       }
 
-      syslog(LOG_DEBUG, "Mount point %s already exists", redact(g_mount_point));
+      Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
       g_mount_point.resize(n);
       g_mount_point += " (";
       g_mount_point += std::to_string(++i);
@@ -1881,4 +1914,7 @@ general options:
   TRY_EXIT_CODE(post_initialize_sync());
 
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
+} catch (const std::exception& e) {
+  Log(LOG_ERR, e.what());
+  return EXIT_FAILURE;
 }
