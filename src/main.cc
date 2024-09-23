@@ -73,19 +73,6 @@
     }                                \
   } while (false)
 
-// TRY_EXIT_CODE is like TRY but is used in the main function where Linux exit
-// codes range from 0 to 255. In contrast, TRY is used for other functions
-// where e.g. it's valid to return a negative value like -ENOENT.
-#define TRY_EXIT_CODE(operation)        \
-  do {                                  \
-    int try_status_code = operation;    \
-    if (try_status_code < 0) {          \
-      return EXIT_CODE_GENERIC_FAILURE; \
-    } else if (try_status_code > 0) {   \
-      return try_status_code;           \
-    }                                   \
-  } while (false)
-
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -95,8 +82,9 @@
 // operation, the parent process may very well ignore the exit code value after
 // daemonization succeeds.
 
-enum {
+enum ExitCode {
   EXIT_CODE_GENERIC_FAILURE = 1,
+  EXIT_CODE_CANNOT_CREATE_MOUNT_POINT = 10,
   EXIT_CODE_CANNOT_OPEN_ARCHIVE = 11,
   EXIT_CODE_PASSPHRASE_REQUIRED = 20,
   EXIT_CODE_PASSPHRASE_INCORRECT = 21,
@@ -329,7 +317,7 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 // libarchive isn't consistent in archive_read_has_encrypted_entries returning
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
-static int determine_passphrase_exit_code(const std::string_view e) {
+static ExitCode determine_passphrase_exit_code(const std::string_view e) {
   if (e.starts_with("Incorrect passphrase")) {
     return EXIT_CODE_PASSPHRASE_INCORRECT;
   }
@@ -973,7 +961,7 @@ struct Reader {
   }
 };
 
-// swap swaps fields of two readers.
+// Swaps fields of two Readers.
 static void swap(Reader& a, Reader& b) {
   std::swap(a.archive, b.archive);
   std::swap(a.archive_entry, b.archive_entry);
@@ -981,14 +969,11 @@ static void swap(Reader& a, Reader& b) {
   std::swap(a.offset_within_entry, b.offset_within_entry);
 }
 
-// acquire_reader returns a Reader positioned at the start (offset == 0) of the
-// given index'th entry of the archive.
+// Returns a Reader positioned at the start (offset == 0) of the given index'th
+// entry of the archive.
 static std::unique_ptr<Reader> acquire_reader(
     int64_t want_index_within_archive) {
-  if (want_index_within_archive < 0) {
-    Log(LOG_ERR, "Negative index_within_archive");
-    return nullptr;
-  }
+  assert(want_index_within_archive >= 0);
 
   int best_i = -1;
   int64_t best_index_within_archive = -1;
@@ -1132,12 +1117,12 @@ static std::string normalize_pathname(struct archive_entry* e) {
   return Path(s).Normalize();
 }
 
-static int insert_leaf_node(std::string&& pathname,
-                            std::string&& symlink,
-                            int64_t index_within_archive,
-                            int64_t size,
-                            time_t mtime,
-                            mode_t mode) {
+static void insert_leaf_node(std::string&& pathname,
+                             std::string&& symlink,
+                             int64_t index_within_archive,
+                             int64_t size,
+                             time_t mtime,
+                             mode_t mode) {
   Node* parent = g_root_node;
 
   const mode_t rx_bits = mode & 0555;
@@ -1148,7 +1133,7 @@ static int insert_leaf_node(std::string&& pathname,
   // p, q and r point to pathname fragments.
   const char* p = pathname.c_str();
   if (*p == 0 || *p != '/') {
-    return 0;
+    return;
   }
 
   const char* q = p + 1;
@@ -1181,7 +1166,7 @@ static int insert_leaf_node(std::string&& pathname,
       if (!ok) {
         Log(LOG_WARNING, "Name collision ", Path(abs_pathname));
         delete n;
-        return 0;
+        return;
       }
 
       parent->add_child(n);
@@ -1201,7 +1186,7 @@ static int insert_leaf_node(std::string&& pathname,
     if (n) {
       if (!n->is_dir()) {
         Log(LOG_WARNING, "Name collision ", Path(abs_pathname));
-        return 0;
+        return;
       }
     } else {
       n = new Node{.name = std::move(name),
@@ -1214,30 +1199,28 @@ static int insert_leaf_node(std::string&& pathname,
 
     parent = n;
   }
-
-  return 0;
 }
 
-static int insert_leaf(struct archive* a,
-                       struct archive_entry* e,
-                       int64_t index_within_archive) {
+static void insert_leaf(struct archive* a,
+                        struct archive_entry* e,
+                        int64_t index_within_archive) {
   std::string path = normalize_pathname(e);
   if (path.empty()) {
     Log(LOG_DEBUG, "Skipped entry with invalid path ",
         Path(archive_entry_pathname_utf8(e)));
-    return 0;
+    return;
   }
 
   const mode_t mode = archive_entry_mode(e);
 
   if (S_ISDIR(mode)) {
     Log(LOG_DEBUG, "Skipped dir ", Path(path));
-    return 0;
+    return;
   }
 
   if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
     Log(LOG_WARNING, "Skipped special file ", Path(path));
-    return 0;
+    return;
   }
 
   std::string symlink;
@@ -1252,7 +1235,7 @@ static int insert_leaf(struct archive* a,
 
     if (symlink.empty()) {
       Log(LOG_ERR, "Skipped empty link ", Path(path));
-      return 0;
+      return;
     }
   }
 
@@ -1271,7 +1254,7 @@ static int insert_leaf(struct archive* a,
       if (n < 0) {
         Log(LOG_ERR, "Cannot extract ", Path(path), ": ",
             archive_error_string(a));
-        return -EIO;
+        throw EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
       }
 
       assert(n <= SIDE_BUFFER_SIZE);
@@ -1279,15 +1262,12 @@ static int insert_leaf(struct archive* a,
     }
   }
 
-  return insert_leaf_node(std::move(path), std::move(symlink),
-                          index_within_archive, size, archive_entry_mtime(e),
-                          mode);
+  insert_leaf_node(std::move(path), std::move(symlink), index_within_archive,
+                   size, archive_entry_mtime(e), mode);
 }
 
-static int build_tree() {
-  if (g_initialize_index_within_archive < 0) {
-    return -EIO;
-  }
+static void build_tree() {
+  assert(g_initialize_index_within_archive >= 0);
   bool first = true;
   while (true) {
     if (first) {
@@ -1306,14 +1286,13 @@ static int build_tree() {
       } else if (status != ARCHIVE_OK) {
         Log(LOG_ERR,
             "Invalid archive: ", archive_error_string(g_initialize_archive));
-        return -EIO;
+        throw EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
       }
     }
 
-    TRY(insert_leaf(g_initialize_archive, g_initialize_archive_entry,
-                    g_initialize_index_within_archive));
+    insert_leaf(g_initialize_archive, g_initialize_archive_entry,
+                g_initialize_index_within_archive);
   }
-  return 0;
 }
 
 // ---- Lazy Initialization
@@ -1326,38 +1305,38 @@ static void insert_root_node() {
   g_nodes_by_name["/"] = g_root_node;
 }
 
-static int pre_initialize() {
+static void pre_initialize() {
   if (!g_archive_filename) {
     Log(LOG_ERR, "Missing archive_filename argument");
-    return EXIT_CODE_GENERIC_FAILURE;
+    throw EXIT_CODE_GENERIC_FAILURE;
   }
 
   g_archive_realpath = realpath(g_archive_filename, nullptr);
   if (!g_archive_realpath) {
     Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_filename), ": ",
         strerror(errno));
-    return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
+    throw EXIT_CODE_CANNOT_OPEN_ARCHIVE;
   }
 
   g_archive_fd = open(g_archive_realpath, O_RDONLY);
   if (g_archive_fd < 0) {
     Log(LOG_ERR, "Cannot open ", Path(g_archive_filename), ": ",
         strerror(errno));
-    return EXIT_CODE_CANNOT_OPEN_ARCHIVE;
+    throw EXIT_CODE_CANNOT_OPEN_ARCHIVE;
   }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
     Log(LOG_ERR, "Cannot stat ", Path(g_archive_filename), ": ",
         strerror(errno));
-    return EXIT_CODE_GENERIC_FAILURE;
+    throw EXIT_CODE_GENERIC_FAILURE;
   }
   g_archive_file_size = z.st_size;
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     Log(LOG_ERR, "Out of memory");
-    return EXIT_CODE_GENERIC_FAILURE;
+    throw EXIT_CODE_GENERIC_FAILURE;
   }
 
   archive_read_set_passphrase_callback(g_initialize_archive, nullptr,
@@ -1372,7 +1351,7 @@ static int pre_initialize() {
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
     g_initialize_index_within_archive = -1;
-    return EXIT_CODE_GENERIC_FAILURE;
+    throw EXIT_CODE_GENERIC_FAILURE;
   }
 
   while (true) {
@@ -1391,11 +1370,11 @@ static int pre_initialize() {
       g_initialize_archive_entry = nullptr;
       g_initialize_index_within_archive = -1;
       if (status != ARCHIVE_EOF) {
-        return EXIT_CODE_INVALID_ARCHIVE_HEADER;
+        throw EXIT_CODE_INVALID_ARCHIVE_HEADER;
       }
       // Building the tree for an empty archive is trivial.
       insert_root_node();
-      return 0;
+      return;
     }
 
     if (S_ISDIR(archive_entry_mode(g_initialize_archive_entry))) {
@@ -1417,7 +1396,7 @@ static int pre_initialize() {
         g_initialize_archive_entry = nullptr;
         g_initialize_index_within_archive = -1;
         Log(LOG_ERR, "Invalid raw archive");
-        return EXIT_CODE_INVALID_RAW_ARCHIVE;
+        throw EXIT_CODE_INVALID_RAW_ARCHIVE;
       }
 
       if (archive_filter_code(g_initialize_archive, i) != ARCHIVE_FILTER_NONE) {
@@ -1433,25 +1412,18 @@ static int pre_initialize() {
     if (n < 0) {
       const char* const e = archive_error_string(g_initialize_archive);
       Log(LOG_ERR, e);
-      const int ret = determine_passphrase_exit_code(e);
-      archive_read_free(g_initialize_archive);
-      g_initialize_archive = nullptr;
-      g_initialize_archive_entry = nullptr;
-      g_initialize_index_within_archive = -1;
-      return ret;
+      throw determine_passphrase_exit_code(e);
     }
   }
-
-  return 0;
 }
 
-static int post_initialize_sync() {
+static void post_initialize_sync() {
   if (g_root_node) {
-    return 0;
+    return;
   }
 
   insert_root_node();
-  const int error = build_tree();
+  build_tree();
   archive_read_free(g_initialize_archive);
   g_initialize_archive = nullptr;
   g_initialize_archive_entry = nullptr;
@@ -1461,7 +1433,7 @@ static int post_initialize_sync() {
     g_archive_fd = -1;
   }
 
-  if (g_displayed_progress && error == 0) {
+  if (g_displayed_progress) {
     if (isatty(STDERR_FILENO)) {
       fprintf(stderr, "\e[F\e[K");
       fflush(stderr);
@@ -1469,8 +1441,6 @@ static int post_initialize_sync() {
       Log(LOG_INFO, "Loaded 100%");
     }
   }
-
-  return error;
 }
 
 // ---- FUSE Callbacks
@@ -1744,7 +1714,7 @@ static int my_opt_proc(void* /*private_data*/,
   return KEEP;
 }
 
-static int ensure_utf_8_encoding() {
+static void ensure_utf_8_encoding() {
   // libarchive (especially for reading 7z) has locale-dependent behavior.
   // Non-ASCII pathnames can trigger "Pathname cannot be converted from
   // UTF-16LE to current locale" warnings from archive_read_next_header and
@@ -1767,15 +1737,15 @@ static int ensure_utf_8_encoding() {
       "",
   };
 
+  const std::string_view want = "UTF-8";
   for (const char* const locale : locales) {
-    if (setlocale(LC_ALL, locale) &&
-        (strcmp("UTF-8", nl_langinfo(CODESET)) == 0)) {
-      return 0;
+    if (setlocale(LC_ALL, locale) && want == nl_langinfo(CODESET)) {
+      return;
     }
   }
 
   Log(LOG_ERR, "Cannot ensure UTF-8 encoding");
-  return EXIT_CODE_GENERIC_FAILURE;
+  throw EXIT_CODE_GENERIC_FAILURE;
 }
 
 // Removes directory `mount_point` in destructor.
@@ -1816,7 +1786,7 @@ int main(int argc, char** argv) try {
     g_side_buffer_metadata[i].lru_priority = 0;
   }
 
-  TRY_EXIT_CODE(ensure_utf_8_encoding());
+  ensure_utf_8_encoding();
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   Cleanup cleanup{.args = &args};
@@ -1872,7 +1842,7 @@ general options:
 
   g_uid = getuid();
   g_gid = getgid();
-  TRY_EXIT_CODE(pre_initialize());
+  pre_initialize();
 
   if (!g_mount_point.empty()) {
     // Try to create the mount point directory if it doesn't exist.
@@ -1884,6 +1854,7 @@ general options:
     } else {
       Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
           strerror(errno));
+      throw EXIT_CODE_CANNOT_CREATE_MOUNT_POINT;
     }
   } else {
     g_mount_point = g_archive_innername;
@@ -1900,7 +1871,7 @@ general options:
       if (errno != EEXIST) {
         Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
             strerror(errno));
-        return EXIT_FAILURE;
+        throw EXIT_CODE_CANNOT_CREATE_MOUNT_POINT;
       }
 
       Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
@@ -1911,9 +1882,11 @@ general options:
     }
   }
 
-  TRY_EXIT_CODE(post_initialize_sync());
+  post_initialize_sync();
 
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
+} catch (const ExitCode e) {
+  return e;
 } catch (const std::exception& e) {
   Log(LOG_ERR, e.what());
   return EXIT_FAILURE;
