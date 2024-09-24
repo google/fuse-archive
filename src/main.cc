@@ -60,6 +60,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -132,7 +133,7 @@ enum {
   KEY_REDACT,
 };
 
-static struct fuse_opt g_fuse_opts[] = {
+static fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", KEY_HELP),            //
     FUSE_OPT_KEY("--help", KEY_HELP),        //
     FUSE_OPT_KEY("-V", KEY_VERSION),         //
@@ -156,13 +157,13 @@ static struct fuse_opt g_fuse_opts[] = {
     FUSE_OPT_END,
 };
 
-// g_archive_filename is the command line argument naming the archive file.
-static const char* g_archive_filename = nullptr;
+// Command line argument naming the archive file.
+static std::string g_archive_filename;
 
-// g_archive_innername is the base name of g_archive_filename, minus the file
-// extension suffix. For example, if g_archive_filename is "/foo/bar.ext0.ext1"
-// then g_archive_innername is "bar.ext0".
-static const char* g_archive_innername = nullptr;
+// Base name of g_archive_filename, minus the file extension suffix. For
+// example, if g_archive_filename is "/foo/bar.tar.gz" then
+// g_archive_innername is "bar".
+static std::string g_archive_innername;
 
 // Path of the mount point.
 static std::string g_mount_point;
@@ -210,8 +211,8 @@ static bool g_archive_is_raw = false;
 //
 // libfuse will override my_getattr's use of these variables if the "-o uid=N"
 // or "-o gid=N" command line options are set.
-static uid_t g_uid = 0;
-static gid_t g_gid = 0;
+static const uid_t g_uid = getuid();
+static const gid_t g_gid = getgid();
 
 // We serve ls and stat requests from an in-memory directory tree of nodes.
 // Building that tree is one of the first things that we do.
@@ -304,6 +305,11 @@ class Path : public std::string_view {
     }
 
     return last_dot;
+  }
+
+  // Removes the final extension, if any.
+  Path WithoutFinalExtension() const {
+    return substr(0, FinalExtensionPosition());
   }
 
   // Removes the extension, if any.
@@ -1157,7 +1163,7 @@ static std::string normalize_pathname(struct archive_entry* e) {
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive_is_raw && g_archive_innername && *g_archive_innername &&
+  if (g_archive_is_raw && !g_archive_innername.empty() &&
       std::string_view("data") == s) {
     return Path(g_archive_innername).Normalize();
   }
@@ -1266,6 +1272,9 @@ static void insert_leaf(struct archive* a,
 
   switch (ft) {
     case FileType::Directory:
+      // TODO: Create a Directory Node if necessary.
+      return;
+
     case FileType::CharDevice:
     case FileType::BlockDevice:
     case FileType::Fifo:
@@ -1355,12 +1364,12 @@ static void insert_root_node() {
 }
 
 static void pre_initialize() {
-  if (!g_archive_filename) {
+  if (g_archive_filename.empty()) {
     Log(LOG_ERR, "Missing archive_filename argument");
     throw ExitCode::GENERIC_FAILURE;
   }
 
-  g_archive_realpath = realpath(g_archive_filename, nullptr);
+  g_archive_realpath = realpath(g_archive_filename.c_str(), nullptr);
   if (!g_archive_realpath) {
     Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_filename), ": ",
         strerror(errno));
@@ -1378,14 +1387,14 @@ static void pre_initialize() {
   if (fstat(g_archive_fd, &z) != 0) {
     Log(LOG_ERR, "Cannot stat ", Path(g_archive_filename), ": ",
         strerror(errno));
-    throw ExitCode::GENERIC_FAILURE;
+    throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
   g_archive_file_size = z.st_size;
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     Log(LOG_ERR, "Out of memory");
-    throw ExitCode::GENERIC_FAILURE;
+    throw std::bad_alloc();
   }
 
   archive_read_set_passphrase_callback(g_initialize_archive, nullptr,
@@ -1396,10 +1405,6 @@ static void pre_initialize() {
   if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
     Log(LOG_ERR,
         "Cannot open archive: ", archive_error_string(g_initialize_archive));
-    archive_read_free(g_initialize_archive);
-    g_initialize_archive = nullptr;
-    g_initialize_archive_entry = nullptr;
-    g_initialize_index_within_archive = -1;
     throw ExitCode::GENERIC_FAILURE;
   }
 
@@ -1712,9 +1717,9 @@ const char* innername(const char* filename) {
 }
 
 static int my_opt_proc(void* /*private_data*/,
-                       const char* arg,
-                       int key,
-                       struct fuse_args* /*out_args*/) {
+                       const char* const arg,
+                       int const key,
+                       fuse_args* /*out_args*/) {
   constexpr int KEEP = 1;
   constexpr int DISCARD = 0;
   constexpr int ERROR = -1;
@@ -1724,7 +1729,8 @@ static int my_opt_proc(void* /*private_data*/,
       switch (++g_options.arg_count) {
         case 1:
           g_archive_filename = arg;
-          g_archive_innername = innername(arg);
+          g_archive_innername =
+              Path(g_archive_filename).Split().second.WithoutFinalExtension();
           return DISCARD;
 
         case 2:
@@ -1799,14 +1805,14 @@ static void ensure_utf_8_encoding() {
 
 // Removes directory `mount_point` in destructor.
 struct Cleanup {
-  const int dirfd = open(".", O_DIRECTORY | O_PATH);
   fuse_args* args = nullptr;
+  int dirfd = -1;
   std::string mount_point;
 
   ~Cleanup() {
     if (!mount_point.empty()) {
       if (unlinkat(dirfd, mount_point.c_str(), AT_REMOVEDIR) == 0) {
-        Log(LOG_DEBUG, "Removed mount point ", Path(mount_point));
+        Log(LOG_INFO, "Removed mount point ", Path(mount_point));
       } else {
         Log(LOG_ERR, "Cannot remove mount point ", Path(mount_point), ": ",
             strerror(errno));
@@ -1814,12 +1820,12 @@ struct Cleanup {
     }
 
 #ifndef NDEBUG
-    if (args) {
-      fuse_opt_free_args(args);
-    }
-
     if (dirfd >= 0 && close(dirfd) < 0) {
       Log(LOG_ERR, "Cannot close file descriptor: ", strerror(errno));
+    }
+
+    if (args) {
+      fuse_opt_free_args(args);
     }
 #endif
   }
@@ -1839,15 +1845,10 @@ int main(int argc, char** argv) try {
 
   ensure_utf_8_encoding();
 
-  struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+  fuse_args args = FUSE_ARGS_INIT(argc, argv);
   Cleanup cleanup{.args = &args};
 
-  if (argc <= 0 || !argv) {
-    Log(LOG_ERR, "Missing command line arguments");
-    throw ExitCode::GENERIC_FAILURE;
-  }
-
-  if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
+  if (fuse_opt_parse(&args, nullptr, g_fuse_opts, &my_opt_proc) < 0) {
     Log(LOG_ERR, "Cannot parse command line arguments");
     throw ExitCode::GENERIC_FAILURE;
   }
@@ -1891,49 +1892,76 @@ general options:
     return EXIT_SUCCESS;
   }
 
-  g_uid = getuid();
-  g_gid = getgid();
+  // Determine where the mount point should be.
+  std::string mount_point_parent, mount_point_basename;
+  if (!g_mount_point.empty()) {
+    std::tie(mount_point_parent, mount_point_basename) =
+        Path(g_mount_point).WithoutTrailingSeparator().Split();
+  } else {
+    std::tie(mount_point_parent, mount_point_basename) =
+        Path(g_archive_filename).WithoutExtension().Split();
+  }
+
+  if (mount_point_parent.empty()) {
+    mount_point_parent = ".";
+  }
+
+  // Get a file descriptor to the parent directory of the mount point.
+  const int mount_point_parent_fd =
+      open(mount_point_parent.c_str(), O_DIRECTORY | O_PATH);
+  if (mount_point_parent_fd < 0) {
+    Log(LOG_ERR, "Cannot open directory ", Path(mount_point_parent), ": ",
+        strerror(errno));
+    throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
+  }
+
+  Log(LOG_DEBUG, "Opened directory ", Path(mount_point_parent));
+  cleanup.dirfd = mount_point_parent_fd;
+
+  // Read archive and build tree.
   pre_initialize();
+  post_initialize_sync();
 
   if (!g_mount_point.empty()) {
     // Try to create the mount point directory if it doesn't exist.
-    if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
-      Log(LOG_DEBUG, "Created mount point ", Path(g_mount_point));
-      cleanup.mount_point = g_mount_point;
+    if (mkdirat(mount_point_parent_fd, mount_point_basename.c_str(), 0777) ==
+        0) {
+      Log(LOG_INFO, "Created mount point ", Path(mount_point_basename), " in ",
+          Path(mount_point_parent));
+      cleanup.mount_point = mount_point_basename;
     } else if (errno == EEXIST) {
-      Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
+      Log(LOG_INFO, "Using existing mount point ", Path(mount_point_basename),
+          " in ", Path(mount_point_parent));
     } else {
-      Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
-          strerror(errno));
+      Log(LOG_ERR, "Cannot create mount point ", Path(mount_point_basename),
+          " in ", Path(mount_point_parent), ": ", strerror(errno));
       throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
     }
   } else {
-    g_mount_point = g_archive_innername;
-    const auto n = g_mount_point.size();
-
+    // Create a new mount point directory with a unique name.
+    const auto n = mount_point_basename.size();
     for (int i = 0;;) {
-      if (mkdirat(cleanup.dirfd, g_mount_point.c_str(), 0777) == 0) {
-        Log(LOG_INFO, "Created mount point ", Path(g_mount_point));
-        cleanup.mount_point = g_mount_point;
-        fuse_opt_add_arg(&args, g_mount_point.c_str());
+      if (mkdirat(mount_point_parent_fd, mount_point_basename.c_str(), 0777) ==
+          0) {
+        Log(LOG_INFO, "Created mount point ", Path(mount_point_basename),
+            " in ", Path(mount_point_parent));
+        cleanup.mount_point = mount_point_basename;
+        fuse_opt_add_arg(&args, mount_point_basename.c_str());
         break;
       }
 
       if (errno != EEXIST) {
-        Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
-            strerror(errno));
+        Log(LOG_ERR, "Cannot create mount point ", Path(mount_point_basename),
+            " in ", Path(mount_point_parent), ": ", strerror(errno));
         throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
       }
 
-      Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
-      g_mount_point.resize(n);
-      g_mount_point += " (";
-      g_mount_point += std::to_string(++i);
-      g_mount_point += ")";
+      Log(LOG_DEBUG, "Mount point ", Path(mount_point_basename),
+          " already exists in ", Path(mount_point_parent));
+      mount_point_basename.resize(n);
+      mount_point_basename += StrCat(" (", ++i, ")");
     }
   }
-
-  post_initialize_sync();
 
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
 } catch (const ExitCode e) {
