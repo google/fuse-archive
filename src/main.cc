@@ -222,160 +222,6 @@ static int64_t g_initialize_index_within_archive = -1;
 // g_displayed_progress is whether we have printed a progress message.
 static bool g_displayed_progress = false;
 
-// These global variables are the in-memory directory tree of nodes.
-//
-// Building the directory tree can take minutes, for archive file formats like
-// .tar.gz that are compressed but also do not contain an explicit on-disk
-// directory of archive entries.
-struct Node;
-static std::unordered_map<std::string, Node*> g_nodes_by_name;
-static std::vector<Node*> g_nodes_by_index;
-
-// g_root_node being non-nullptr means that initialization is complete .
-static Node* g_root_node = nullptr;
-static constexpr blksize_t block_size = 512;
-static blkcnt_t g_block_count = 1;
-
-// g_saved_readers is a cache of warm readers. libarchive is designed for
-// streaming access, not random access, and generally does not support seeking
-// backwards. For example, if some other program reads "/foo", "/bar" and then
-// "/baz" sequentially from an archive (via this program) and those correspond
-// to the 60th, 40th and 50th archive entries in that archive, then:
-//
-//  - A naive implementation (calling archive_read_free when each FUSE file is
-//    closed) would have to start iterating from the first archive entry each
-//    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
-//  - Saving readers in an LRU (Least Recently Used) cache (calling
-//    release_reader when each FUSE file is closed) allows just 110 iterations
-//    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for "/baz".
-//
-// Re-use eligibility is based on the archive entries' sequential numerical
-// indexes within the archive, not on their string pathnames.
-//
-// When copying all of the files out of an archive (e.g. "cp -r" from the
-// command line) and the files are accessed in the natural order, caching
-// readers means that the overall time can be linear instead of quadratic.
-//
-// Each array element is a pair. The first half of the pair is a unique_ptr for
-// the Reader. The second half of the pair is a uint64_t LRU priority value.
-// Higher/lower values are more/less recently used and the release_reader
-// function evicts the array element with the lowest LRU priority value.
-struct Reader;
-static constexpr int NUM_SAVED_READERS = 8;
-static std::pair<std::unique_ptr<Reader>, uint64_t>
-    g_saved_readers[NUM_SAVED_READERS] = {};
-
-// g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
-// statically allocated buffers used as a destination for decompressed bytes
-// when Reader::advance_offset isn't a no-op. These buffers are roughly
-// equivalent to Unix's /dev/null or Go's io.Discard as a first approximation.
-// However, since we are already producing valid decompressed bytes, by saving
-// them (and their metadata), we may be able to serve some subsequent my_read
-// requests cheaply, without having to spin up another libarchive decompressor
-// to walk forward from the start of the archive entry.
-//
-// In particular (https://crbug.com/1245925#c18), even when libfuse is single-
-// threaded, we have seen kernel readahead causing the offset arguments in a
-// sequence of my_read calls to sometimes arrive out-of-order, where
-// conceptually consecutive reads are swapped. With side buffers, we can serve
-// the second-to-arrive request by a cheap memcpy instead of an expensive
-// "re-do decompression from the start". That side-buffer was filled by a
-// Reader::advance_offset side-effect from serving the first-to-arrive request.
-static uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
-static struct side_buffer_metadata {
-  int64_t index_within_archive;
-  int64_t offset_within_entry;
-  int64_t length;
-  uint64_t lru_priority;
-
-  static uint64_t next_lru_priority;
-
-  bool contains(int64_t index_within_archive,
-                int64_t offset_within_entry,
-                uint64_t length) {
-    if (this->index_within_archive >= 0 &&
-        this->index_within_archive == index_within_archive &&
-        this->offset_within_entry <= offset_within_entry) {
-      const int64_t o = offset_within_entry - this->offset_within_entry;
-      return this->length >= o && (this->length - o) >= length;
-    }
-    return false;
-  }
-} g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
-uint64_t side_buffer_metadata::next_lru_priority = 0;
-
-// The side buffers are also repurposed as source (compressed) and destination
-// (decompressed) buffers during the initial pass over the archive file.
-#define SIDE_BUFFER_INDEX_COMPRESSED 0
-#define SIDE_BUFFER_INDEX_DECOMPRESSED 1
-
-// ---- Libarchive Error Codes
-
-// determine_passphrase_exit_code converts libarchive errors to fuse-archive
-// exit codes. libarchive doesn't have designated passphrase-related error
-// numbers. As for whether a particular archive file's encryption is supported,
-// libarchive isn't consistent in archive_read_has_encrypted_entries returning
-// ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
-// comparison on the various possible error messages.
-static ExitCode determine_passphrase_exit_code(const std::string_view e) {
-  if (e.starts_with("Incorrect passphrase")) {
-    return EXIT_CODE_PASSPHRASE_INCORRECT;
-  }
-
-  if (e.starts_with("Passphrase required")) {
-    return EXIT_CODE_PASSPHRASE_REQUIRED;
-  }
-
-  static const std::string_view not_supported_prefixes[] = {
-      "Crypto codec not supported",
-      "Decryption is unsupported",
-      "Encrypted file is unsupported",
-      "Encryption is not supported",
-      "RAR encryption support unavailable",
-      "The archive header is encrypted, but currently not supported",
-      "The file content is encrypted, but currently not supported",
-      "Unsupported encryption format",
-  };
-
-  for (const std::string_view prefix : not_supported_prefixes) {
-    if (e.starts_with(prefix)) {
-      return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
-    }
-  }
-
-  return EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
-}
-
-template <typename... Args>
-static std::string StrCat(Args&&... args) {
-  return (std::ostringstream() << ... << std::forward<Args>(args)).str();
-}
-
-// Logs a debug or error message.
-//
-// `priority` is one of:
-// LOG_ERR        error conditions
-// LOG_WARNING    warning conditions
-// LOG_NOTICE     normal, but significant, condition
-// LOG_INFO       informational message
-// LOG_DEBUG      debug-level message
-template <typename... Args>
-static void Log(int priority, Args&&... args) noexcept {
-  try {
-    syslog(priority, "%s", StrCat(std::forward<Args>(args)...).c_str());
-  } catch (const std::exception& e) {
-    syslog(LOG_ERR, "Cannot log message: %s", e.what());
-  }
-}
-
-// Throws an std::system_error with the current errno.
-template <typename... Args>
-[[noreturn]] static void ThrowSystemError(Args&&... args) {
-  const int err = errno;
-  throw std::system_error(err, std::system_category(),
-                          StrCat(std::forward<Args>(args)...));
-}
-
 // Path manipulations.
 class Path : public std::string_view {
  public:
@@ -569,8 +415,6 @@ class Path : public std::string_view {
   }
 };
 
-// ---- Logging
-
 static std::ostream& operator<<(std::ostream& out, const Path path) {
   if (g_options.redact)
     return out << "(redacted)";
@@ -596,6 +440,263 @@ static std::ostream& operator<<(std::ostream& out, const Path path) {
 
   out.put('\'');
   return out;
+}
+
+enum class FileType : mode_t {
+  Unknown = 0,            // Unknown
+  BlockDevice = S_IFBLK,  // Block-oriented device
+  CharDevice = S_IFCHR,   // Character-oriented device
+  Directory = S_IFDIR,    // Directory
+  Fifo = S_IFIFO,         // FIFO or pipe
+  File = S_IFREG,         // Regular file
+  Socket = S_IFSOCK,      // Socket
+  Symlink = S_IFLNK,      // Symbolic link
+};
+
+static FileType GetFileType(mode_t mode) {
+  return FileType(mode & S_IFMT);
+}
+
+static std::ostream& operator<<(std::ostream& out, const FileType t) {
+  switch (t) {
+    case FileType::BlockDevice:
+      return out << "Block Device";
+    case FileType::CharDevice:
+      return out << "Character Device";
+    case FileType::Directory:
+      return out << "Directory";
+    case FileType::Fifo:
+      return out << "FIFO";
+    case FileType::File:
+      return out << "File";
+    case FileType::Socket:
+      return out << "Socket";
+    case FileType::Symlink:
+      return out << "Symlink";
+    default:
+      return out << "Unknown";
+  }
+}
+
+static constexpr blksize_t block_size = 512;
+
+struct Node {
+  std::string name;
+  std::string symlink;
+  mode_t mode;
+  int64_t index_within_archive = -1;
+  int64_t size = 0;
+  time_t mtime = 0;
+  int nlink = 0;
+
+  Node* parent = nullptr;
+  Node* last_child = nullptr;
+  Node* first_child = nullptr;
+  Node* next_sibling = nullptr;
+
+  bool is_dir() const { return S_ISDIR(mode); }
+
+  void add_child(Node* n) {
+    assert(n);
+    assert(!n->parent);
+    assert(is_dir());
+    // Count one "block" for each directory entry.
+    size += block_size;
+    n->nlink += 1;
+    nlink += n->is_dir();
+    n->parent = this;
+    if (last_child == nullptr) {
+      last_child = n;
+      first_child = n;
+    } else {
+      last_child->next_sibling = n;
+      last_child = n;
+    }
+  }
+
+  int64_t get_block_count() const {
+    return (size + (block_size - 1)) / block_size;
+  }
+
+  struct stat get_stat() const {
+    struct stat z = {};
+    z.st_nlink = nlink;
+    z.st_mode = mode;
+    z.st_nlink = 1;
+    z.st_uid = g_uid;
+    z.st_gid = g_gid;
+    z.st_size = size;
+    z.st_mtime = mtime;
+    z.st_blksize = block_size;
+    z.st_blocks = get_block_count();
+    return z;
+  }
+
+  std::string get_path() const {
+    if (!parent) {
+      return name;
+    }
+
+    std::string path = parent->get_path();
+    Path::Append(&path, name);
+    return path;
+  }
+};
+
+static std::ostream& operator<<(std::ostream& out, const Node& n) {
+  return out << GetFileType(n.mode) << " " << Path(n.get_path());
+}
+
+// These global variables are the in-memory directory tree of nodes.
+//
+// Building the directory tree can take minutes, for archive file formats like
+// .tar.gz that are compressed but also do not contain an explicit on-disk
+// directory of archive entries.
+static std::unordered_map<std::string, Node*> g_nodes_by_name;
+static std::vector<Node*> g_nodes_by_index;
+
+// g_root_node being non-nullptr means that initialization is complete .
+static Node* g_root_node = nullptr;
+static blkcnt_t g_block_count = 1;
+
+// g_saved_readers is a cache of warm readers. libarchive is designed for
+// streaming access, not random access, and generally does not support seeking
+// backwards. For example, if some other program reads "/foo", "/bar" and then
+// "/baz" sequentially from an archive (via this program) and those correspond
+// to the 60th, 40th and 50th archive entries in that archive, then:
+//
+//  - A naive implementation (calling archive_read_free when each FUSE file is
+//    closed) would have to start iterating from the first archive entry each
+//    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
+//  - Saving readers in an LRU (Least Recently Used) cache (calling
+//    release_reader when each FUSE file is closed) allows just 110 iterations
+//    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for "/baz".
+//
+// Re-use eligibility is based on the archive entries' sequential numerical
+// indexes within the archive, not on their string pathnames.
+//
+// When copying all of the files out of an archive (e.g. "cp -r" from the
+// command line) and the files are accessed in the natural order, caching
+// readers means that the overall time can be linear instead of quadratic.
+//
+// Each array element is a pair. The first half of the pair is a unique_ptr for
+// the Reader. The second half of the pair is a uint64_t LRU priority value.
+// Higher/lower values are more/less recently used and the release_reader
+// function evicts the array element with the lowest LRU priority value.
+struct Reader;
+static constexpr int NUM_SAVED_READERS = 8;
+static std::pair<std::unique_ptr<Reader>, uint64_t>
+    g_saved_readers[NUM_SAVED_READERS] = {};
+
+// g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
+// statically allocated buffers used as a destination for decompressed bytes
+// when Reader::advance_offset isn't a no-op. These buffers are roughly
+// equivalent to Unix's /dev/null or Go's io.Discard as a first approximation.
+// However, since we are already producing valid decompressed bytes, by saving
+// them (and their metadata), we may be able to serve some subsequent my_read
+// requests cheaply, without having to spin up another libarchive decompressor
+// to walk forward from the start of the archive entry.
+//
+// In particular (https://crbug.com/1245925#c18), even when libfuse is single-
+// threaded, we have seen kernel readahead causing the offset arguments in a
+// sequence of my_read calls to sometimes arrive out-of-order, where
+// conceptually consecutive reads are swapped. With side buffers, we can serve
+// the second-to-arrive request by a cheap memcpy instead of an expensive
+// "re-do decompression from the start". That side-buffer was filled by a
+// Reader::advance_offset side-effect from serving the first-to-arrive request.
+static uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
+static struct side_buffer_metadata {
+  int64_t index_within_archive;
+  int64_t offset_within_entry;
+  int64_t length;
+  uint64_t lru_priority;
+
+  static uint64_t next_lru_priority;
+
+  bool contains(int64_t index_within_archive,
+                int64_t offset_within_entry,
+                uint64_t length) {
+    if (this->index_within_archive >= 0 &&
+        this->index_within_archive == index_within_archive &&
+        this->offset_within_entry <= offset_within_entry) {
+      const int64_t o = offset_within_entry - this->offset_within_entry;
+      return this->length >= o && (this->length - o) >= length;
+    }
+    return false;
+  }
+} g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
+uint64_t side_buffer_metadata::next_lru_priority = 0;
+
+// The side buffers are also repurposed as source (compressed) and destination
+// (decompressed) buffers during the initial pass over the archive file.
+#define SIDE_BUFFER_INDEX_COMPRESSED 0
+#define SIDE_BUFFER_INDEX_DECOMPRESSED 1
+
+// ---- Libarchive Error Codes
+
+// determine_passphrase_exit_code converts libarchive errors to fuse-archive
+// exit codes. libarchive doesn't have designated passphrase-related error
+// numbers. As for whether a particular archive file's encryption is supported,
+// libarchive isn't consistent in archive_read_has_encrypted_entries returning
+// ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
+// comparison on the various possible error messages.
+static ExitCode determine_passphrase_exit_code(const std::string_view e) {
+  if (e.starts_with("Incorrect passphrase")) {
+    return EXIT_CODE_PASSPHRASE_INCORRECT;
+  }
+
+  if (e.starts_with("Passphrase required")) {
+    return EXIT_CODE_PASSPHRASE_REQUIRED;
+  }
+
+  static const std::string_view not_supported_prefixes[] = {
+      "Crypto codec not supported",
+      "Decryption is unsupported",
+      "Encrypted file is unsupported",
+      "Encryption is not supported",
+      "RAR encryption support unavailable",
+      "The archive header is encrypted, but currently not supported",
+      "The file content is encrypted, but currently not supported",
+      "Unsupported encryption format",
+  };
+
+  for (const std::string_view prefix : not_supported_prefixes) {
+    if (e.starts_with(prefix)) {
+      return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
+    }
+  }
+
+  return EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
+}
+
+template <typename... Args>
+static std::string StrCat(Args&&... args) {
+  return (std::ostringstream() << ... << std::forward<Args>(args)).str();
+}
+
+// Logs a debug or error message.
+//
+// `priority` is one of:
+// LOG_ERR        error conditions
+// LOG_WARNING    warning conditions
+// LOG_NOTICE     normal, but significant, condition
+// LOG_INFO       informational message
+// LOG_DEBUG      debug-level message
+template <typename... Args>
+static void Log(int priority, Args&&... args) noexcept {
+  try {
+    syslog(priority, "%s", StrCat(std::forward<Args>(args)...).c_str());
+  } catch (const std::exception& e) {
+    syslog(LOG_ERR, "Cannot log message: %s", e.what());
+  }
+}
+
+// Throws an std::system_error with the current errno.
+template <typename... Args>
+[[noreturn]] static void ThrowSystemError(Args&&... args) {
+  const int err = errno;
+  throw std::system_error(err, std::system_category(),
+                          StrCat(std::forward<Args>(args)...));
 }
 
 // Temporarily suppresses the echo on the terminal.
@@ -1042,59 +1143,6 @@ static void release_reader(std::unique_ptr<Reader> r) {
 
 // ---- In-Memory Directory Tree
 
-struct Node {
-  std::string name;
-  std::string symlink;
-  mode_t mode;
-  int64_t index_within_archive = -1;
-  int64_t size = 0;
-  time_t mtime = 0;
-  int nlink = 0;
-
-  Node* parent = nullptr;
-  Node* last_child = nullptr;
-  Node* first_child = nullptr;
-  Node* next_sibling = nullptr;
-
-  bool is_dir() const { return S_ISDIR(mode); }
-
-  void add_child(Node* n) {
-    assert(n);
-    assert(!n->parent);
-    assert(is_dir());
-    // Count one "block" for each directory entry.
-    size += block_size;
-    n->nlink += 1;
-    nlink += n->is_dir();
-    n->parent = this;
-    if (last_child == nullptr) {
-      last_child = n;
-      first_child = n;
-    } else {
-      last_child->next_sibling = n;
-      last_child = n;
-    }
-  }
-
-  int64_t get_block_count() const {
-    return (size + (block_size - 1)) / block_size;
-  }
-
-  struct stat get_stat() const {
-    struct stat z = {};
-    z.st_nlink = nlink;
-    z.st_mode = mode;
-    z.st_nlink = 1;
-    z.st_uid = g_uid;
-    z.st_gid = g_gid;
-    z.st_size = size;
-    z.st_mtime = mtime;
-    z.st_blksize = block_size;
-    z.st_blocks = get_block_count();
-    return z;
-  }
-};
-
 // normalize_pathname validates and returns e's pathname, prepending a leading
 // "/" if it didn't already have one.
 static std::string normalize_pathname(struct archive_entry* e) {
@@ -1161,10 +1209,10 @@ static void insert_leaf_node(std::string&& pathname,
                                .mtime = mtime};
 
       // Add to g_nodes_by_name.
-      const auto [_, ok] =
+      const auto [it, ok] =
           g_nodes_by_name.try_emplace(std::move(abs_pathname), n);
       if (!ok) {
-        Log(LOG_WARNING, "Name collision ", Path(abs_pathname));
+        Log(LOG_WARNING, "Name collision between ", *n, " and ", *it->second);
         delete n;
         return;
       }
@@ -1204,39 +1252,40 @@ static void insert_leaf_node(std::string&& pathname,
 static void insert_leaf(struct archive* a,
                         struct archive_entry* e,
                         int64_t index_within_archive) {
+  const mode_t mode = archive_entry_mode(e);
+  const FileType ft = GetFileType(mode);
+
   std::string path = normalize_pathname(e);
   if (path.empty()) {
-    Log(LOG_DEBUG, "Skipped entry with invalid path ",
+    Log(LOG_DEBUG, "Skipped ", ft, " with invalid path ",
         Path(archive_entry_pathname_utf8(e)));
     return;
   }
 
-  const mode_t mode = archive_entry_mode(e);
-
-  if (S_ISDIR(mode)) {
-    Log(LOG_DEBUG, "Skipped dir ", Path(path));
-    return;
-  }
-
-  if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
-    Log(LOG_WARNING, "Skipped special file ", Path(path));
-    return;
-  }
-
   std::string symlink;
-  if (S_ISLNK(mode)) {
-    const char* s = archive_entry_symlink_utf8(e);
-    if (!s) {
-      s = archive_entry_symlink(e);
-    }
-    if (s) {
-      symlink = std::string(s);
-    }
 
-    if (symlink.empty()) {
-      Log(LOG_ERR, "Skipped empty link ", Path(path));
+  switch (ft) {
+    case FileType::Directory:
+    case FileType::CharDevice:
+    case FileType::BlockDevice:
+    case FileType::Fifo:
+    case FileType::Socket:
+      Log(LOG_DEBUG, "Skipped ", ft, " ", Path(path));
       return;
-    }
+
+    case FileType::Symlink:
+      if (const char* const s =
+              archive_entry_symlink_utf8(e) ?: archive_entry_symlink(e)) {
+        symlink = std::string(s);
+      }
+
+      if (symlink.empty()) {
+        Log(LOG_ERR, "Skipped empty link ", Path(path));
+        return;
+      }
+
+    default:
+      break;
   }
 
   int64_t size = archive_entry_size(e);
@@ -1301,7 +1350,7 @@ static void build_tree() {
 // described in the "Building is split into two parts" comment above.
 
 static void insert_root_node() {
-  g_root_node = new Node{.mode = S_IFDIR, .nlink = 1};
+  g_root_node = new Node{.name = "/", .mode = S_IFDIR, .nlink = 1};
   g_nodes_by_name["/"] = g_root_node;
 }
 
