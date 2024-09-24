@@ -211,7 +211,7 @@ func testReadAt() error {
 		if a > b {
 			a, b = b, a
 		}
-		fmt.Printf("  - test ReadAt [%4d .. %4d]\n", a, b)
+		// fmt.Printf("  - test ReadAt [%4d .. %4d]\n", a, b)
 
 		memset(buf, 'A'+byte(i))
 		n, err := f.ReadAt(buf[:b-a], int64(a))
