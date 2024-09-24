@@ -82,16 +82,16 @@
 // operation, the parent process may very well ignore the exit code value after
 // daemonization succeeds.
 
-enum ExitCode {
-  EXIT_CODE_GENERIC_FAILURE = 1,
-  EXIT_CODE_CANNOT_CREATE_MOUNT_POINT = 10,
-  EXIT_CODE_CANNOT_OPEN_ARCHIVE = 11,
-  EXIT_CODE_PASSPHRASE_REQUIRED = 20,
-  EXIT_CODE_PASSPHRASE_INCORRECT = 21,
-  EXIT_CODE_PASSPHRASE_NOT_SUPPORTED = 22,
-  EXIT_CODE_INVALID_RAW_ARCHIVE = 30,
-  EXIT_CODE_INVALID_ARCHIVE_HEADER = 31,
-  EXIT_CODE_INVALID_ARCHIVE_CONTENTS = 32,
+enum class ExitCode {
+  GENERIC_FAILURE = 1,
+  CANNOT_CREATE_MOUNT_POINT = 10,
+  CANNOT_OPEN_ARCHIVE = 11,
+  PASSPHRASE_REQUIRED = 20,
+  PASSPHRASE_INCORRECT = 21,
+  PASSPHRASE_NOT_SUPPORTED = 22,
+  INVALID_RAW_ARCHIVE = 30,
+  INVALID_ARCHIVE_HEADER = 31,
+  INVALID_ARCHIVE_CONTENTS = 32,
 };
 
 // ---- Compile-time Configuration
@@ -642,11 +642,11 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 // comparison on the various possible error messages.
 static ExitCode determine_passphrase_exit_code(const std::string_view e) {
   if (e.starts_with("Incorrect passphrase")) {
-    return EXIT_CODE_PASSPHRASE_INCORRECT;
+    return ExitCode::PASSPHRASE_INCORRECT;
   }
 
   if (e.starts_with("Passphrase required")) {
-    return EXIT_CODE_PASSPHRASE_REQUIRED;
+    return ExitCode::PASSPHRASE_REQUIRED;
   }
 
   static const std::string_view not_supported_prefixes[] = {
@@ -662,11 +662,11 @@ static ExitCode determine_passphrase_exit_code(const std::string_view e) {
 
   for (const std::string_view prefix : not_supported_prefixes) {
     if (e.starts_with(prefix)) {
-      return EXIT_CODE_PASSPHRASE_NOT_SUPPORTED;
+      return ExitCode::PASSPHRASE_NOT_SUPPORTED;
     }
   }
 
-  return EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
+  return ExitCode::INVALID_ARCHIVE_CONTENTS;
 }
 
 template <typename... Args>
@@ -1303,7 +1303,7 @@ static void insert_leaf(struct archive* a,
       if (n < 0) {
         Log(LOG_ERR, "Cannot extract ", Path(path), ": ",
             archive_error_string(a));
-        throw EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
+        throw ExitCode::INVALID_ARCHIVE_CONTENTS;
       }
 
       assert(n <= SIDE_BUFFER_SIZE);
@@ -1335,7 +1335,7 @@ static void build_tree() {
       } else if (status != ARCHIVE_OK) {
         Log(LOG_ERR,
             "Invalid archive: ", archive_error_string(g_initialize_archive));
-        throw EXIT_CODE_INVALID_ARCHIVE_CONTENTS;
+        throw ExitCode::INVALID_ARCHIVE_CONTENTS;
       }
     }
 
@@ -1357,35 +1357,35 @@ static void insert_root_node() {
 static void pre_initialize() {
   if (!g_archive_filename) {
     Log(LOG_ERR, "Missing archive_filename argument");
-    throw EXIT_CODE_GENERIC_FAILURE;
+    throw ExitCode::GENERIC_FAILURE;
   }
 
   g_archive_realpath = realpath(g_archive_filename, nullptr);
   if (!g_archive_realpath) {
     Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_filename), ": ",
         strerror(errno));
-    throw EXIT_CODE_CANNOT_OPEN_ARCHIVE;
+    throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
   g_archive_fd = open(g_archive_realpath, O_RDONLY);
   if (g_archive_fd < 0) {
     Log(LOG_ERR, "Cannot open ", Path(g_archive_filename), ": ",
         strerror(errno));
-    throw EXIT_CODE_CANNOT_OPEN_ARCHIVE;
+    throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
     Log(LOG_ERR, "Cannot stat ", Path(g_archive_filename), ": ",
         strerror(errno));
-    throw EXIT_CODE_GENERIC_FAILURE;
+    throw ExitCode::GENERIC_FAILURE;
   }
   g_archive_file_size = z.st_size;
 
   g_initialize_archive = archive_read_new();
   if (!g_initialize_archive) {
     Log(LOG_ERR, "Out of memory");
-    throw EXIT_CODE_GENERIC_FAILURE;
+    throw ExitCode::GENERIC_FAILURE;
   }
 
   archive_read_set_passphrase_callback(g_initialize_archive, nullptr,
@@ -1400,7 +1400,7 @@ static void pre_initialize() {
     g_initialize_archive = nullptr;
     g_initialize_archive_entry = nullptr;
     g_initialize_index_within_archive = -1;
-    throw EXIT_CODE_GENERIC_FAILURE;
+    throw ExitCode::GENERIC_FAILURE;
   }
 
   while (true) {
@@ -1419,7 +1419,7 @@ static void pre_initialize() {
       g_initialize_archive_entry = nullptr;
       g_initialize_index_within_archive = -1;
       if (status != ARCHIVE_EOF) {
-        throw EXIT_CODE_INVALID_ARCHIVE_HEADER;
+        throw ExitCode::INVALID_ARCHIVE_HEADER;
       }
       // Building the tree for an empty archive is trivial.
       insert_root_node();
@@ -1445,7 +1445,7 @@ static void pre_initialize() {
         g_initialize_archive_entry = nullptr;
         g_initialize_index_within_archive = -1;
         Log(LOG_ERR, "Invalid raw archive");
-        throw EXIT_CODE_INVALID_RAW_ARCHIVE;
+        throw ExitCode::INVALID_RAW_ARCHIVE;
       }
 
       if (archive_filter_code(g_initialize_archive, i) != ARCHIVE_FILTER_NONE) {
@@ -1794,7 +1794,7 @@ static void ensure_utf_8_encoding() {
   }
 
   Log(LOG_ERR, "Cannot ensure UTF-8 encoding");
-  throw EXIT_CODE_GENERIC_FAILURE;
+  throw ExitCode::GENERIC_FAILURE;
 }
 
 // Removes directory `mount_point` in destructor.
@@ -1813,13 +1813,15 @@ struct Cleanup {
       }
     }
 
+#ifndef NDEBUG
     if (args) {
       fuse_opt_free_args(args);
     }
 
-    if (close(dirfd) < 0) {
+    if (dirfd >= 0 && close(dirfd) < 0) {
       Log(LOG_ERR, "Cannot close file descriptor: ", strerror(errno));
     }
+#endif
   }
 };
 
@@ -1842,12 +1844,12 @@ int main(int argc, char** argv) try {
 
   if (argc <= 0 || !argv) {
     Log(LOG_ERR, "Missing command line arguments");
-    return EXIT_CODE_GENERIC_FAILURE;
+    throw ExitCode::GENERIC_FAILURE;
   }
 
   if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     Log(LOG_ERR, "Cannot parse command line arguments");
-    return EXIT_CODE_GENERIC_FAILURE;
+    throw ExitCode::GENERIC_FAILURE;
   }
 
   // Force single-threading. It's simpler.
@@ -1903,7 +1905,7 @@ general options:
     } else {
       Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
           strerror(errno));
-      throw EXIT_CODE_CANNOT_CREATE_MOUNT_POINT;
+      throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
     }
   } else {
     g_mount_point = g_archive_innername;
@@ -1920,7 +1922,7 @@ general options:
       if (errno != EEXIST) {
         Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
             strerror(errno));
-        throw EXIT_CODE_CANNOT_CREATE_MOUNT_POINT;
+        throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
       }
 
       Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
@@ -1935,7 +1937,7 @@ general options:
 
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
 } catch (const ExitCode e) {
-  return e;
+  return static_cast<int>(e);
 } catch (const std::exception& e) {
   Log(LOG_ERR, e.what());
   return EXIT_FAILURE;
