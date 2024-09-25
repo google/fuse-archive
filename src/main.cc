@@ -48,6 +48,7 @@
 #include <cerrno>
 #include <chrono>
 #include <climits>
+#include <compare>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -563,6 +564,37 @@ struct Node {
     return path;
   }
 };
+
+std::strong_ordering ComparePath(const Node* a, const Node* b);
+
+std::strong_ordering ComparePath(const Node& a, const Node& b) {
+  if (&a == &b) {
+    return std::strong_ordering::equal;
+  }
+
+  if (const auto c = ComparePath(a.parent, b.parent);
+      c != std::strong_ordering::equal) {
+    return c;
+  }
+
+  return a.name <=> b.name;
+}
+
+std::strong_ordering ComparePath(const Node* const a, const Node* const b) {
+  if (a) {
+    if (b) {
+      return ComparePath(*a, *b);
+    } else {
+      return std::strong_ordering::greater;
+    }
+  } else {
+    if (b) {
+      return std::strong_ordering::less;
+    } else {
+      return std::strong_ordering::equal;
+    }
+  }
+}
 
 std::ostream& operator<<(std::ostream& out, const Node& n) {
   return out << GetFileType(n.mode) << " " << Path(n.path());
