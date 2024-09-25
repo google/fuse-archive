@@ -137,7 +137,7 @@ enum {
   KEY_REDACT,
 };
 
-fuse_opt g_fuse_opts[] = {
+const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", KEY_HELP),            //
     FUSE_OPT_KEY("--help", KEY_HELP),        //
     FUSE_OPT_KEY("-V", KEY_VERSION),         //
@@ -162,20 +162,15 @@ fuse_opt g_fuse_opts[] = {
 };
 
 // Command line argument naming the archive file.
-std::string g_archive_filename;
-
-// Base name of g_archive_filename, minus the file extension suffix. For
-// example, if g_archive_filename is "/foo/bar.tar.gz" then
-// g_archive_innername is "bar".
-std::string g_archive_innername;
+std::string g_archive_path;
 
 // Path of the mount point.
 std::string g_mount_point;
 
-// g_archive_fd is the file descriptor returned by opening g_archive_filename.
+// File descriptor returned by opening g_archive_path.
 int g_archive_fd = -1;
 
-// g_archive_file_size is the size of the g_archive_filename file.
+// Size of the g_archive_path file.
 int64_t g_archive_file_size = 0;
 
 // g_archive_fd_position_current is the read position of g_archive_fd.
@@ -188,12 +183,12 @@ int64_t g_archive_file_size = 0;
 int64_t g_archive_fd_position_current = 0;
 int64_t g_archive_fd_position_hwm = 0;
 
-// g_archive_realpath holds the canonicalised absolute path of the archive
-// file. The command line argument may give a relative filename (one that
-// doesn't start with a slash) and the fuse_main function may change the
-// current working directory, so subsequent archive_read_open_filename calls
-// use this absolute filepath instead. g_archive_filename is still used for
-// logging. g_archive_realpath is allocated in pre_initialize and never freed.
+// Canonicalised absolute path of the archive file. The command line argument
+// may give a relative filename (one that doesn't start with a slash) and the
+// fuse_main function may change the current working directory, so subsequent
+// archive_read_open_filename calls use this absolute filepath instead.
+// g_archive_path is still used for logging. g_archive_realpath is allocated in
+// pre_initialize and never freed.
 const char* g_archive_realpath = nullptr;
 
 // Decryption password.
@@ -220,8 +215,8 @@ const gid_t g_gid = getgid();
 
 // We serve ls and stat requests from an in-memory directory tree of nodes.
 // Building that tree is one of the first things that we do.
-struct archive* g_initialize_archive = nullptr;
-struct archive_entry* g_initialize_archive_entry = nullptr;
+struct archive* g_archive = nullptr;
+struct archive_entry* g_archive_entry = nullptr;
 int64_t g_initialize_index_within_archive = -1;
 
 // g_displayed_progress is whether we have printed a progress message.
@@ -1205,9 +1200,11 @@ std::string normalize_pathname(struct archive_entry* e) {
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive_is_raw && !g_archive_innername.empty() &&
-      std::string_view("data") == s) {
-    return Path(g_archive_innername).Normalize();
+  if (g_archive_is_raw && std::string_view("data") == s) {
+    return Path(g_archive_path)
+        .Split()
+        .second.WithoutFinalExtension()
+        .Normalize();
   }
 
   return Path(s).Normalize();
@@ -1446,24 +1443,21 @@ void build_tree() {
       // The entry was already read by pre_initialize.
       first = false;
     } else {
-      int status = archive_read_next_header(g_initialize_archive,
-                                            &g_initialize_archive_entry);
+      int status = archive_read_next_header(g_archive, &g_archive_entry);
       g_initialize_index_within_archive++;
       if (status == ARCHIVE_EOF) {
         break;
       }
 
       if (status == ARCHIVE_WARN) {
-        Log(LOG_WARNING, archive_error_string(g_initialize_archive));
+        Log(LOG_WARNING, archive_error_string(g_archive));
       } else if (status != ARCHIVE_OK) {
-        Log(LOG_ERR,
-            "Invalid archive: ", archive_error_string(g_initialize_archive));
+        Log(LOG_ERR, "Invalid archive: ", archive_error_string(g_archive));
         throw ExitCode::INVALID_ARCHIVE_CONTENTS;
       }
     }
 
-    insert_leaf(g_initialize_archive, g_initialize_archive_entry,
-                g_initialize_index_within_archive);
+    insert_leaf(g_archive, g_archive_entry, g_initialize_index_within_archive);
   }
 }
 
@@ -1473,64 +1467,59 @@ void build_tree() {
 // described in the "Building is split into two parts" comment above.
 
 void pre_initialize() {
-  if (g_archive_filename.empty()) {
+  if (g_archive_path.empty()) {
     Log(LOG_ERR, "Missing archive_filename argument");
     throw ExitCode::GENERIC_FAILURE;
   }
 
-  g_archive_realpath = realpath(g_archive_filename.c_str(), nullptr);
+  g_archive_realpath = realpath(g_archive_path.c_str(), nullptr);
   if (!g_archive_realpath) {
-    Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_filename), ": ",
+    Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_path), ": ",
         strerror(errno));
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
   g_archive_fd = open(g_archive_realpath, O_RDONLY);
   if (g_archive_fd < 0) {
-    Log(LOG_ERR, "Cannot open ", Path(g_archive_filename), ": ",
-        strerror(errno));
+    Log(LOG_ERR, "Cannot open ", Path(g_archive_path), ": ", strerror(errno));
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
   struct stat z;
   if (fstat(g_archive_fd, &z) != 0) {
-    Log(LOG_ERR, "Cannot stat ", Path(g_archive_filename), ": ",
-        strerror(errno));
+    Log(LOG_ERR, "Cannot stat ", Path(g_archive_path), ": ", strerror(errno));
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
   g_archive_file_size = z.st_size;
 
-  g_initialize_archive = archive_read_new();
-  if (!g_initialize_archive) {
+  g_archive = archive_read_new();
+  if (!g_archive) {
     Log(LOG_ERR, "Out of memory");
     throw std::bad_alloc();
   }
 
-  archive_read_set_passphrase_callback(g_initialize_archive, nullptr,
+  archive_read_set_passphrase_callback(g_archive, nullptr,
                                        &read_password_from_stdin);
-  archive_read_support_filter_all(g_initialize_archive);
-  archive_read_support_format_all(g_initialize_archive);
-  archive_read_support_format_raw(g_initialize_archive);
-  if (my_archive_read_open(g_initialize_archive) != ARCHIVE_OK) {
-    Log(LOG_ERR,
-        "Cannot open archive: ", archive_error_string(g_initialize_archive));
+  archive_read_support_filter_all(g_archive);
+  archive_read_support_format_all(g_archive);
+  archive_read_support_format_raw(g_archive);
+  if (my_archive_read_open(g_archive) != ARCHIVE_OK) {
+    Log(LOG_ERR, "Cannot open archive: ", archive_error_string(g_archive));
     throw ExitCode::GENERIC_FAILURE;
   }
 
   while (true) {
-    int status = archive_read_next_header(g_initialize_archive,
-                                          &g_initialize_archive_entry);
+    int status = archive_read_next_header(g_archive, &g_archive_entry);
     g_initialize_index_within_archive++;
     if (status == ARCHIVE_WARN) {
-      Log(LOG_WARNING, archive_error_string(g_initialize_archive));
+      Log(LOG_WARNING, archive_error_string(g_archive));
     } else if (status != ARCHIVE_OK) {
       if (status != ARCHIVE_EOF) {
-        Log(LOG_ERR,
-            "Invalid archive: ", archive_error_string(g_initialize_archive));
+        Log(LOG_ERR, "Invalid archive: ", archive_error_string(g_archive));
       }
-      archive_read_free(g_initialize_archive);
-      g_initialize_archive = nullptr;
-      g_initialize_archive_entry = nullptr;
+      archive_read_free(g_archive);
+      g_archive = nullptr;
+      g_archive_entry = nullptr;
       g_initialize_index_within_archive = -1;
       if (status != ARCHIVE_EOF) {
         throw ExitCode::INVALID_ARCHIVE_HEADER;
@@ -1539,7 +1528,7 @@ void pre_initialize() {
       return;
     }
 
-    if (S_ISDIR(archive_entry_mode(g_initialize_archive_entry))) {
+    if (S_ISDIR(archive_entry_mode(g_archive_entry))) {
       continue;
     }
     break;
@@ -1548,20 +1537,20 @@ void pre_initialize() {
   // For 'raw' archives, check that at least one of the compression filters
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
-  if (archive_format(g_initialize_archive) == ARCHIVE_FORMAT_RAW) {
+  if (archive_format(g_archive) == ARCHIVE_FORMAT_RAW) {
     g_archive_is_raw = true;
-    const int n = archive_filter_count(g_initialize_archive);
+    const int n = archive_filter_count(g_archive);
     for (int i = 0; true; i++) {
       if (i == n) {
-        archive_read_free(g_initialize_archive);
-        g_initialize_archive = nullptr;
-        g_initialize_archive_entry = nullptr;
+        archive_read_free(g_archive);
+        g_archive = nullptr;
+        g_archive_entry = nullptr;
         g_initialize_index_within_archive = -1;
         Log(LOG_ERR, "Invalid raw archive");
         throw ExitCode::INVALID_RAW_ARCHIVE;
       }
 
-      if (archive_filter_code(g_initialize_archive, i) != ARCHIVE_FILTER_NONE) {
+      if (archive_filter_code(g_archive, i) != ARCHIVE_FILTER_NONE) {
         break;
       }
     }
@@ -1569,10 +1558,9 @@ void pre_initialize() {
     // Otherwise, reading the first byte of the first non-directory entry will
     // reveal whether we also need a passphrase.
     ssize_t n = archive_read_data(
-        g_initialize_archive,
-        g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
+        g_archive, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
-      const char* const e = archive_error_string(g_initialize_archive);
+      const char* const e = archive_error_string(g_archive);
       Log(LOG_ERR, e);
       throw determine_passphrase_exit_code(e);
     }
@@ -1581,9 +1569,9 @@ void pre_initialize() {
 
 void post_initialize_sync() {
   build_tree();
-  archive_read_free(g_initialize_archive);
-  g_initialize_archive = nullptr;
-  g_initialize_archive_entry = nullptr;
+  archive_read_free(g_archive);
+  g_archive = nullptr;
+  g_archive_entry = nullptr;
   g_initialize_index_within_archive = -1;
   if (g_archive_fd >= 0) {
     close(g_archive_fd);
@@ -1816,9 +1804,7 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
     case FUSE_OPT_KEY_NONOPT:
       switch (++g_options.arg_count) {
         case 1:
-          g_archive_filename = arg;
-          g_archive_innername =
-              Path(g_archive_filename).Split().second.WithoutFinalExtension();
+          g_archive_path = arg;
           return DISCARD;
 
         case 2:
@@ -1969,7 +1955,7 @@ general options:
   const bool mount_point_specified_by_user = !g_mount_point.empty();
   if (!mount_point_specified_by_user) {
     g_mount_point =
-        Path(g_archive_filename).WithoutTrailingSeparator().WithoutExtension();
+        Path(g_archive_path).WithoutTrailingSeparator().WithoutExtension();
   }
 
   std::tie(mount_point_parent, mount_point_basename) =
