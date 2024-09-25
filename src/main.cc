@@ -53,6 +53,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -361,7 +362,7 @@ class Path : public std::string_view {
   // |*head| takes the value of |tail|. If |tail| is a relative path, then it is
   // appended to |*head|. A '/' separator is added if |*head| doesn't already
   // end with one.
-  static void Append(std::string* head, std::string_view tail) {
+  static void Append(std::string* const head, std::string_view const tail) {
     assert(head);
 
     if (tail.empty())
@@ -421,7 +422,7 @@ class Path : public std::string_view {
   }
 };
 
-static std::ostream& operator<<(std::ostream& out, const Path path) {
+static std::ostream& operator<<(std::ostream& out, Path const path) {
   if (g_options.redact)
     return out << "(redacted)";
 
@@ -1735,7 +1736,7 @@ static int my_opt_proc(void* /*private_data*/,
 
         case 2:
           g_mount_point = arg;
-          return KEEP;
+          return DISCARD;
 
         default:
           fprintf(stderr,
@@ -1803,31 +1804,14 @@ static void ensure_utf_8_encoding() {
   throw ExitCode::GENERIC_FAILURE;
 }
 
-// Removes directory `mount_point` in destructor.
+// Runs a function in its destructor.
 struct Cleanup {
-  fuse_args* args = nullptr;
-  int dirfd = -1;
-  std::string mount_point;
+  std::function<void()> fn;
 
   ~Cleanup() {
-    if (!mount_point.empty()) {
-      if (unlinkat(dirfd, mount_point.c_str(), AT_REMOVEDIR) == 0) {
-        Log(LOG_INFO, "Removed mount point ", Path(mount_point));
-      } else {
-        Log(LOG_ERR, "Cannot remove mount point ", Path(mount_point), ": ",
-            strerror(errno));
-      }
+    if (fn) {
+      fn();
     }
-
-#ifndef NDEBUG
-    if (dirfd >= 0 && close(dirfd) < 0) {
-      Log(LOG_ERR, "Cannot close file descriptor: ", strerror(errno));
-    }
-
-    if (args) {
-      fuse_opt_free_args(args);
-    }
-#endif
   }
 };
 
@@ -1846,7 +1830,6 @@ int main(int argc, char** argv) try {
   ensure_utf_8_encoding();
 
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
-  Cleanup cleanup{.args = &args};
 
   if (fuse_opt_parse(&args, nullptr, g_fuse_opts, &my_opt_proc) < 0) {
     Log(LOG_ERR, "Cannot parse command line arguments");
@@ -1894,74 +1877,83 @@ general options:
 
   // Determine where the mount point should be.
   std::string mount_point_parent, mount_point_basename;
-  if (!g_mount_point.empty()) {
-    std::tie(mount_point_parent, mount_point_basename) =
-        Path(g_mount_point).WithoutTrailingSeparator().Split();
-  } else {
-    std::tie(mount_point_parent, mount_point_basename) =
-        Path(g_archive_filename).WithoutExtension().Split();
+  const bool mount_point_specified_by_user = !g_mount_point.empty();
+  if (!mount_point_specified_by_user) {
+    g_mount_point =
+        Path(g_archive_filename).WithoutTrailingSeparator().WithoutExtension();
   }
 
-  if (mount_point_parent.empty()) {
-    mount_point_parent = ".";
+  std::tie(mount_point_parent, mount_point_basename) =
+      Path(g_mount_point).WithoutTrailingSeparator().Split();
+
+  if (mount_point_basename.empty()) {
+    Log(LOG_ERR, "Cannot use ", Path(g_mount_point), " as a mount point");
+    throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
   }
 
   // Get a file descriptor to the parent directory of the mount point.
   const int mount_point_parent_fd =
-      open(mount_point_parent.c_str(), O_DIRECTORY | O_PATH);
+      open(!mount_point_parent.empty() ? mount_point_parent.c_str() : ".",
+           O_DIRECTORY | O_PATH);
   if (mount_point_parent_fd < 0) {
-    Log(LOG_ERR, "Cannot open directory ", Path(mount_point_parent), ": ",
+    Log(LOG_ERR, "Cannot access directory ", Path(mount_point_parent), ": ",
         strerror(errno));
     throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
   }
 
   Log(LOG_DEBUG, "Opened directory ", Path(mount_point_parent));
-  cleanup.dirfd = mount_point_parent_fd;
 
   // Read archive and build tree.
   pre_initialize();
   post_initialize_sync();
 
-  if (!g_mount_point.empty()) {
-    // Try to create the mount point directory if it doesn't exist.
-    if (mkdirat(mount_point_parent_fd, mount_point_basename.c_str(), 0777) ==
-        0) {
-      Log(LOG_INFO, "Created mount point ", Path(mount_point_basename), " in ",
-          Path(mount_point_parent));
-      cleanup.mount_point = mount_point_basename;
-    } else if (errno == EEXIST) {
-      Log(LOG_INFO, "Using existing mount point ", Path(mount_point_basename),
-          " in ", Path(mount_point_parent));
-    } else {
-      Log(LOG_ERR, "Cannot create mount point ", Path(mount_point_basename),
-          " in ", Path(mount_point_parent), ": ", strerror(errno));
-      throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
-    }
-  } else {
-    // Create a new mount point directory with a unique name.
+  // Create the mount point if it does not already exist.
+  Cleanup cleanup;
+  {
     const auto n = mount_point_basename.size();
-    for (int i = 0;;) {
+    int i = 0;
+    for (;;) {
+      g_mount_point = mount_point_parent;
+      Path::Append(&g_mount_point, mount_point_basename);
+
       if (mkdirat(mount_point_parent_fd, mount_point_basename.c_str(), 0777) ==
           0) {
-        Log(LOG_INFO, "Created mount point ", Path(mount_point_basename),
-            " in ", Path(mount_point_parent));
-        cleanup.mount_point = mount_point_basename;
-        fuse_opt_add_arg(&args, mount_point_basename.c_str());
+        Log(LOG_INFO, "Created mount point ", Path(g_mount_point));
+
+        // Set the cleanup function that will eventually remove this mount
+        // point.
+        cleanup.fn = [mount_point_parent_fd, mount_point_basename]() {
+          if (unlinkat(mount_point_parent_fd, mount_point_basename.c_str(),
+                       AT_REMOVEDIR) == 0) {
+            Log(LOG_INFO, "Removed mount point ", Path(g_mount_point));
+          } else {
+            Log(LOG_ERR, "Cannot remove mount point ", Path(g_mount_point),
+                ": ", strerror(errno));
+          }
+        };
+
         break;
       }
 
       if (errno != EEXIST) {
-        Log(LOG_ERR, "Cannot create mount point ", Path(mount_point_basename),
-            " in ", Path(mount_point_parent), ": ", strerror(errno));
+        Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
+            strerror(errno));
         throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
       }
 
-      Log(LOG_DEBUG, "Mount point ", Path(mount_point_basename),
-          " already exists in ", Path(mount_point_parent));
+      if (mount_point_specified_by_user) {
+        Log(LOG_INFO, "Using existing mount point ", Path(g_mount_point));
+        break;
+      }
+
+      Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
       mount_point_basename.resize(n);
       mount_point_basename += StrCat(" (", ++i, ")");
     }
   }
+
+  // The mount point is in place.
+  fuse_opt_add_arg(&args, g_mount_point.c_str());
 
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
 } catch (const ExitCode e) {
