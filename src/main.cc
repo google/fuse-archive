@@ -488,18 +488,30 @@ static std::ostream& operator<<(std::ostream& out, const FileType t) {
 static constexpr blksize_t block_size = 512;
 
 struct Node {
+  // Name of this node in the context of its parent. This name should be a valid
+  // and non-empty filename, and it shouldn't contain any '/' separator. The
+  // only exception is the root directory, which is just named "/".
   std::string name;
   std::string symlink;
   mode_t mode;
+
+  // Index of the entry represented by this node in the archive, or -1 if it is
+  // not directly represented in the archive (like the root directory, or any
+  // intermediate directory).
   int64_t index_within_archive = -1;
   int64_t size = 0;
   time_t mtime = 0;
   int nlink = 0;
 
+  // Pointer to the parent node. Should be non null. The only exception is the
+  // root directory which has a null parent pointer.
   Node* parent = nullptr;
   Node* last_child = nullptr;
   Node* first_child = nullptr;
   Node* next_sibling = nullptr;
+
+  // Number of entries whose name have initially collided with this file node.
+  int collision_count = 0;
 
   bool is_dir() const { return S_ISDIR(mode); }
 
@@ -539,19 +551,19 @@ struct Node {
     return z;
   }
 
-  std::string get_path() const {
+  std::string path() const {
     if (!parent) {
       return name;
     }
 
-    std::string path = parent->get_path();
+    std::string path = parent->path();
     Path::Append(&path, name);
     return path;
   }
 };
 
 static std::ostream& operator<<(std::ostream& out, const Node& n) {
-  return out << GetFileType(n.mode) << " " << Path(n.get_path());
+  return out << GetFileType(n.mode) << " " << Path(n.path());
 }
 
 // These global variables are the in-memory directory tree of nodes.
@@ -559,11 +571,12 @@ static std::ostream& operator<<(std::ostream& out, const Node& n) {
 // Building the directory tree can take minutes, for archive file formats like
 // .tar.gz that are compressed but also do not contain an explicit on-disk
 // directory of archive entries.
-static std::unordered_map<std::string, Node*> g_nodes_by_name;
+static std::unordered_map<std::string, Node*> g_nodes_by_path;
 static std::vector<Node*> g_nodes_by_index;
 
-// g_root_node being non-nullptr means that initialization is complete .
-static Node* g_root_node = nullptr;
+// Root node of the tree.
+static Node* const g_root_node =
+    new Node{.name = "/", .mode = S_IFDIR | 0777, .nlink = 1};
 static blkcnt_t g_block_count = 1;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
@@ -1172,88 +1185,160 @@ static std::string normalize_pathname(struct archive_entry* e) {
   return Path(s).Normalize();
 }
 
-static void insert_leaf_node(std::string&& pathname,
+// Checks if the given character is an ASCII digit.
+bool IsAsciiDigit(const char c) {
+  return c >= '0' && c <= '9';
+}
+
+// Removes the numeric suffix at the end of the given string `s`. Does nothing
+// if the string does not end with a numeric suffix. A numeric suffix is a
+// decimal number between parentheses and preceded by a space, like:
+// * " (1)" or
+// * " (142857)".
+void RemoveNumericSuffix(std::string& s) {
+  size_t i = s.size();
+
+  if (i == 0 || s[--i] != ')') {
+    return;
+  }
+
+  if (i == 0 || !IsAsciiDigit(s[--i])) {
+    return;
+  }
+
+  while (i > 0 && IsAsciiDigit(s[i - 1])) {
+    --i;
+  }
+
+  if (i == 0 || s[--i] != '(') {
+    return;
+  }
+
+  if (i == 0 || s[--i] != ' ') {
+    return;
+  }
+
+  s.resize(i);
+}
+
+void Attach(Node* const node) {
+  assert(node);
+  const auto [pos, ok] = g_nodes_by_path.try_emplace(node->path(), node);
+  if (ok) {
+    return;
+  }
+
+  // There is a name collision
+  Log(LOG_DEBUG, *node, " conflicts with ", *pos->second);
+
+  // Extract filename extension
+  std::string& f = node->name;
+  const std::string::size_type e = Path(f).ExtensionPosition();
+  const std::string ext(f, e);
+  f.resize(e);
+  RemoveNumericSuffix(f);
+  const std::string base = f;
+
+  // Add a number before the extension
+  for (int* i = nullptr;;) {
+    const std::string suffix =
+        StrCat(" (", std::to_string(i ? ++*i + 1 : 1), ")", ext);
+    f.assign(base, 0, Path(base).TruncationPosition(NAME_MAX - suffix.size()));
+    f += suffix;
+
+    const auto [pos, ok] = g_nodes_by_path.try_emplace(node->path(), node);
+    if (ok) {
+      Log(LOG_DEBUG, "Resolved conflict for ", *node);
+      return;
+    }
+
+    Log(LOG_DEBUG, *node, " conflicts with ", *pos->second);
+    if (!i)
+      i = &pos->second->collision_count;
+  }
+}
+
+Node* CreateDir(std::string_view const path) {
+  if (path == "/") {
+    assert(g_root_node);
+    assert(g_root_node->is_dir());
+    return g_root_node;
+  }
+
+  const auto [parent_path, name] = Path(path).Split();
+  Node* to_rename = nullptr;
+  Node* parent = nullptr;
+
+  Node*& node = g_nodes_by_path[std::string(path)];
+
+  if (node) {
+    if (node->is_dir())
+      return node;
+
+    // There is an existing node with the given name, but it's not a
+    // directory.
+    Log(LOG_DEBUG, "Found conflicting ", *node, " while creating Dir ",
+        Path(path));
+    parent = node->parent;
+
+    // Remove it from g_nodes_by_path, in order to insert it again later with a
+    // different name.
+    to_rename = node;
+    node = nullptr;
+  } else {
+    parent = CreateDir(parent_path);
+  }
+
+  assert(parent);
+  assert(!node);
+
+  // Create the Directory node.
+  node =
+      new Node{.name = std::string(name), .mode = S_IFDIR | 0777, .nlink = 1};
+  parent->add_child(node);
+  g_block_count += 1;
+  assert(node->path() == path);
+
+  if (to_rename) {
+    Attach(to_rename);
+  }
+
+  return node;
+}
+
+static void insert_leaf_node(std::string&& path,
                              std::string&& symlink,
                              int64_t index_within_archive,
                              int64_t size,
                              time_t mtime,
                              mode_t mode) {
-  Node* parent = g_root_node;
+  const auto [parent_path, name] = Path(path).Split();
 
-  const mode_t rx_bits = mode & 0555;
-  const mode_t r_bits = rx_bits & 0444;
-  const mode_t branch_mode = rx_bits | (r_bits >> 2) | S_IFDIR;
-  const mode_t leaf_mode = rx_bits | (symlink.empty() ? S_IFREG : S_IFLNK);
+  Node* const parent = CreateDir(parent_path);
+  assert(parent);
+  assert(parent->is_dir());
 
-  // p, q and r point to pathname fragments.
-  const char* p = pathname.c_str();
-  if (*p == 0 || *p != '/') {
-    return;
-  }
+  const bool executable = (mode & 0111) != 0;
+  mode = !symlink.empty() ? (S_IFLNK | 0666)
+                          : (S_IFREG | 0666 | (executable ? 0111 : 0));
 
-  const char* q = p + 1;
-  while (true) {
-    // A directory's mtime is the oldest of its leaves' mtimes.
-    if (parent->mtime < mtime) {
-      parent->mtime = mtime;
-    }
-    parent->mode |= branch_mode;
+  Node* const n = new Node{.name = std::string(name),
+                           .symlink = std::move(symlink),
+                           .mode = mode,
+                           .index_within_archive = index_within_archive,
+                           .size = size,
+                           .mtime = mtime};
+  parent->add_child(n);
+  g_block_count += n->get_block_count();
+  g_block_count += 1;
 
-    const char* r = q;
-    while (*r != 0 && *r != '/') {
-      r++;
-    }
+  // Add to g_nodes_by_path.
+  Attach(n);
 
-    std::string abs_pathname(p, r - p);
-    std::string name(q, r - q);
-    if (*r == 0) {
-      // Insert an explicit leaf node (a regular file).
-      Node* const n = new Node{.name = std::move(name),
-                               .symlink = std::move(symlink),
-                               .mode = leaf_mode,
-                               .index_within_archive = index_within_archive,
-                               .size = size,
-                               .mtime = mtime};
-
-      // Add to g_nodes_by_name.
-      const auto [it, ok] =
-          g_nodes_by_name.try_emplace(std::move(abs_pathname), n);
-      if (!ok) {
-        Log(LOG_WARNING, "Name collision between ", *n, " and ", *it->second);
-        delete n;
-        return;
-      }
-
-      parent->add_child(n);
-      g_block_count += n->get_block_count();
-      g_block_count += 1;
-
-      // Add to g_nodes_by_index.
-      assert(g_nodes_by_index.size() <= index_within_archive);
-      g_nodes_by_index.resize(index_within_archive);
-      g_nodes_by_index.push_back(n);
-      break;
-    }
-    q = r + 1;
-
-    // Insert an implicit branch node (a directory).
-    Node*& n = g_nodes_by_name[abs_pathname];
-    if (n) {
-      if (!n->is_dir()) {
-        Log(LOG_WARNING, "Name collision ", Path(abs_pathname));
-        return;
-      }
-    } else {
-      n = new Node{.name = std::move(name),
-                   .mode = branch_mode,
-                   .mtime = mtime,
-                   .nlink = 1};
-      parent->add_child(n);
-      g_block_count += 1;
-    }
-
-    parent = n;
-  }
+  // Add to g_nodes_by_index.
+  assert(g_nodes_by_index.size() <= index_within_archive);
+  g_nodes_by_index.resize(index_within_archive);
+  g_nodes_by_index.push_back(n);
 }
 
 static void insert_leaf(struct archive* a,
@@ -1273,7 +1358,7 @@ static void insert_leaf(struct archive* a,
 
   switch (ft) {
     case FileType::Directory:
-      // TODO: Create a Directory Node if necessary.
+      CreateDir(path);
       return;
 
     case FileType::CharDevice:
@@ -1359,11 +1444,6 @@ static void build_tree() {
 // This section (pre_initialize and post_initialize_etc) are the "two parts"
 // described in the "Building is split into two parts" comment above.
 
-static void insert_root_node() {
-  g_root_node = new Node{.name = "/", .mode = S_IFDIR, .nlink = 1};
-  g_nodes_by_name["/"] = g_root_node;
-}
-
 static void pre_initialize() {
   if (g_archive_filename.empty()) {
     Log(LOG_ERR, "Missing archive_filename argument");
@@ -1428,7 +1508,6 @@ static void pre_initialize() {
         throw ExitCode::INVALID_ARCHIVE_HEADER;
       }
       // Building the tree for an empty archive is trivial.
-      insert_root_node();
       return;
     }
 
@@ -1473,11 +1552,6 @@ static void pre_initialize() {
 }
 
 static void post_initialize_sync() {
-  if (g_root_node) {
-    return;
-  }
-
-  insert_root_node();
   build_tree();
   archive_read_free(g_initialize_archive);
   g_initialize_archive = nullptr;
@@ -1501,8 +1575,8 @@ static void post_initialize_sync() {
 // ---- FUSE Callbacks
 
 static int my_getattr(const char* path, struct stat* z) {
-  const auto it = g_nodes_by_name.find(path);
-  if (it == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_path.find(path);
+  if (it == g_nodes_by_path.end()) {
     return -ENOENT;
   }
 
@@ -1511,8 +1585,8 @@ static int my_getattr(const char* path, struct stat* z) {
 }
 
 static int my_readlink(const char* path, char* dst_ptr, size_t dst_len) {
-  const auto it = g_nodes_by_name.find(path);
-  if (it == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_path.find(path);
+  if (it == g_nodes_by_path.end()) {
     return -ENOENT;
   }
 
@@ -1527,8 +1601,8 @@ static int my_readlink(const char* path, char* dst_ptr, size_t dst_len) {
 }
 
 static int my_open(const char* path, fuse_file_info* ffi) {
-  const auto it = g_nodes_by_name.find(path);
-  if (it == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_path.find(path);
+  if (it == g_nodes_by_path.end()) {
     return -ENOENT;
   }
 
@@ -1641,12 +1715,12 @@ static int my_readdir(const char* path,
                       fuse_fill_dir_t filler,
                       off_t /*offset*/,
                       fuse_file_info* /*ffi*/) {
-  const auto iter = g_nodes_by_name.find(path);
-  if (iter == g_nodes_by_name.end()) {
+  const auto it = g_nodes_by_path.find(path);
+  if (it == g_nodes_by_path.end()) {
     return -ENOENT;
   }
 
-  const Node* const n = iter->second;
+  const Node* const n = it->second;
   if (!n->is_dir()) {
     return -ENOTDIR;
   }
@@ -1671,7 +1745,7 @@ static int my_statfs(const char* /*path*/, struct statvfs* st) {
   st->f_blocks = g_block_count;
   st->f_bfree = 0;
   st->f_bavail = 0;
-  st->f_files = g_nodes_by_name.size();
+  st->f_files = g_nodes_by_path.size();
   st->f_ffree = 0;
   st->f_favail = 0;
   st->f_flag = ST_RDONLY;
@@ -1904,6 +1978,7 @@ general options:
   Log(LOG_DEBUG, "Opened directory ", Path(mount_point_parent));
 
   // Read archive and build tree.
+  g_nodes_by_path[g_root_node->path()] = g_root_node;
   pre_initialize();
   post_initialize_sync();
 
