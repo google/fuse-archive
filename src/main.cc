@@ -67,6 +67,8 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
 #define TRY(operation)               \
   do {                               \
     int try_status_code = operation; \
@@ -104,11 +106,11 @@ enum class ExitCode {
 #define FUSE_ARCHIVE_VERSION "0.1.14"
 #endif
 
-static constexpr int NUM_SIDE_BUFFERS = 8;
+constexpr int NUM_SIDE_BUFFERS = 8;
 
 // This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
 // Linux, that seems to be the largest buffer size passed to my_read.
-static constexpr ssize_t SIDE_BUFFER_SIZE = 131072;
+constexpr ssize_t SIDE_BUFFER_SIZE = 131072;
 
 // ---- Platform specifics
 
@@ -118,7 +120,7 @@ static constexpr ssize_t SIDE_BUFFER_SIZE = 131072;
 
 // ---- Globals
 
-static struct {
+struct {
   int arg_count = 0;
   bool help = false;
   bool version = false;
@@ -134,7 +136,7 @@ enum {
   KEY_REDACT,
 };
 
-static fuse_opt g_fuse_opts[] = {
+fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", KEY_HELP),            //
     FUSE_OPT_KEY("--help", KEY_HELP),        //
     FUSE_OPT_KEY("-V", KEY_VERSION),         //
@@ -159,21 +161,21 @@ static fuse_opt g_fuse_opts[] = {
 };
 
 // Command line argument naming the archive file.
-static std::string g_archive_filename;
+std::string g_archive_filename;
 
 // Base name of g_archive_filename, minus the file extension suffix. For
 // example, if g_archive_filename is "/foo/bar.tar.gz" then
 // g_archive_innername is "bar".
-static std::string g_archive_innername;
+std::string g_archive_innername;
 
 // Path of the mount point.
-static std::string g_mount_point;
+std::string g_mount_point;
 
 // g_archive_fd is the file descriptor returned by opening g_archive_filename.
-static int g_archive_fd = -1;
+int g_archive_fd = -1;
 
 // g_archive_file_size is the size of the g_archive_filename file.
-static int64_t g_archive_file_size = 0;
+int64_t g_archive_file_size = 0;
 
 // g_archive_fd_position_current is the read position of g_archive_fd.
 //
@@ -182,8 +184,8 @@ static int64_t g_archive_file_size = 0;
 // has been processed. This matters for 'raw' archives that need a complete
 // decompression pass (as they do not have a table of contents within to
 // explicitly record the decompressed file size).
-static int64_t g_archive_fd_position_current = 0;
-static int64_t g_archive_fd_position_hwm = 0;
+int64_t g_archive_fd_position_current = 0;
+int64_t g_archive_fd_position_hwm = 0;
 
 // g_archive_realpath holds the canonicalised absolute path of the archive
 // file. The command line argument may give a relative filename (one that
@@ -191,13 +193,13 @@ static int64_t g_archive_fd_position_hwm = 0;
 // current working directory, so subsequent archive_read_open_filename calls
 // use this absolute filepath instead. g_archive_filename is still used for
 // logging. g_archive_realpath is allocated in pre_initialize and never freed.
-static const char* g_archive_realpath = nullptr;
+const char* g_archive_realpath = nullptr;
 
 // Decryption password.
-static std::string password;
+std::string password;
 
 // Number of times the decryption password has been requested.
-static int password_count = 0;
+int password_count = 0;
 
 // g_archive_is_raw is whether the archive file is 'cooked' or 'raw'.
 //
@@ -205,24 +207,24 @@ static int password_count = 0;
 // libarchive calls 'raw' files (e.g. foo.gz), which are compressed but not
 // explicitly an archive (a collection of files). libarchive can still present
 // it as an implicit archive containing 1 file.
-static bool g_archive_is_raw = false;
+bool g_archive_is_raw = false;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
 //
 // libfuse will override my_getattr's use of these variables if the "-o uid=N"
 // or "-o gid=N" command line options are set.
-static const uid_t g_uid = getuid();
-static const gid_t g_gid = getgid();
+const uid_t g_uid = getuid();
+const gid_t g_gid = getgid();
 
 // We serve ls and stat requests from an in-memory directory tree of nodes.
 // Building that tree is one of the first things that we do.
-static struct archive* g_initialize_archive = nullptr;
-static struct archive_entry* g_initialize_archive_entry = nullptr;
-static int64_t g_initialize_index_within_archive = -1;
+struct archive* g_initialize_archive = nullptr;
+struct archive_entry* g_initialize_archive_entry = nullptr;
+int64_t g_initialize_index_within_archive = -1;
 
 // g_displayed_progress is whether we have printed a progress message.
-static bool g_displayed_progress = false;
+bool g_displayed_progress = false;
 
 // Path manipulations.
 class Path : public std::string_view {
@@ -422,7 +424,7 @@ class Path : public std::string_view {
   }
 };
 
-static std::ostream& operator<<(std::ostream& out, Path const path) {
+std::ostream& operator<<(std::ostream& out, Path const path) {
   if (g_options.redact)
     return out << "(redacted)";
 
@@ -460,11 +462,11 @@ enum class FileType : mode_t {
   Symlink = S_IFLNK,      // Symbolic link
 };
 
-static FileType GetFileType(mode_t mode) {
+FileType GetFileType(mode_t mode) {
   return FileType(mode & S_IFMT);
 }
 
-static std::ostream& operator<<(std::ostream& out, const FileType t) {
+std::ostream& operator<<(std::ostream& out, const FileType t) {
   switch (t) {
     case FileType::BlockDevice:
       return out << "Block Device";
@@ -485,7 +487,7 @@ static std::ostream& operator<<(std::ostream& out, const FileType t) {
   }
 }
 
-static constexpr blksize_t block_size = 512;
+constexpr blksize_t block_size = 512;
 
 struct Node {
   // Name of this node in the context of its parent. This name should be a valid
@@ -562,7 +564,7 @@ struct Node {
   }
 };
 
-static std::ostream& operator<<(std::ostream& out, const Node& n) {
+std::ostream& operator<<(std::ostream& out, const Node& n) {
   return out << GetFileType(n.mode) << " " << Path(n.path());
 }
 
@@ -571,13 +573,13 @@ static std::ostream& operator<<(std::ostream& out, const Node& n) {
 // Building the directory tree can take minutes, for archive file formats like
 // .tar.gz that are compressed but also do not contain an explicit on-disk
 // directory of archive entries.
-static std::unordered_map<std::string, Node*> g_nodes_by_path;
-static std::vector<Node*> g_nodes_by_index;
+std::unordered_map<std::string, Node*> g_nodes_by_path;
+std::vector<Node*> g_nodes_by_index;
 
 // Root node of the tree.
-static Node* const g_root_node =
+Node* const g_root_node =
     new Node{.name = "/", .mode = S_IFDIR | 0777, .nlink = 1};
-static blkcnt_t g_block_count = 1;
+blkcnt_t g_block_count = 1;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
@@ -604,8 +606,8 @@ static blkcnt_t g_block_count = 1;
 // Higher/lower values are more/less recently used and the release_reader
 // function evicts the array element with the lowest LRU priority value.
 struct Reader;
-static constexpr int NUM_SAVED_READERS = 8;
-static std::pair<std::unique_ptr<Reader>, uint64_t>
+constexpr int NUM_SAVED_READERS = 8;
+std::pair<std::unique_ptr<Reader>, uint64_t>
     g_saved_readers[NUM_SAVED_READERS] = {};
 
 // g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
@@ -624,8 +626,8 @@ static std::pair<std::unique_ptr<Reader>, uint64_t>
 // the second-to-arrive request by a cheap memcpy instead of an expensive
 // "re-do decompression from the start". That side-buffer was filled by a
 // Reader::advance_offset side-effect from serving the first-to-arrive request.
-static uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
-static struct side_buffer_metadata {
+uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
+struct side_buffer_metadata {
   int64_t index_within_archive;
   int64_t offset_within_entry;
   int64_t length;
@@ -660,7 +662,7 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 // libarchive isn't consistent in archive_read_has_encrypted_entries returning
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
-static ExitCode determine_passphrase_exit_code(const std::string_view e) {
+ExitCode determine_passphrase_exit_code(const std::string_view e) {
   if (e.starts_with("Incorrect passphrase")) {
     return ExitCode::PASSPHRASE_INCORRECT;
   }
@@ -669,7 +671,7 @@ static ExitCode determine_passphrase_exit_code(const std::string_view e) {
     return ExitCode::PASSPHRASE_REQUIRED;
   }
 
-  static const std::string_view not_supported_prefixes[] = {
+  const std::string_view not_supported_prefixes[] = {
       "Crypto codec not supported",
       "Decryption is unsupported",
       "Encrypted file is unsupported",
@@ -690,7 +692,7 @@ static ExitCode determine_passphrase_exit_code(const std::string_view e) {
 }
 
 template <typename... Args>
-static std::string StrCat(Args&&... args) {
+std::string StrCat(Args&&... args) {
   return (std::ostringstream() << ... << std::forward<Args>(args)).str();
 }
 
@@ -703,7 +705,7 @@ static std::string StrCat(Args&&... args) {
 // LOG_INFO       informational message
 // LOG_DEBUG      debug-level message
 template <typename... Args>
-static void Log(int priority, Args&&... args) noexcept {
+void Log(int priority, Args&&... args) noexcept {
   try {
     syslog(priority, "%s", StrCat(std::forward<Args>(args)...).c_str());
   } catch (const std::exception& e) {
@@ -713,7 +715,7 @@ static void Log(int priority, Args&&... args) noexcept {
 
 // Throws an std::system_error with the current errno.
 template <typename... Args>
-[[noreturn]] static void ThrowSystemError(Args&&... args) {
+[[noreturn]] void ThrowSystemError(Args&&... args) {
   const int err = errno;
   throw std::system_error(err, std::system_category(),
                           StrCat(std::forward<Args>(args)...));
@@ -782,7 +784,7 @@ const char* read_password_from_stdin(struct archive*, void* /*data*/) {
 
 // ---- Libarchive Read Callbacks
 
-static void update_g_archive_fd_position_hwm() {
+void update_g_archive_fd_position_hwm() {
   int64_t h = g_archive_fd_position_hwm;
   if (h < g_archive_fd_position_current) {
     g_archive_fd_position_hwm = g_archive_fd_position_current;
@@ -819,19 +821,17 @@ static void update_g_archive_fd_position_hwm() {
 // g_archive_fd_position_etc. The data arguments are ignored in favor of global
 // variables.
 
-static int my_file_close(struct archive* a, void* /*data*/) {
+int my_file_close(struct archive* a, void* /*data*/) {
   return ARCHIVE_OK;
 }
 
-static int my_file_open(struct archive* a, void* /*data*/) {
+int my_file_open(struct archive* a, void* /*data*/) {
   g_archive_fd_position_current = 0;
   g_archive_fd_position_hwm = 0;
   return ARCHIVE_OK;
 }
 
-static ssize_t my_file_read(struct archive* a,
-                            void* /*data*/,
-                            const void** out_dst_ptr) {
+ssize_t my_file_read(struct archive* a, void*, const void** out_dst_ptr) {
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
   while (true) {
     const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
@@ -853,10 +853,7 @@ static ssize_t my_file_read(struct archive* a,
   return ARCHIVE_FATAL;
 }
 
-static int64_t my_file_seek(struct archive* a,
-                            void* /*data*/,
-                            int64_t offset,
-                            int whence) {
+int64_t my_file_seek(struct archive* a, void*, int64_t offset, int whence) {
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
     g_archive_fd_position_current = o;
@@ -869,7 +866,7 @@ static int64_t my_file_seek(struct archive* a,
   return ARCHIVE_FATAL;
 }
 
-static int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
+int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if (o1 >= 0 && o0 >= 0) {
@@ -883,11 +880,11 @@ static int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
   return ARCHIVE_FATAL;
 }
 
-static int my_file_switch(struct archive*, void* /*data0*/, void* /*data1*/) {
+int my_file_switch(struct archive*, void* /*data0*/, void* /*data1*/) {
   return ARCHIVE_OK;
 }
 
-static int my_archive_read_open(struct archive* a) {
+int my_archive_read_open(struct archive* a) {
   TRY(archive_read_set_callback_data(a, nullptr));
   TRY(archive_read_set_close_callback(a, my_file_close));
   TRY(archive_read_set_open_callback(a, my_file_open));
@@ -902,7 +899,7 @@ static int my_archive_read_open(struct archive* a) {
 
 // acquire_side_buffer returns the index of the least recently used side
 // buffer. This indexes g_side_buffer_data and g_side_buffer_metadata.
-static int acquire_side_buffer() {
+int acquire_side_buffer() {
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
   for (int i = 1; i < NUM_SIDE_BUFFERS; i++) {
@@ -918,10 +915,10 @@ static int acquire_side_buffer() {
   return oldest_i;
 }
 
-static bool read_from_side_buffer(int64_t index_within_archive,
-                                  char* dst_ptr,
-                                  size_t dst_len,
-                                  int64_t offset_within_entry) {
+bool read_from_side_buffer(int64_t index_within_archive,
+                           char* dst_ptr,
+                           size_t dst_len,
+                           int64_t offset_within_entry) {
   // Find the longest side buffer that contains (index_within_archive,
   // offset_within_entry, dst_len).
   int best_i = -1;
@@ -1083,7 +1080,7 @@ struct Reader {
 };
 
 // Swaps fields of two Readers.
-static void swap(Reader& a, Reader& b) {
+void swap(Reader& a, Reader& b) {
   std::swap(a.archive, b.archive);
   std::swap(a.archive_entry, b.archive_entry);
   std::swap(a.index_within_archive, b.index_within_archive);
@@ -1092,8 +1089,7 @@ static void swap(Reader& a, Reader& b) {
 
 // Returns a Reader positioned at the start (offset == 0) of the given index'th
 // entry of the archive.
-static std::unique_ptr<Reader> acquire_reader(
-    int64_t want_index_within_archive) {
+std::unique_ptr<Reader> acquire_reader(int64_t want_index_within_archive) {
   assert(want_index_within_archive >= 0);
 
   int best_i = -1;
@@ -1147,7 +1143,7 @@ static std::unique_ptr<Reader> acquire_reader(
 }
 
 // release_reader returns r to the reader cache.
-static void release_reader(std::unique_ptr<Reader> r) {
+void release_reader(std::unique_ptr<Reader> r) {
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_saved_readers[0].second;
   for (int i = 1; i < NUM_SAVED_READERS; i++) {
@@ -1165,7 +1161,7 @@ static void release_reader(std::unique_ptr<Reader> r) {
 
 // normalize_pathname validates and returns e's pathname, prepending a leading
 // "/" if it didn't already have one.
-static std::string normalize_pathname(struct archive_entry* e) {
+std::string normalize_pathname(struct archive_entry* e) {
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
   if (!s) {
@@ -1306,12 +1302,12 @@ Node* CreateDir(std::string_view const path) {
   return node;
 }
 
-static void insert_leaf_node(std::string&& path,
-                             std::string&& symlink,
-                             int64_t index_within_archive,
-                             int64_t size,
-                             time_t mtime,
-                             mode_t mode) {
+void insert_leaf_node(std::string&& path,
+                      std::string&& symlink,
+                      int64_t const index_within_archive,
+                      int64_t const size,
+                      time_t const mtime,
+                      mode_t mode) {
   const auto [parent_path, name] = Path(path).Split();
 
   Node* const parent = CreateDir(parent_path);
@@ -1341,9 +1337,9 @@ static void insert_leaf_node(std::string&& path,
   g_nodes_by_index.push_back(n);
 }
 
-static void insert_leaf(struct archive* a,
-                        struct archive_entry* e,
-                        int64_t index_within_archive) {
+void insert_leaf(struct archive* a,
+                 struct archive_entry* e,
+                 int64_t index_within_archive) {
   const mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
 
@@ -1410,7 +1406,7 @@ static void insert_leaf(struct archive* a,
                    size, archive_entry_mtime(e), mode);
 }
 
-static void build_tree() {
+void build_tree() {
   assert(g_initialize_index_within_archive >= 0);
   bool first = true;
   while (true) {
@@ -1444,7 +1440,7 @@ static void build_tree() {
 // This section (pre_initialize and post_initialize_etc) are the "two parts"
 // described in the "Building is split into two parts" comment above.
 
-static void pre_initialize() {
+void pre_initialize() {
   if (g_archive_filename.empty()) {
     Log(LOG_ERR, "Missing archive_filename argument");
     throw ExitCode::GENERIC_FAILURE;
@@ -1551,7 +1547,7 @@ static void pre_initialize() {
   }
 }
 
-static void post_initialize_sync() {
+void post_initialize_sync() {
   build_tree();
   archive_read_free(g_initialize_archive);
   g_initialize_archive = nullptr;
@@ -1574,17 +1570,20 @@ static void post_initialize_sync() {
 
 // ---- FUSE Callbacks
 
-static int my_getattr(const char* path, struct stat* z) {
+int my_getattr(const char* const path, struct stat* const z) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
     return -ENOENT;
   }
 
+  assert(z);
   *z = it->second->get_stat();
   return 0;
 }
 
-static int my_readlink(const char* path, char* dst_ptr, size_t dst_len) {
+int my_readlink(const char* const path,
+                char* const dst_ptr,
+                size_t const dst_len) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
     return -ENOENT;
@@ -1600,7 +1599,7 @@ static int my_readlink(const char* path, char* dst_ptr, size_t dst_len) {
   return 0;
 }
 
-static int my_open(const char* path, fuse_file_info* ffi) {
+int my_open(const char* const path, fuse_file_info* const ffi) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
     return -ENOENT;
@@ -1632,11 +1631,11 @@ static int my_open(const char* path, fuse_file_info* ffi) {
   return 0;
 }
 
-static int my_read(const char* path,
-                   char* dst_ptr,
-                   size_t dst_len,
-                   off_t offset,
-                   fuse_file_info* ffi) {
+int my_read(const char* const path,
+            char* const dst_ptr,
+            size_t dst_len,
+            off_t const offset,
+            fuse_file_info* const ffi) {
   if (offset < 0 || dst_len > INT_MAX) {
     return -EINVAL;
   }
@@ -1701,7 +1700,7 @@ static int my_read(const char* path,
   return r->read(dst_ptr, dst_len, path);
 }
 
-static int my_release(const char* /*path*/, fuse_file_info* ffi) {
+int my_release(const char*, fuse_file_info* const ffi) {
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
   if (!r) {
     return -EIO;
@@ -1710,11 +1709,11 @@ static int my_release(const char* /*path*/, fuse_file_info* ffi) {
   return 0;
 }
 
-static int my_readdir(const char* path,
-                      void* buf,
-                      fuse_fill_dir_t filler,
-                      off_t /*offset*/,
-                      fuse_file_info* /*ffi*/) {
+int my_readdir(const char* path,
+               void* const buf,
+               fuse_fill_dir_t const filler,
+               off_t,
+               fuse_file_info*) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
     return -ENOENT;
@@ -1739,7 +1738,8 @@ static int my_readdir(const char* path,
   return 0;
 }
 
-static int my_statfs(const char* /*path*/, struct statvfs* st) {
+int my_statfs(const char*, struct statvfs* const st) {
+  assert(st);
   st->f_bsize = block_size;
   st->f_frsize = block_size;
   st->f_blocks = g_block_count;
@@ -1753,15 +1753,15 @@ static int my_statfs(const char* /*path*/, struct statvfs* st) {
   return 0;
 }
 
-static void* my_init(struct fuse_conn_info* conn) {
+void* my_init(fuse_conn_info*) {
   return nullptr;
 }
 
-static void my_destroy(void* arg) {
+void my_destroy(void* arg) {
   assert(!arg);
 }
 
-static const struct fuse_operations my_operations = {
+const struct fuse_operations my_operations = {
     .getattr = my_getattr,
     .readlink = my_readlink,
     .open = my_open,
@@ -1775,26 +1775,7 @@ static const struct fuse_operations my_operations = {
 
 // ---- Main
 
-// innername returns the "bar.ext0" from "/foo/bar.ext0.ext1".
-const char* innername(const char* filename) {
-  if (!filename) {
-    return nullptr;
-  }
-  const char* last_slash = strrchr(filename, '/');
-  if (last_slash) {
-    filename = last_slash + 1;
-  }
-  const char* last_dot = strrchr(filename, '.');
-  if (last_dot) {
-    return strndup(filename, last_dot - filename);
-  }
-  return strdup(filename);
-}
-
-static int my_opt_proc(void* /*private_data*/,
-                       const char* const arg,
-                       int const key,
-                       fuse_args* /*out_args*/) {
+int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
   constexpr int KEEP = 1;
   constexpr int DISCARD = 0;
   constexpr int ERROR = -1;
@@ -1844,7 +1825,7 @@ static int my_opt_proc(void* /*private_data*/,
   return KEEP;
 }
 
-static void ensure_utf_8_encoding() {
+void ensure_utf_8_encoding() {
   // libarchive (especially for reading 7z) has locale-dependent behavior.
   // Non-ASCII pathnames can trigger "Pathname cannot be converted from
   // UTF-16LE to current locale" warnings from archive_read_next_header and
@@ -1852,7 +1833,7 @@ static void ensure_utf_8_encoding() {
   //
   // Calling setlocale to enforce a UTF-8 encoding can avoid that. Try various
   // arguments and pick the first one that is supported and produces UTF-8.
-  static const char* const locales[] = {
+  const char* const locales[] = {
       // As of 2021, many systems (including Debian) support "C.UTF-8".
       "C.UTF-8",
       // However, "C.UTF-8" is not a POSIX standard and glibc 2.34 (released
@@ -1889,7 +1870,9 @@ struct Cleanup {
   }
 };
 
-int main(int argc, char** argv) try {
+}  // namespace
+
+int main(int const argc, char** const argv) try {
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   setlogmask(LOG_UPTO(LOG_INFO));
 
