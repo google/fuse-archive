@@ -220,7 +220,7 @@ const mode_t g_fmask = 0022;
 // Building that tree is one of the first things that we do.
 struct archive* g_archive = nullptr;
 struct archive_entry* g_archive_entry = nullptr;
-int64_t g_initialize_index_within_archive = -1;
+int64_t g_index_within_archive = -1;
 
 // g_displayed_progress is whether we have printed a progress message.
 bool g_displayed_progress = false;
@@ -451,7 +451,6 @@ std::ostream& operator<<(std::ostream& out, Path const path) {
 }
 
 enum class FileType : mode_t {
-  Unknown = 0,            // Unknown
   BlockDevice = S_IFBLK,  // Block-oriented device
   CharDevice = S_IFCHR,   // Character-oriented device
   Directory = S_IFDIR,    // Directory
@@ -465,7 +464,22 @@ FileType GetFileType(mode_t mode) {
   return FileType(mode & S_IFMT);
 }
 
-std::ostream& operator<<(std::ostream& out, const FileType t) {
+bool IsValid(FileType const t) {
+  switch (t) {
+    case FileType::BlockDevice:
+    case FileType::CharDevice:
+    case FileType::Directory:
+    case FileType::Fifo:
+    case FileType::File:
+    case FileType::Socket:
+    case FileType::Symlink:
+      return true;
+  }
+
+  return false;
+}
+
+std::ostream& operator<<(std::ostream& out, FileType const t) {
   switch (t) {
     case FileType::BlockDevice:
       return out << "Block Device";
@@ -481,9 +495,9 @@ std::ostream& operator<<(std::ostream& out, const FileType t) {
       return out << "Socket";
     case FileType::Symlink:
       return out << "Symlink";
-    default:
-      return out << "Unknown";
   }
+
+  return out << "FileType(" << static_cast<mode_t>(t) << ")";
 }
 
 constexpr blksize_t block_size = 512;
@@ -502,6 +516,7 @@ struct Node {
   int64_t index_within_archive = -1;
   int64_t size = 0;
   time_t mtime = 0;
+  dev_t rdev = 0;
   int nlink = 0;
 
   // Pointer to the parent node. Should be non null. The only exception is the
@@ -549,6 +564,7 @@ struct Node {
     z.st_mtime = mtime;
     z.st_blksize = block_size;
     z.st_blocks = get_block_count();
+    z.st_rdev = rdev;
     return z;
   }
 
@@ -1189,28 +1205,30 @@ void release_reader(std::unique_ptr<Reader> r) {
 
 // ---- In-Memory Directory Tree
 
-// normalize_pathname validates and returns e's pathname, prepending a leading
-// "/" if it didn't already have one.
-std::string normalize_pathname(struct archive_entry* e) {
+// Validates, normalizes and returns e's path, prepending a leading "/" if it
+// doesn't already have one.
+std::string GetNormalizedPath(struct archive_entry* const e) {
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
-  if (!s) {
-    Log(LOG_ERR, "entry has an empty path");
+  if (!s || !*s) {
+    Log(LOG_ERR, "Entry has an empty path");
     return "";
   }
+
+  const Path path = s;
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive_is_raw && std::string_view("data") == s) {
+  if (g_archive_is_raw && path == "data") {
     return Path(g_archive_path)
         .Split()
         .second.WithoutFinalExtension()
         .Normalize();
   }
 
-  return Path(s).Normalize();
+  return path.Normalize();
 }
 
 // Checks if the given character is an ASCII digit.
@@ -1286,7 +1304,7 @@ void Attach(Node* const node) {
   }
 }
 
-Node* CreateDir(std::string_view const path) {
+Node* GetOrCreateDirNode(std::string_view const path) {
   if (path == "/") {
     assert(g_root_node);
     assert(g_root_node->is_dir());
@@ -1314,7 +1332,7 @@ Node* CreateDir(std::string_view const path) {
     to_rename = node;
     node = nullptr;
   } else {
-    parent = CreateDir(parent_path);
+    parent = GetOrCreateDirNode(parent_path);
   }
 
   assert(parent);
@@ -1335,120 +1353,104 @@ Node* CreateDir(std::string_view const path) {
   return node;
 }
 
-void insert_leaf_node(std::string&& path,
-                      std::string&& symlink,
-                      int64_t const index_within_archive,
-                      int64_t const size,
-                      time_t const mtime,
-                      mode_t mode) {
+void ProcessEntry(struct archive* const a,
+                  struct archive_entry* const e,
+                  int64_t const index_within_archive) {
+  mode_t mode = archive_entry_mode(e);
+  const FileType ft = GetFileType(mode);
+  if (!IsValid(ft)) {
+    Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive,
+        "]: Invalid type");
+    return;
+  }
+
+  std::string path = GetNormalizedPath(e);
+  if (path.empty()) {
+    Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive,
+        "]: Invalid path");
+    return;
+  }
+
+  const time_t mtime = archive_entry_mtime(e);
+  if (ft == FileType::Directory) {
+    Node* const node = GetOrCreateDirNode(path);
+    node->mtime = mtime;
+    return;
+  }
+
   const auto [parent_path, name] = Path(path).Split();
 
-  Node* const parent = CreateDir(parent_path);
+  Node* const parent = GetOrCreateDirNode(parent_path);
   assert(parent);
   assert(parent->is_dir());
 
-  if (!symlink.empty()) {
-    mode = S_IFLNK | 0777;
-  } else {
-    const bool executable = (mode & 0111) != 0;
-    mode = 0666;
-    if (executable) {
-      mode |= 0111;
-    }
-    mode &= ~g_fmask;
-    mode |= S_IFREG;
-  }
-
-  Node* const n = new Node{.name = std::string(name),
-                           .symlink = std::move(symlink),
-                           .mode = mode,
-                           .index_within_archive = index_within_archive,
-                           .size = size,
-                           .mtime = mtime};
-  parent->add_child(n);
-  g_block_count += n->get_block_count();
+  Node* const node =
+      new Node{.name = std::string(name),
+               .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
+               .index_within_archive = index_within_archive,
+               .mtime = mtime};
+  parent->add_child(node);
   g_block_count += 1;
 
   // Add to g_nodes_by_path.
-  Attach(n);
+  Attach(node);
 
   // Add to g_nodes_by_index.
   assert(g_nodes_by_index.size() <= index_within_archive);
   g_nodes_by_index.resize(index_within_archive);
-  g_nodes_by_index.push_back(n);
-}
-
-void insert_leaf(struct archive* a,
-                 struct archive_entry* e,
-                 int64_t index_within_archive) {
-  const mode_t mode = archive_entry_mode(e);
-  const FileType ft = GetFileType(mode);
-
-  std::string path = normalize_pathname(e);
-  if (path.empty()) {
-    Log(LOG_DEBUG, "Skipped ", ft, " with invalid path ",
-        Path(archive_entry_pathname_utf8(e)));
-    return;
-  }
-
-  std::string symlink;
+  g_nodes_by_index.push_back(node);
 
   switch (ft) {
-    case FileType::Directory:
-      CreateDir(path);
-      return;
-
     case FileType::CharDevice:
     case FileType::BlockDevice:
-    case FileType::Fifo:
-    case FileType::Socket:
-      Log(LOG_DEBUG, "Skipped ", ft, " ", Path(path));
-      return;
+      node->rdev = archive_entry_rdev(e);
+      break;
 
     case FileType::Symlink:
       if (const char* const s =
               archive_entry_symlink_utf8(e) ?: archive_entry_symlink(e)) {
-        symlink = std::string(s);
+        node->symlink = s;
+      }
+      break;
+
+    case FileType::File:
+      if (const mode_t xbits = 0111; mode & xbits) {
+        node->mode |= xbits & ~g_fmask;
       }
 
-      if (symlink.empty()) {
-        Log(LOG_ERR, "Skipped empty link ", Path(path));
-        return;
+      if (archive_entry_size_is_set(e)) {
+        node->size = archive_entry_size(e);
+      } else {
+        // 'Raw' archives don't always explicitly record the decompressed size.
+        // We'll have to decompress it to find out. Some 'cooked' archives also
+        // don't explicitly record this (at the time archive_read_next_header
+        // returns). See https://github.com/libarchive/libarchive/issues/1764
+        Log(LOG_INFO, "Extracting ", *node);
+
+        while (const ssize_t n = archive_read_data(
+                   a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
+                   SIDE_BUFFER_SIZE)) {
+          if (n < 0) {
+            Log(LOG_ERR, "Cannot extract ", Path(path), ": ",
+                archive_error_string(a));
+            throw ExitCode::INVALID_ARCHIVE_CONTENTS;
+          }
+
+          assert(n <= SIDE_BUFFER_SIZE);
+          node->size += n;
+        }
       }
+
+      g_block_count += node->get_block_count();
+      break;
 
     default:
       break;
   }
-
-  int64_t size = archive_entry_size(e);
-  // 'Raw' archives don't always explicitly record the decompressed size. We'll
-  // have to decompress it to find out. Some 'cooked' archives also don't
-  // explicitly record this (at the time archive_read_next_header returns). See
-  // https://github.com/libarchive/libarchive/issues/1764
-  if (!archive_entry_size_is_set(e)) {
-    Log(LOG_INFO, "Extracting ", Path(path));
-
-    size = 0;
-    while (const ssize_t n = archive_read_data(
-               a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
-               SIDE_BUFFER_SIZE)) {
-      if (n < 0) {
-        Log(LOG_ERR, "Cannot extract ", Path(path), ": ",
-            archive_error_string(a));
-        throw ExitCode::INVALID_ARCHIVE_CONTENTS;
-      }
-
-      assert(n <= SIDE_BUFFER_SIZE);
-      size += n;
-    }
-  }
-
-  insert_leaf_node(std::move(path), std::move(symlink), index_within_archive,
-                   size, archive_entry_mtime(e), mode);
 }
 
 void build_tree() {
-  assert(g_initialize_index_within_archive >= 0);
+  assert(g_index_within_archive >= 0);
   bool first = true;
   while (true) {
     if (first) {
@@ -1456,7 +1458,7 @@ void build_tree() {
       first = false;
     } else {
       int status = archive_read_next_header(g_archive, &g_archive_entry);
-      g_initialize_index_within_archive++;
+      g_index_within_archive++;
       if (status == ARCHIVE_EOF) {
         break;
       }
@@ -1469,7 +1471,7 @@ void build_tree() {
       }
     }
 
-    insert_leaf(g_archive, g_archive_entry, g_initialize_index_within_archive);
+    ProcessEntry(g_archive, g_archive_entry, g_index_within_archive);
   }
 }
 
@@ -1522,7 +1524,7 @@ void pre_initialize() {
 
   while (true) {
     int status = archive_read_next_header(g_archive, &g_archive_entry);
-    g_initialize_index_within_archive++;
+    g_index_within_archive++;
     if (status == ARCHIVE_WARN) {
       Log(LOG_WARNING, archive_error_string(g_archive));
     } else if (status != ARCHIVE_OK) {
@@ -1532,7 +1534,7 @@ void pre_initialize() {
       archive_read_free(g_archive);
       g_archive = nullptr;
       g_archive_entry = nullptr;
-      g_initialize_index_within_archive = -1;
+      g_index_within_archive = -1;
       if (status != ARCHIVE_EOF) {
         throw ExitCode::INVALID_ARCHIVE_HEADER;
       }
@@ -1557,7 +1559,7 @@ void pre_initialize() {
         archive_read_free(g_archive);
         g_archive = nullptr;
         g_archive_entry = nullptr;
-        g_initialize_index_within_archive = -1;
+        g_index_within_archive = -1;
         Log(LOG_ERR, "Invalid raw archive");
         throw ExitCode::INVALID_RAW_ARCHIVE;
       }
@@ -1584,7 +1586,7 @@ void post_initialize_sync() {
   archive_read_free(g_archive);
   g_archive = nullptr;
   g_archive_entry = nullptr;
-  g_initialize_index_within_archive = -1;
+  g_index_within_archive = -1;
   if (g_archive_fd >= 0) {
     close(g_archive_fd);
     g_archive_fd = -1;
