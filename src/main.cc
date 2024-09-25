@@ -213,6 +213,9 @@ bool g_archive_is_raw = false;
 const uid_t g_uid = getuid();
 const gid_t g_gid = getgid();
 
+const mode_t g_dmask = 0022;
+const mode_t g_fmask = 0022;
+
 // We serve ls and stat requests from an in-memory directory tree of nodes.
 // Building that tree is one of the first things that we do.
 struct archive* g_archive = nullptr;
@@ -605,7 +608,7 @@ std::vector<Node*> g_nodes_by_index;
 
 // Root node of the tree.
 Node* const g_root_node =
-    new Node{.name = "/", .mode = S_IFDIR | 0777, .nlink = 1};
+    new Node{.name = "/", .mode = S_IFDIR | (0777 & ~g_dmask), .nlink = 1};
 blkcnt_t g_block_count = 1;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
@@ -1318,8 +1321,9 @@ Node* CreateDir(std::string_view const path) {
   assert(!node);
 
   // Create the Directory node.
-  node =
-      new Node{.name = std::string(name), .mode = S_IFDIR | 0777, .nlink = 1};
+  node = new Node{.name = std::string(name),
+                  .mode = S_IFDIR | (0777 & ~g_dmask),
+                  .nlink = 1};
   parent->add_child(node);
   g_block_count += 1;
   assert(node->path() == path);
@@ -1343,9 +1347,17 @@ void insert_leaf_node(std::string&& path,
   assert(parent);
   assert(parent->is_dir());
 
-  const bool executable = (mode & 0111) != 0;
-  mode = !symlink.empty() ? (S_IFLNK | 0666)
-                          : (S_IFREG | 0666 | (executable ? 0111 : 0));
+  if (!symlink.empty()) {
+    mode = S_IFLNK | 0777;
+  } else {
+    const bool executable = (mode & 0111) != 0;
+    mode = 0666;
+    if (executable) {
+      mode |= 0111;
+    }
+    mode &= ~g_fmask;
+    mode |= S_IFREG;
+  }
 
   Node* const n = new Node{.name = std::string(name),
                            .symlink = std::move(symlink),
