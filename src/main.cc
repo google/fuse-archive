@@ -188,14 +188,17 @@ int64_t g_archive_fd_position_hwm = 0;
 // fuse_main function may change the current working directory, so subsequent
 // archive_read_open_filename calls use this absolute filepath instead.
 // g_archive_path is still used for logging. g_archive_realpath is allocated in
-// pre_initialize and never freed.
+// BuildTree() and never freed.
 const char* g_archive_realpath = nullptr;
 
 // Decryption password.
-std::string password;
+std::string g_password;
 
 // Number of times the decryption password has been requested.
-int password_count = 0;
+int g_password_count = 0;
+
+// Has the password been actually checked yet?
+bool g_password_checked = false;
 
 // g_archive_is_raw is whether the archive file is 'cooked' or 'raw'.
 //
@@ -220,7 +223,6 @@ const mode_t g_fmask = 0022;
 // Building that tree is one of the first things that we do.
 struct archive* g_archive = nullptr;
 struct archive_entry* g_archive_entry = nullptr;
-int64_t g_index_within_archive = -1;
 
 // g_displayed_progress is whether we have printed a progress message.
 bool g_displayed_progress = false;
@@ -796,7 +798,7 @@ class SuppressEcho {
 };
 
 const char* read_password_from_stdin(struct archive*, void* /*data*/) {
-  if (password_count++) {
+  if (g_password_count++) {
     return nullptr;
   }
 
@@ -806,8 +808,8 @@ const char* read_password_from_stdin(struct archive*, void* /*data*/) {
   }
 
   // Read password from standard input.
-  if (!std::getline(std::cin, password)) {
-    password.clear();
+  if (!std::getline(std::cin, g_password)) {
+    g_password.clear();
   }
 
   if (guard) {
@@ -815,17 +817,17 @@ const char* read_password_from_stdin(struct archive*, void* /*data*/) {
   }
 
   // Remove newline at the end of password.
-  while (password.ends_with('\n')) {
-    password.pop_back();
+  while (g_password.ends_with('\n')) {
+    g_password.pop_back();
   }
 
-  if (password.empty()) {
+  if (g_password.empty()) {
     Log(LOG_DEBUG, "Got an empty password");
     return nullptr;
   }
 
-  Log(LOG_DEBUG, "Got a password of ", password.size(), " bytes");
-  return password.c_str();
+  Log(LOG_DEBUG, "Got a password of ", g_password.size(), " bytes");
+  return g_password.c_str();
 }
 
 // ---- Libarchive Read Callbacks
@@ -847,15 +849,7 @@ void update_g_archive_fd_position_hwm() {
                                                       0, g_archive_file_size) /
                                   g_archive_file_size
                             : 0;
-    if (isatty(STDERR_FILENO)) {
-      if (g_displayed_progress) {
-        fprintf(stderr, "\e[F\e[K");
-      }
-      fprintf(stderr, "Loading %d%%\n", percent);
-      fflush(stderr);
-    } else {
-      Log(LOG_INFO, "Loading ", percent, "%");
-    }
+    Log(LOG_INFO, "Loading ", percent, "%");
     g_displayed_progress = true;
   }
 }
@@ -1165,8 +1159,8 @@ std::unique_ptr<Reader> acquire_reader(int64_t want_index_within_archive) {
       return nullptr;
     }
 
-    if (!password.empty()) {
-      archive_read_add_passphrase(a, password.c_str());
+    if (!g_password.empty()) {
+      archive_read_add_passphrase(a, g_password.c_str());
     }
 
     archive_read_support_filter_all(a);
@@ -1371,6 +1365,9 @@ void ProcessEntry(struct archive* const a,
     return;
   }
 
+  Log(LOG_DEBUG, "Processing ", ft, " [", index_within_archive, "] ",
+      Path(path));
+
   const time_t mtime = archive_entry_mtime(e);
   if (ft == FileType::Directory) {
     Node* const node = GetOrCreateDirNode(path);
@@ -1431,14 +1428,30 @@ void ProcessEntry(struct archive* const a,
                    a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
                    SIDE_BUFFER_SIZE)) {
           if (n < 0) {
-            Log(LOG_ERR, "Cannot extract ", Path(path), ": ",
-                archive_error_string(a));
-            throw ExitCode::INVALID_ARCHIVE_CONTENTS;
+            const std::string_view error = archive_error_string(a);
+            Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
+            throw determine_passphrase_exit_code(error);
           }
 
           assert(n <= SIDE_BUFFER_SIZE);
           node->size += n;
         }
+
+        g_password_checked = true;
+      }
+
+      if (!g_password_checked) {
+        // Reading the first byte of the first file will reveal whether we also
+        // need a passphrase.
+        const ssize_t n = archive_read_data(
+            g_archive, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
+        if (n < 0) {
+          const std::string_view error = archive_error_string(a);
+          Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
+          throw determine_passphrase_exit_code(error);
+        }
+
+        g_password_checked = true;
       }
 
       g_block_count += node->get_block_count();
@@ -1449,38 +1462,7 @@ void ProcessEntry(struct archive* const a,
   }
 }
 
-void build_tree() {
-  assert(g_index_within_archive >= 0);
-  bool first = true;
-  while (true) {
-    if (first) {
-      // The entry was already read by pre_initialize.
-      first = false;
-    } else {
-      int status = archive_read_next_header(g_archive, &g_archive_entry);
-      g_index_within_archive++;
-      if (status == ARCHIVE_EOF) {
-        break;
-      }
-
-      if (status == ARCHIVE_WARN) {
-        Log(LOG_WARNING, archive_error_string(g_archive));
-      } else if (status != ARCHIVE_OK) {
-        Log(LOG_ERR, "Invalid archive: ", archive_error_string(g_archive));
-        throw ExitCode::INVALID_ARCHIVE_CONTENTS;
-      }
-    }
-
-    ProcessEntry(g_archive, g_archive_entry, g_index_within_archive);
-  }
-}
-
-// ---- Lazy Initialization
-
-// This section (pre_initialize and post_initialize_etc) are the "two parts"
-// described in the "Building is split into two parts" comment above.
-
-void pre_initialize() {
+void BuildTree() {
   if (g_archive_path.empty()) {
     Log(LOG_ERR, "Missing archive_filename argument");
     throw ExitCode::GENERIC_FAILURE;
@@ -1499,12 +1481,14 @@ void pre_initialize() {
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
-  struct stat z;
-  if (fstat(g_archive_fd, &z) != 0) {
-    Log(LOG_ERR, "Cannot stat ", Path(g_archive_path), ": ", strerror(errno));
-    throw ExitCode::CANNOT_OPEN_ARCHIVE;
+  {
+    struct stat z;
+    if (fstat(g_archive_fd, &z) != 0) {
+      Log(LOG_ERR, "Cannot stat ", Path(g_archive_path), ": ", strerror(errno));
+      throw ExitCode::CANNOT_OPEN_ARCHIVE;
+    }
+    g_archive_file_size = z.st_size;
   }
-  g_archive_file_size = z.st_size;
 
   g_archive = archive_read_new();
   if (!g_archive) {
@@ -1519,86 +1503,50 @@ void pre_initialize() {
   archive_read_support_format_raw(g_archive);
   if (my_archive_read_open(g_archive) != ARCHIVE_OK) {
     Log(LOG_ERR, "Cannot open archive: ", archive_error_string(g_archive));
-    throw ExitCode::GENERIC_FAILURE;
+    throw ExitCode::INVALID_ARCHIVE_HEADER;
   }
 
-  while (true) {
-    int status = archive_read_next_header(g_archive, &g_archive_entry);
-    g_index_within_archive++;
+  // Read and process every entry of the archive.
+  for (int64_t i = 0;; i++) {
+    const int status = archive_read_next_header(g_archive, &g_archive_entry);
+    if (status == ARCHIVE_EOF) {
+      break;
+    }
+
     if (status == ARCHIVE_WARN) {
       Log(LOG_WARNING, archive_error_string(g_archive));
     } else if (status != ARCHIVE_OK) {
-      if (status != ARCHIVE_EOF) {
-        Log(LOG_ERR, "Invalid archive: ", archive_error_string(g_archive));
-      }
-      archive_read_free(g_archive);
-      g_archive = nullptr;
-      g_archive_entry = nullptr;
-      g_index_within_archive = -1;
-      if (status != ARCHIVE_EOF) {
-        throw ExitCode::INVALID_ARCHIVE_HEADER;
-      }
-      // Building the tree for an empty archive is trivial.
-      return;
+      const std::string_view error = archive_error_string(g_archive);
+      Log(LOG_ERR, error);
+      throw determine_passphrase_exit_code(error);
     }
 
-    if (S_ISDIR(archive_entry_mode(g_archive_entry))) {
-      continue;
-    }
-    break;
-  }
+    if (i == 0) {
+      // For 'raw' archives, check that at least one of the compression filters
+      // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
+      // data (e.g. foo.jpeg).
+      if (archive_format(g_archive) == ARCHIVE_FORMAT_RAW) {
+        g_archive_is_raw = true;
+        Log(LOG_DEBUG, "The archive is a 'raw' archive");
 
-  // For 'raw' archives, check that at least one of the compression filters
-  // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
-  // data (e.g. foo.jpeg).
-  if (archive_format(g_archive) == ARCHIVE_FORMAT_RAW) {
-    g_archive_is_raw = true;
-    const int n = archive_filter_count(g_archive);
-    for (int i = 0; true; i++) {
-      if (i == n) {
-        archive_read_free(g_archive);
-        g_archive = nullptr;
-        g_archive_entry = nullptr;
-        g_index_within_archive = -1;
-        Log(LOG_ERR, "Invalid raw archive");
-        throw ExitCode::INVALID_RAW_ARCHIVE;
-      }
+        for (int n = archive_filter_count(g_archive);;) {
+          if (n == 0) {
+            Log(LOG_ERR, "Invalid raw archive");
+            throw ExitCode::INVALID_RAW_ARCHIVE;
+          }
 
-      if (archive_filter_code(g_archive, i) != ARCHIVE_FILTER_NONE) {
-        break;
+          if (archive_filter_code(g_archive, --n) != ARCHIVE_FILTER_NONE) {
+            break;
+          }
+        }
       }
     }
-  } else {
-    // Otherwise, reading the first byte of the first non-directory entry will
-    // reveal whether we also need a passphrase.
-    ssize_t n = archive_read_data(
-        g_archive, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
-    if (n < 0) {
-      const char* const e = archive_error_string(g_archive);
-      Log(LOG_ERR, e);
-      throw determine_passphrase_exit_code(e);
-    }
-  }
-}
 
-void post_initialize_sync() {
-  build_tree();
-  archive_read_free(g_archive);
-  g_archive = nullptr;
-  g_archive_entry = nullptr;
-  g_index_within_archive = -1;
-  if (g_archive_fd >= 0) {
-    close(g_archive_fd);
-    g_archive_fd = -1;
+    ProcessEntry(g_archive, g_archive_entry, i);
   }
 
   if (g_displayed_progress) {
-    if (isatty(STDERR_FILENO)) {
-      fprintf(stderr, "\e[F\e[K");
-      fflush(stderr);
-    } else {
-      Log(LOG_INFO, "Loaded 100%");
-    }
+    Log(LOG_INFO, "Loaded 100%");
   }
 }
 
@@ -1994,8 +1942,7 @@ general options:
 
   // Read archive and build tree.
   g_nodes_by_path[g_root_node->path()] = g_root_node;
-  pre_initialize();
-  post_initialize_sync();
+  BuildTree();
 
   // Create the mount point if it does not already exist.
   Cleanup cleanup;
