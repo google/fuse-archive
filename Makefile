@@ -3,6 +3,7 @@ DEPS = fuse libarchive
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
+MAN = fuse-archive.1
 
 prefix=/usr
 bindir=$(prefix)/bin
@@ -14,6 +15,12 @@ check: all
 
 clean:
 	rm -rf out
+
+doc: $(MAN)
+	man -l $(MAN)
+
+$(MAN): README.md
+	pandoc $< -s -t man -o $@
 
 install: all
 	mkdir -p "$(DESTDIR)$(bindir)"

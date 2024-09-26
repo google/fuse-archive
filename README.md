@@ -1,30 +1,77 @@
-# Fuse-Archive
+---
+title: fuse-archive
+section: 1
+header: User Manual
+footer: fuse-archive 0.15
+date: September 2024
+---
 
-`fuse-archive` is a program that serves an archive or compressed file (e.g.
+# Name
+
+**fuse-archive** - Mount an archive or compressed file as a FUSE file system.
+
+# Synopsis
+
+**fuse-archive** [*options*] *archive-file* [*mount-point*]
+
+# Description
+
+**fuse-archive** is a program that serves an archive or compressed file (e.g.
 `foo.tar`, `foo.tar.gz`, `foo.xz` or `foo.zip`) as a read-only
 [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) file system.
 
-It is similar to [`mount-zip`](https://github.com/google/mount-zip) and
-[`fuse-zip`](https://bitbucket.org/agalanin/fuse-zip) but speaks a larger range
-of archive or compressed file formats.
+It is similar to [**mount-zip**](https://github.com/google/mount-zip) and
+[**fuse-zip**](https://bitbucket.org/agalanin/fuse-zip) but speaks a larger
+range of archive or compressed file formats.
 
-It is similar to [`archivemount`](https://github.com/cybernoid/archivemount) but
-can be much faster (see the Performance section below) although it can only
+It is similar to [**archivemount**](https://github.com/cybernoid/archivemount)
+but can be much faster (see the Performance section below) although it can only
 mount read-only, not read-write.
 
+# Options
 
-## Build
+**-\-help** **-h**
+:   print help
 
-    $ git clone https://github.com/google/fuse-archive.git
-    $ cd fuse-archive
-    $ make
+**-\-version**
+:   print version
+
+**-\-quiet** **-q**
+:   print fewer log messages
+
+**-\-verbose**
+:   print more log messages
+
+**-\-redact**
+:   redact file names from log messages
+
+**-o nospecials**
+:   hide special files (FIFOs, sockets, devices)
+
+**-o nosymlinks**
+:   hide symbolic links
+
+**-f**
+:   foreground mode
+
+**-d**
+:   foreground mode with debug output
+
+# Build
+
+```
+$ git clone https://github.com/google/fuse-archive.git
+$ cd fuse-archive
+$ make
+```
 
 On a Debian system, you may first need to install some dependencies:
 
-    $ sudo apt install libarchive-dev libfuse-dev
+```
+$ sudo apt install libarchive-dev libfuse-dev
+```
 
-
-## Performance
+# Performance
 
 Create a single `.tar.gz` file that is 256 MiB decompressed and 255 KiB
 compressed (the file just contains repeated 0x00 NUL bytes):
@@ -34,13 +81,7 @@ $ truncate --size=256M zeroes
 $ tar cfz zeroes-256mib.tar.gz zeroes
 ```
 
-Create a `mnt` directory:
-
-```
-$ mkdir mnt
-```
-
-`fuse-archive` timings:
+**fuse-archive** timings:
 
 ```
 $ time fuse-archive zeroes-256mib.tar.gz mnt
@@ -54,7 +95,7 @@ $ dd if=mnt/zeroes of=/dev/null status=progress
 $ fusermount -u mnt
 ```
 
-`archivemount` timings:
+**archivemount** timings:
 
 ```
 $ time archivemount zeroes-256mib.tar.gz mnt
@@ -69,19 +110,17 @@ $ dd if=mnt/zeroes of=/dev/null status=progress
 $ fusermount -u mnt
 ```
 
-Here, `fuse-archive` takes about the same time to scan the archive, bind the
+Here, **fuse-archive** takes about the same time to scan the archive, bind the
 mountpoint and daemonize, but it is **~700× faster** (0.83s vs 570s) to copy out
-the decompressed contents. This is because `fuse-archive` does not use
-`archivemount`'s [quadratic complexity
-algorithm](https://github.com/cybernoid/archivemount/issues/21).
+the decompressed contents. This is because **fuse-archive** does not use
+**archivemount**'s
+[quadratic complexity algorithm](https://github.com/cybernoid/archivemount/issues/21).
 
-
-## Disclaimer
+# Disclaimer
 
 This is not an official Google product. It is just code that happens to be owned
 by Google.
 
+# See Also
 
----
-
-Updated on May 2022.
+archivemount(1), mount-zip(1), fuse-zip(1), fusermount(1), fuse(8), umount(8)
