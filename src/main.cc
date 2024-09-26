@@ -38,7 +38,10 @@
 #include <fuse.h>
 #include <langinfo.h>
 #include <locale.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syslog.h>
+#include <sys/types.h>
 #include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
@@ -91,6 +94,7 @@ enum class ExitCode {
   GENERIC_FAILURE = 1,
   CANNOT_CREATE_MOUNT_POINT = 10,
   CANNOT_OPEN_ARCHIVE = 11,
+  CANNOT_CREATE_CACHE_FILE = 12,
   PASSPHRASE_REQUIRED = 20,
   PASSPHRASE_INCORRECT = 21,
   PASSPHRASE_NOT_SUPPORTED = 22,
@@ -172,6 +176,9 @@ std::string g_archive_path;
 
 // Path of the mount point.
 std::string g_mount_point;
+
+// File descriptor of the cache file.
+int g_cache_fd = -1;
 
 // File descriptor returned by opening g_archive_path.
 int g_archive_fd = -1;
@@ -773,6 +780,55 @@ template <typename... Args>
   const int err = errno;
   throw std::system_error(err, std::system_category(),
                           StrCat(std::forward<Args>(args)...));
+}
+
+std::string GetCacheDir() {
+  const char* const val = std::getenv("TMPDIR");
+  return val && *val ? val : "/tmp";
+}
+
+void CreateCacheFile() {
+  assert(g_cache_fd < 0);
+
+  const std::string cache_dir = GetCacheDir();
+
+  g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
+  if (g_cache_fd >= 0) {
+    Log(LOG_DEBUG, "Created anonymous cache file in ", Path(cache_dir));
+    return;
+  }
+
+  if (errno != ENOTSUP) {
+    Log(LOG_ERR, "Cannot create anonymous cache file in ", Path(cache_dir),
+        ": ", strerror(errno));
+    throw ExitCode::CANNOT_CREATE_CACHE_FILE;
+  }
+
+  // Some filesystems, such as overlayfs, do not support the creation of temp
+  // files with O_TMPFILE. Unfortunately, these filesystems are sometimes used
+  // for the /tmp directory. In that case, create a named temp file, and unlink
+  // it immediately.
+  assert(errno == ENOTSUP);
+  Log(LOG_DEBUG, "The filesystem of ", Path(cache_dir),
+      " does not support O_TMPFILE");
+
+  std::string path = cache_dir;
+  Path::Append(&path, "XXXXXX");
+  g_cache_fd = mkstemp(path.data());
+
+  if (g_cache_fd < 0) {
+    Log(LOG_ERR, "Cannot create named cache file in ", Path(cache_dir), ": ",
+        strerror(errno));
+    throw ExitCode::CANNOT_CREATE_CACHE_FILE;
+  }
+
+  Log(LOG_DEBUG, "Created cache file ", Path(path));
+
+  if (unlink(path.c_str()) < 0) {
+    Log(LOG_ERR, "Cannot unlink cache file ", Path(path), ": ",
+        strerror(errno));
+    throw ExitCode::CANNOT_CREATE_CACHE_FILE;
+  }
 }
 
 // Temporarily suppresses the echo on the terminal.
@@ -1973,6 +2029,9 @@ general options:
   }
 
   Log(LOG_DEBUG, "Opened directory ", Path(mount_point_parent));
+
+  // Create cache file.
+  CreateCacheFile();
 
   // Read archive and build tree.
   g_nodes_by_path[g_root_node->path()] = g_root_node;
