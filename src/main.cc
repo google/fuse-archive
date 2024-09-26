@@ -94,7 +94,8 @@ enum class ExitCode {
   GENERIC_FAILURE = 1,
   CANNOT_CREATE_MOUNT_POINT = 10,
   CANNOT_OPEN_ARCHIVE = 11,
-  CANNOT_CREATE_CACHE_FILE = 12,
+  CANNOT_CREATE_CACHE = 12,
+  CANNOT_WRITE_CACHE = 13,
   PASSPHRASE_REQUIRED = 20,
   PASSPHRASE_INCORRECT = 21,
   PASSPHRASE_NOT_SUPPORTED = 22,
@@ -179,6 +180,9 @@ std::string g_mount_point;
 
 // File descriptor of the cache file.
 int g_cache_fd = -1;
+
+// Size of the cache file.
+int64_t g_cache_size = 0;
 
 // File descriptor returned by opening g_archive_path.
 int g_archive_fd = -1;
@@ -530,6 +534,10 @@ struct Node {
   // intermediate directory).
   int64_t index_within_archive = -1;
   int64_t size = 0;
+
+  // Where does the cached data start in the cache file?
+  int64_t cache_offset = -1;
+
   time_t mtime = 0;
   dev_t rdev = 0;
   int nlink = 0;
@@ -634,12 +642,16 @@ std::ostream& operator<<(std::ostream& out, const Node& n) {
 // Building the directory tree can take minutes, for archive file formats like
 // .tar.gz that are compressed but also do not contain an explicit on-disk
 // directory of archive entries.
-std::unordered_map<std::string, Node*> g_nodes_by_path;
-std::vector<Node*> g_nodes_by_index;
+using NodesByPath = std::unordered_map<std::string, Node*>;
+NodesByPath g_nodes_by_path;
+
+using NodesByIndex = std::vector<Node*>;
+NodesByIndex g_nodes_by_index;
 
 // Root node of the tree.
-Node* const g_root_node =
-    new Node{.name = "/", .mode = S_IFDIR | (0777 & ~g_dmask), .nlink = 1};
+Node* g_root_node = nullptr;
+
+// Total number of blocks taken by the tree of nodes.
 blkcnt_t g_block_count = 1;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
@@ -789,6 +801,7 @@ std::string GetCacheDir() {
 
 void CreateCacheFile() {
   assert(g_cache_fd < 0);
+  assert(g_cache_size == 0);
 
   const std::string cache_dir = GetCacheDir();
 
@@ -801,7 +814,7 @@ void CreateCacheFile() {
   if (errno != ENOTSUP) {
     Log(LOG_ERR, "Cannot create anonymous cache file in ", Path(cache_dir),
         ": ", strerror(errno));
-    throw ExitCode::CANNOT_CREATE_CACHE_FILE;
+    throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
   // Some filesystems, such as overlayfs, do not support the creation of temp
@@ -819,7 +832,7 @@ void CreateCacheFile() {
   if (g_cache_fd < 0) {
     Log(LOG_ERR, "Cannot create named cache file in ", Path(cache_dir), ": ",
         strerror(errno));
-    throw ExitCode::CANNOT_CREATE_CACHE_FILE;
+    throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
   Log(LOG_DEBUG, "Created cache file ", Path(path));
@@ -827,7 +840,7 @@ void CreateCacheFile() {
   if (unlink(path.c_str()) < 0) {
     Log(LOG_ERR, "Cannot unlink cache file ", Path(path), ": ",
         strerror(errno));
-    throw ExitCode::CANNOT_CREATE_CACHE_FILE;
+    throw ExitCode::CANNOT_CREATE_CACHE;
   }
 }
 
@@ -1425,6 +1438,59 @@ bool ShouldSkip(FileType const ft) {
   }
 }
 
+void CacheFileData(struct archive* const a) {
+  assert(g_cache_fd >= 0);
+  assert(g_cache_size >= 0);
+  const int64_t file_start_offset = g_cache_size;
+
+  while (true) {
+    const void* buff;
+    size_t len;
+    off_t offset;
+
+    const int status = archive_read_data_block(a, &buff, &len, &offset);
+    if (status == ARCHIVE_EOF) {
+      return;
+    }
+
+    if (status == ARCHIVE_RETRY) {
+      continue;
+    }
+
+    if (status == ARCHIVE_WARN) {
+      Log(LOG_WARNING, archive_error_string(a));
+    } else if (status != ARCHIVE_OK) {
+      assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
+      const std::string_view error = archive_error_string(a);
+      Log(LOG_ERR, error);
+      throw determine_passphrase_exit_code(error);
+    }
+
+    assert(offset >= g_cache_size - file_start_offset);
+    offset += file_start_offset;
+    assert(offset >= g_cache_size);
+    g_cache_size = offset;
+
+    while (len > 0) {
+      ssize_t n = pwrite(g_cache_fd, buff, len, offset);
+      if (n < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+
+        Log(LOG_ERR, "Cannot write to cache: ", strerror(errno));
+        throw ExitCode::CANNOT_WRITE_CACHE;
+      }
+
+      assert(n <= len);
+      buff = static_cast<const std::byte*>(buff) + n;
+      len -= n;
+      offset += n;
+      g_cache_size = offset;
+    }
+  }
+}
+
 void ProcessEntry(struct archive* const a,
                   struct archive_entry* const e,
                   int64_t const id) {
@@ -1457,10 +1523,12 @@ void ProcessEntry(struct archive* const a,
 
   const auto [parent_path, name] = Path(path).Split();
 
+  // Get or create the parent node.
   Node* const parent = GetOrCreateDirNode(parent_path);
   assert(parent);
   assert(parent->is_dir());
 
+  // Create the node for this entry.
   Node* const node =
       new Node{.name = std::string(name),
                .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
@@ -1477,69 +1545,80 @@ void ProcessEntry(struct archive* const a,
   g_nodes_by_index.resize(id);
   g_nodes_by_index.push_back(node);
 
-  switch (ft) {
-    case FileType::BlockDevice:
-    case FileType::CharDevice:
-      node->rdev = archive_entry_rdev(e);
-      break;
-
-    case FileType::Symlink:
-      if (const char* const s =
-              archive_entry_symlink_utf8(e) ?: archive_entry_symlink(e)) {
-        node->symlink = s;
-      }
-      break;
-
-    case FileType::File:
-      if (const mode_t xbits = 0111; mode & xbits) {
-        node->mode |= xbits & ~g_fmask;
-      }
-
-      if (archive_entry_size_is_set(e)) {
-        node->size = archive_entry_size(e);
-      } else {
-        // 'Raw' archives don't always explicitly record the decompressed size.
-        // We'll have to decompress it to find out. Some 'cooked' archives also
-        // don't explicitly record this (at the time archive_read_next_header
-        // returns). See https://github.com/libarchive/libarchive/issues/1764
-        Log(LOG_INFO, "Extracting ", *node);
-
-        while (const ssize_t n = archive_read_data(
-                   a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
-                   SIDE_BUFFER_SIZE)) {
-          if (n < 0) {
-            const std::string_view error = archive_error_string(a);
-            Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
-            throw determine_passphrase_exit_code(error);
-          }
-
-          assert(n <= SIDE_BUFFER_SIZE);
-          node->size += n;
-        }
-
-        g_password_checked = true;
-      }
-
-      if (!g_password_checked) {
-        // Reading the first byte of the first file will reveal whether we also
-        // need a passphrase.
-        const ssize_t n = archive_read_data(
-            g_archive, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
-        if (n < 0) {
-          const std::string_view error = archive_error_string(a);
-          Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
-          throw determine_passphrase_exit_code(error);
-        }
-
-        g_password_checked = true;
-      }
-
-      g_block_count += node->get_block_count();
-      break;
-
-    default:
-      break;
+  // Do some extra processing depending on the file type.
+  // Block or Char Device.
+  if (ft == FileType::BlockDevice || ft == FileType::CharDevice) {
+    node->rdev = archive_entry_rdev(e);
+    return;
   }
+
+  // Symlink.
+  if (ft == FileType::Symlink) {
+    if (const char* const s =
+            archive_entry_symlink_utf8(e) ?: archive_entry_symlink(e)) {
+      node->symlink = s;
+    }
+    return;
+  }
+
+  if (ft != FileType::File) {
+    return;
+  }
+
+  // Regular file.
+  // Adjust the access bits if the file is executable.
+  if (const mode_t xbits = 0111; mode & xbits) {
+    node->mode |= xbits & ~g_fmask;
+  }
+
+  // Cache file data.
+  if (g_cache_fd >= 0) {
+    node->cache_offset = g_cache_size;
+    CacheFileData(a);
+    node->size = g_cache_size - node->cache_offset;
+    return;
+  }
+
+  if (archive_entry_size_is_set(e)) {
+    node->size = archive_entry_size(e);
+  } else {
+    // 'Raw' archives don't always explicitly record the decompressed size.
+    // We'll have to decompress it to find out. Some 'cooked' archives also
+    // don't explicitly record this (at the time archive_read_next_header
+    // returns). See https://github.com/libarchive/libarchive/issues/1764
+    Log(LOG_INFO, "Extracting ", *node);
+
+    while (const ssize_t n = archive_read_data(
+               a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
+               SIDE_BUFFER_SIZE)) {
+      if (n < 0) {
+        const std::string_view error = archive_error_string(a);
+        Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
+        throw determine_passphrase_exit_code(error);
+      }
+
+      assert(n <= SIDE_BUFFER_SIZE);
+      node->size += n;
+    }
+
+    g_password_checked = true;
+  }
+
+  if (!g_password_checked) {
+    // Reading the first byte of the first file will reveal whether we also
+    // need a passphrase.
+    const ssize_t n = archive_read_data(
+        g_archive, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
+    if (n < 0) {
+      const std::string_view error = archive_error_string(a);
+      Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
+      throw determine_passphrase_exit_code(error);
+    }
+
+    g_password_checked = true;
+  }
+
+  g_block_count += node->get_block_count();
 }
 
 void BuildTree() {
@@ -1586,6 +1665,12 @@ void BuildTree() {
     throw ExitCode::INVALID_ARCHIVE_HEADER;
   }
 
+  // Create root node.
+  assert(!g_root_node);
+  g_root_node =
+      new Node{.name = "/", .mode = S_IFDIR | (0777 & ~g_dmask), .nlink = 1};
+  g_nodes_by_path[g_root_node->path()] = g_root_node;
+
   // Read and process every entry of the archive.
   for (int64_t id = 0;; id++) {
     const int status = archive_read_next_header(g_archive, &g_archive_entry);
@@ -1627,6 +1712,11 @@ void BuildTree() {
 
   if (g_displayed_progress) {
     Log(LOG_INFO, "Loaded 100%");
+  }
+
+  Log(LOG_INFO, "The tree contains ", g_nodes_by_path.size(), " nodes");
+  if (g_cache_fd >= 0) {
+    Log(LOG_INFO, "The cache contains ", g_cache_size, " bytes");
   }
 }
 
@@ -2034,7 +2124,6 @@ general options:
   CreateCacheFile();
 
   // Read archive and build tree.
-  g_nodes_by_path[g_root_node->path()] = g_root_node;
   BuildTree();
 
   // Create the mount point if it does not already exist.
