@@ -505,7 +505,7 @@ std::ostream& operator<<(std::ostream& out, FileType const t) {
       return out << "Symlink";
   }
 
-  return out << "FileType(" << static_cast<mode_t>(t) << ")";
+  return out << "Unknown";
 }
 
 constexpr blksize_t block_size = 512;
@@ -1371,30 +1371,26 @@ bool ShouldSkip(FileType const ft) {
 
 void ProcessEntry(struct archive* const a,
                   struct archive_entry* const e,
-                  int64_t const index_within_archive) {
+                  int64_t const id) {
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
   if (!IsValid(ft)) {
-    Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive,
-        "]: Invalid type");
+    Log(LOG_DEBUG, "Skipped ", ft, " [", id, "]");
     return;
   }
 
   std::string path = GetNormalizedPath(e);
   if (path.empty()) {
-    Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive,
-        "]: Invalid path");
+    Log(LOG_DEBUG, "Skipped ", ft, " [", id, "]: Invalid path");
     return;
   }
 
   if (ShouldSkip(ft)) {
-    Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive, "] ",
-        Path(path));
+    Log(LOG_DEBUG, "Skipped ", ft, " [", id, "] ", Path(path));
     return;
   }
 
-  Log(LOG_DEBUG, "Processing ", ft, " [", index_within_archive, "] ",
-      Path(path));
+  Log(LOG_DEBUG, "Processing ", ft, " [", id, "] ", Path(path));
 
   const time_t mtime = archive_entry_mtime(e);
   if (ft == FileType::Directory) {
@@ -1412,7 +1408,7 @@ void ProcessEntry(struct archive* const a,
   Node* const node =
       new Node{.name = std::string(name),
                .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
-               .index_within_archive = index_within_archive,
+               .index_within_archive = id,
                .mtime = mtime};
   parent->add_child(node);
   g_block_count += 1;
@@ -1421,8 +1417,8 @@ void ProcessEntry(struct archive* const a,
   Attach(node);
 
   // Add to g_nodes_by_index.
-  assert(g_nodes_by_index.size() <= index_within_archive);
-  g_nodes_by_index.resize(index_within_archive);
+  assert(g_nodes_by_index.size() <= id);
+  g_nodes_by_index.resize(id);
   g_nodes_by_index.push_back(node);
 
   switch (ft) {
@@ -1535,7 +1531,7 @@ void BuildTree() {
   }
 
   // Read and process every entry of the archive.
-  for (int64_t i = 0;; i++) {
+  for (int64_t id = 0;; id++) {
     const int status = archive_read_next_header(g_archive, &g_archive_entry);
     if (status == ARCHIVE_EOF) {
       break;
@@ -1549,7 +1545,7 @@ void BuildTree() {
       throw determine_passphrase_exit_code(error);
     }
 
-    if (i == 0) {
+    if (id == 0) {
       // For 'raw' archives, check that at least one of the compression filters
       // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
       // data (e.g. foo.jpeg).
@@ -1570,7 +1566,7 @@ void BuildTree() {
       }
     }
 
-    ProcessEntry(g_archive, g_archive_entry, i);
+    ProcessEntry(g_archive, g_archive_entry, id);
   }
 
   if (g_displayed_progress) {
