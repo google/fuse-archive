@@ -127,6 +127,8 @@ struct {
   bool version = false;
   bool quiet = false;
   bool redact = false;
+  bool no_specials = false;
+  bool no_symlinks = false;
 } g_options;
 
 enum {
@@ -135,29 +137,33 @@ enum {
   KEY_QUIET,
   KEY_VERBOSE,
   KEY_REDACT,
+  KEY_NO_SPECIALS,
+  KEY_NO_SYMLINKS,
 };
 
 const fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", KEY_HELP),            //
-    FUSE_OPT_KEY("--help", KEY_HELP),        //
-    FUSE_OPT_KEY("-V", KEY_VERSION),         //
-    FUSE_OPT_KEY("--version", KEY_VERSION),  //
-    FUSE_OPT_KEY("--quiet", KEY_QUIET),      //
-    FUSE_OPT_KEY("-q", KEY_QUIET),           //
-    FUSE_OPT_KEY("--verbose", KEY_VERBOSE),  //
-    FUSE_OPT_KEY("-v", KEY_VERBOSE),         //
-    FUSE_OPT_KEY("--redact", KEY_REDACT),    //
-    FUSE_OPT_KEY("redact", KEY_REDACT),      //
+    FUSE_OPT_KEY("-h", KEY_HELP),
+    FUSE_OPT_KEY("--help", KEY_HELP),
+    FUSE_OPT_KEY("-V", KEY_VERSION),
+    FUSE_OPT_KEY("--version", KEY_VERSION),
+    FUSE_OPT_KEY("--quiet", KEY_QUIET),
+    FUSE_OPT_KEY("-q", KEY_QUIET),
+    FUSE_OPT_KEY("--verbose", KEY_VERBOSE),
+    FUSE_OPT_KEY("-v", KEY_VERBOSE),
+    FUSE_OPT_KEY("--redact", KEY_REDACT),
+    FUSE_OPT_KEY("redact", KEY_REDACT),
+    FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
+    FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
     // archives automatically and only supports read-only, not read-write.
-    FUSE_OPT_KEY("--passphrase", FUSE_OPT_KEY_DISCARD),  //
-    FUSE_OPT_KEY("passphrase", FUSE_OPT_KEY_DISCARD),    //
-    FUSE_OPT_KEY("formatraw", FUSE_OPT_KEY_DISCARD),     //
-    FUSE_OPT_KEY("nobackup", FUSE_OPT_KEY_DISCARD),      //
-    FUSE_OPT_KEY("nosave", FUSE_OPT_KEY_DISCARD),        //
-    FUSE_OPT_KEY("readonly", FUSE_OPT_KEY_DISCARD),      //
+    FUSE_OPT_KEY("--passphrase", FUSE_OPT_KEY_DISCARD),
+    FUSE_OPT_KEY("passphrase", FUSE_OPT_KEY_DISCARD),
+    FUSE_OPT_KEY("formatraw", FUSE_OPT_KEY_DISCARD),
+    FUSE_OPT_KEY("nobackup", FUSE_OPT_KEY_DISCARD),
+    FUSE_OPT_KEY("nosave", FUSE_OPT_KEY_DISCARD),
+    FUSE_OPT_KEY("readonly", FUSE_OPT_KEY_DISCARD),
     FUSE_OPT_END,
 };
 
@@ -1347,6 +1353,22 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   return node;
 }
 
+bool ShouldSkip(FileType const ft) {
+  switch (ft) {
+    case FileType::BlockDevice:
+    case FileType::CharDevice:
+    case FileType::Fifo:
+    case FileType::Socket:
+      return g_options.no_specials;
+
+    case FileType::Symlink:
+      return g_options.no_symlinks;
+
+    default:
+      return false;
+  }
+}
+
 void ProcessEntry(struct archive* const a,
                   struct archive_entry* const e,
                   int64_t const index_within_archive) {
@@ -1362,6 +1384,12 @@ void ProcessEntry(struct archive* const a,
   if (path.empty()) {
     Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive,
         "]: Invalid path");
+    return;
+  }
+
+  if (ShouldSkip(ft)) {
+    Log(LOG_DEBUG, "Skipped ", ft, " [", index_within_archive, "] ",
+        Path(path));
     return;
   }
 
@@ -1398,8 +1426,8 @@ void ProcessEntry(struct archive* const a,
   g_nodes_by_index.push_back(node);
 
   switch (ft) {
-    case FileType::CharDevice:
     case FileType::BlockDevice:
+    case FileType::CharDevice:
       node->rdev = archive_entry_rdev(e);
       break;
 
@@ -1800,6 +1828,14 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
     case KEY_REDACT:
       g_options.redact = true;
       return DISCARD;
+
+    case KEY_NO_SPECIALS:
+      g_options.no_specials = true;
+      return DISCARD;
+
+    case KEY_NO_SYMLINKS:
+      g_options.no_symlinks = true;
+      return DISCARD;
   }
 
   return KEEP;
@@ -1897,6 +1933,8 @@ general options:
     -v   --verbose         print more log messages
          --redact          redact pathnames from log messages
          -o redact         ditto
+         -o nospecials     no special files (FIFOs, sockets, devices)
+         -o nosymlinks     no symbolic links
 
 )",
             PROGRAM_NAME, PROGRAM_NAME);
