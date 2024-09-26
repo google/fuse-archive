@@ -1577,10 +1577,7 @@ void ProcessEntry(struct archive* const a,
     node->cache_offset = g_cache_size;
     CacheFileData(a);
     node->size = g_cache_size - node->cache_offset;
-    return;
-  }
-
-  if (archive_entry_size_is_set(e)) {
+  } else if (archive_entry_size_is_set(e)) {
     node->size = archive_entry_size(e);
   } else {
     // 'Raw' archives don't always explicitly record the decompressed size.
