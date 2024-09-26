@@ -60,6 +60,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <locale>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -2028,9 +2029,18 @@ struct Cleanup {
   }
 };
 
+class NumPunct : public std::numpunct<char> {
+ private:
+  char do_thousands_sep() const override { return ','; }
+  std::string do_grouping() const override { return "\3"; }
+};
+
 }  // namespace
 
 int main(int const argc, char** const argv) try {
+  // Ensure that numbers in debug messages have thousands separators.
+  // It makes big numbers much easier to read (eg sizes expressed in bytes).
+  std::locale::global(std::locale(std::locale::classic(), new NumPunct));
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   setlogmask(LOG_UPTO(LOG_INFO));
 
