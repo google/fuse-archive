@@ -60,6 +60,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <locale>
 #include <memory>
 #include <sstream>
@@ -1715,6 +1716,11 @@ void BuildTree() {
   Log(LOG_INFO, "The tree contains ", g_nodes_by_path.size(), " nodes");
   if (g_cache_fd >= 0) {
     Log(LOG_INFO, "The cache contains ", g_cache_size, " bytes");
+    if (struct stat z; fstat(g_cache_fd, &z) == 0) {
+      Log(LOG_INFO, "The cache uses ",
+          static_cast<int64_t>(z.st_blocks) * block_size,
+          " bytes of storage space");
+    }
   }
 }
 
@@ -1761,12 +1767,23 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
     return -EISDIR;
   }
 
-  if (n->index_within_archive < 0 || !ffi) {
+  if (n->index_within_archive < 0) {
     return -EIO;
   }
 
+  assert(ffi);
   if ((ffi->flags & O_ACCMODE) != O_RDONLY) {
     return -EACCES;
+  }
+
+  if (g_cache_fd >= 0) {
+    if (n->cache_offset < 0) {
+      return -EIO;
+    }
+
+    static_assert(sizeof(ffi->fh) >= sizeof(n));
+    ffi->fh = reinterpret_cast<uintptr_t>(n);
+    return 0;
   }
 
   std::unique_ptr<Reader> ur = acquire_reader(n->index_within_archive);
@@ -1784,10 +1801,39 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
 int my_read(const char* const path,
             char* const dst_ptr,
             size_t dst_len,
-            off_t const offset,
+            off_t offset,
             fuse_file_info* const ffi) {
-  if (offset < 0 || dst_len > INT_MAX) {
+  if (offset < 0 || dst_len > std::numeric_limits<int>::max()) {
     return -EINVAL;
+  }
+
+  if (g_cache_fd >= 0) {
+    const Node* const node = reinterpret_cast<const Node*>(ffi->fh);
+
+    if (offset >= node->size) {
+      // No data past the end of a file.
+      return 0;
+    }
+
+    if (offset + dst_len >= node->size) {
+      // No data past the end of a file.
+      dst_len = node->size - offset;
+    }
+
+    assert(node->cache_offset >= 0);
+    offset += node->cache_offset;
+
+    // Read data from the cache file.
+    const ssize_t n = pread(g_cache_fd, dst_ptr, dst_len, offset);
+    if (n < 0) {
+      const error_t e = errno;
+      Log(LOG_ERR, "Cannot read ", dst_len, " bytes from cache at offset ",
+          offset, ": ", strerror(e));
+      return -e;
+    }
+
+    assert(n <= dst_len);
+    return n;
   }
 
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
@@ -1851,6 +1897,10 @@ int my_read(const char* const path,
 }
 
 int my_release(const char*, fuse_file_info* const ffi) {
+  if (g_cache_fd >= 0) {
+    return 0;
+  }
+
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
   if (!r) {
     return -EIO;
