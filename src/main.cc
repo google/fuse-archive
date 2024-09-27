@@ -132,7 +132,6 @@ struct {
   int arg_count = 0;
   bool help = false;
   bool version = false;
-  bool quiet = false;
   bool redact = false;
   bool cache = true;
   bool specials = true;
@@ -765,21 +764,54 @@ std::string StrCat(Args&&... args) {
   return (std::ostringstream() << ... << std::forward<Args>(args)).str();
 }
 
+int g_log_level = LOG_INFO;
+
+void SetLogLevel(int const level) {
+  g_log_level = level;
+  setlogmask(LOG_UPTO(level));
+}
+
+bool LogIsOn(int const level) {
+  return level <= g_log_level;
+}
+
 // Logs a debug or error message.
 //
-// `priority` is one of:
+// `level` is one of:
 // LOG_ERR        error conditions
 // LOG_WARNING    warning conditions
 // LOG_NOTICE     normal, but significant, condition
 // LOG_INFO       informational message
 // LOG_DEBUG      debug-level message
 template <typename... Args>
-void Log(int priority, Args&&... args) noexcept {
-  try {
-    syslog(priority, "%s", StrCat(std::forward<Args>(args)...).c_str());
-  } catch (const std::exception& e) {
-    syslog(LOG_ERR, "Cannot log message: %s", e.what());
+void Log(int const level, Args&&... args) noexcept {
+  if (LogIsOn(level)) {
+    try {
+      syslog(level, "%s", StrCat(std::forward<Args>(args)...).c_str());
+    } catch (const std::exception& e) {
+      syslog(LOG_ERR, "Cannot log message: %s", e.what());
+    }
   }
+}
+
+template <typename... Args>
+void Error(Args&&... args) noexcept {
+  Log(LOG_ERR, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+void Warning(Args&&... args) noexcept {
+  Log(LOG_WARNING, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+void Info(Args&&... args) noexcept {
+  Log(LOG_INFO, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+void Debug(Args&&... args) noexcept {
+  Log(LOG_DEBUG, std::forward<Args>(args)...);
 }
 
 // Throws an std::system_error with the current errno.
@@ -803,13 +835,13 @@ void CreateCacheFile() {
 
   g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
   if (g_cache_fd >= 0) {
-    Log(LOG_DEBUG, "Created anonymous cache file in ", Path(cache_dir));
+    Debug("Created anonymous cache file in ", Path(cache_dir));
     return;
   }
 
   if (errno != ENOTSUP) {
-    Log(LOG_ERR, "Cannot create anonymous cache file in ", Path(cache_dir),
-        ": ", strerror(errno));
+    Error("Cannot create anonymous cache file in ", Path(cache_dir), ": ",
+          strerror(errno));
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
@@ -818,24 +850,22 @@ void CreateCacheFile() {
   // for the /tmp directory. In that case, create a named temp file, and unlink
   // it immediately.
   assert(errno == ENOTSUP);
-  Log(LOG_DEBUG, "The filesystem of ", Path(cache_dir),
-      " does not support O_TMPFILE");
+  Debug("The filesystem of ", Path(cache_dir), " does not support O_TMPFILE");
 
   std::string path = cache_dir;
   Path::Append(&path, "XXXXXX");
   g_cache_fd = mkstemp(path.data());
 
   if (g_cache_fd < 0) {
-    Log(LOG_ERR, "Cannot create named cache file in ", Path(cache_dir), ": ",
-        strerror(errno));
+    Error("Cannot create named cache file in ", Path(cache_dir), ": ",
+          strerror(errno));
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
-  Log(LOG_DEBUG, "Created cache file ", Path(path));
+  Debug("Created cache file ", Path(path));
 
   if (unlink(path.c_str()) < 0) {
-    Log(LOG_ERR, "Cannot unlink cache file ", Path(path), ": ",
-        strerror(errno));
+    Error("Cannot unlink cache file ", Path(path), ": ", strerror(errno));
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 }
@@ -844,17 +874,17 @@ void CreateCacheFile() {
 void CheckCacheFile() {
   struct stat z;
   if (fstat(g_cache_fd, &z) != 0) {
-    Log(LOG_ERR, "Cannot stat cache file: ", strerror(errno));
+    Error("Cannot stat cache file: ", strerror(errno));
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
   if (z.st_size != 0) {
-    Log(LOG_ERR, "Cache file is not empty: It contains ", z.st_size, " bytes");
+    Error("Cache file is not empty: It contains ", z.st_size, " bytes");
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
   if (z.st_nlink != 0) {
-    Log(LOG_ERR, "Cache file is not hidden: It has ", z.st_nlink, " links");
+    Error("Cache file is not hidden: It has ", z.st_nlink, " links");
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 }
@@ -921,11 +951,11 @@ const char* read_password_from_stdin(Archive*, void* /*data*/) {
   }
 
   if (g_password.empty()) {
-    Log(LOG_DEBUG, "Got an empty password");
+    Debug("Got an empty password");
     return nullptr;
   }
 
-  Log(LOG_DEBUG, "Got a password of ", g_password.size(), " bytes");
+  Debug("Got a password of ", g_password.size(), " bytes");
   return g_password.c_str();
 }
 
@@ -940,7 +970,7 @@ void update_g_archive_fd_position_hwm() {
   const auto period = std::chrono::seconds(1);
   static auto next = std::chrono::steady_clock::now() + period;
   const auto now = std::chrono::steady_clock::now();
-  if (!g_options.quiet && now >= next) {
+  if (LogIsOn(LOG_INFO) && now >= next) {
     next = now + period;
     const int percent = g_archive_file_size > 0
                             ? 100 *
@@ -948,7 +978,7 @@ void update_g_archive_fd_position_hwm() {
                                                       0, g_archive_file_size) /
                                   g_archive_file_size
                             : 0;
-    Log(LOG_INFO, "Loading ", percent, "%");
+    Info("Loading ", percent, "%");
     g_displayed_progress = true;
   }
 }
@@ -1098,10 +1128,10 @@ struct Reader {
   int64_t offset_within_entry = 0;
   int id = ++count;
 
-  ~Reader() { Log(LOG_DEBUG, "Deleted ", *this); }
+  ~Reader() { Debug("Deleted ", *this); }
 
   explicit Reader(ArchivePtr archive) : archive(std::move(archive)) {
-    Log(LOG_DEBUG, "Created ", *this);
+    Debug("Created ", *this);
   }
 
   friend std::ostream& operator<<(std::ostream& out, const Reader& r) {
@@ -1119,19 +1149,19 @@ struct Reader {
     }
 
     assert(index_within_archive <= want);
-    Log(LOG_DEBUG, "Advancing ", *this, " from [", index_within_archive,
-        "] to [", want, "]");
+    Debug("Advancing ", *this, " from [", index_within_archive, "] to [", want,
+          "]");
 
     while (index_within_archive < want) {
       const int status = archive_read_next_header(archive.get(), &entry);
 
       if (status == ARCHIVE_EOF) {
-        Log(LOG_ERR, "Inconsistent archive");
+        Error("Inconsistent archive");
         return false;
       }
 
       if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
-        Log(LOG_ERR, archive_error_string(archive.get()));
+        Error(archive_error_string(archive.get()));
         return false;
       }
 
@@ -1163,8 +1193,8 @@ struct Reader {
       return true;
     }
 
-    Log(LOG_DEBUG, "Advancing ", *this, " from offset ", offset_within_entry,
-        " to offset ", want, " in [", index_within_archive, "]");
+    Debug("Advancing ", *this, " from offset ", offset_within_entry,
+          " to offset ", want, " in [", index_within_archive, "]");
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
@@ -1215,7 +1245,7 @@ struct Reader {
   ssize_t Read(void* const dst_ptr, size_t const dst_len) {
     const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
     if (n < 0) {
-      Log(LOG_ERR, archive_error_string(archive.get()));
+      Error(archive_error_string(archive.get()));
       return -EIO;
     }
 
@@ -1264,7 +1294,7 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
   } else {
     ArchivePtr a(archive_read_new());
     if (!a) {
-      Log(LOG_ERR, "Out of memory");
+      Error("Out of memory");
       return nullptr;
     }
 
@@ -1277,7 +1307,7 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
     archive_read_support_format_raw(a.get());
     if (archive_read_open_filename(a.get(), g_archive_realpath, 16384) !=
         ARCHIVE_OK) {
-      Log(LOG_ERR, archive_error_string(a.get()));
+      Error(archive_error_string(a.get()));
       return nullptr;
     }
 
@@ -1288,13 +1318,13 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
     return nullptr;
   }
 
-  Log(LOG_DEBUG, "Acquiring ", *r);
+  Debug("Acquiring ", *r);
   return r;
 }
 
 // Returns r to the reader cache.
 void ReleaseReader(std::unique_ptr<Reader> r) {
-  Log(LOG_DEBUG, "Releasing ", *r);
+  Debug("Releasing ", *r);
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_saved_readers[0].second;
   for (int i = 1; i < NUM_SAVED_READERS; i++) {
@@ -1316,7 +1346,7 @@ std::string GetNormalizedPath(Entry* const e) {
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
   if (!s || !*s) {
-    Log(LOG_ERR, "Entry has an empty path");
+    Error("Entry has an empty path");
     return "";
   }
 
@@ -1380,7 +1410,7 @@ void Attach(Node* const node) {
   }
 
   // There is a name collision
-  Log(LOG_DEBUG, *node, " conflicts with ", *pos->second);
+  Debug(*node, " conflicts with ", *pos->second);
 
   // Extract filename extension
   std::string& f = node->name;
@@ -1399,11 +1429,11 @@ void Attach(Node* const node) {
 
     const auto [pos, ok] = g_nodes_by_path.try_emplace(node->path(), node);
     if (ok) {
-      Log(LOG_DEBUG, "Resolved conflict for ", *node);
+      Debug("Resolved conflict for ", *node);
       return;
     }
 
-    Log(LOG_DEBUG, *node, " conflicts with ", *pos->second);
+    Debug(*node, " conflicts with ", *pos->second);
     if (!i)
       i = &pos->second->collision_count;
   }
@@ -1428,8 +1458,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
 
     // There is an existing node with the given name, but it's not a
     // directory.
-    Log(LOG_DEBUG, "Found conflicting ", *node, " while creating Dir ",
-        Path(path));
+    Debug("Found conflicting ", *node, " while creating Dir ", Path(path));
     parent = node->parent;
 
     // Remove it from g_nodes_by_path, in order to insert it again later with a
@@ -1493,11 +1522,11 @@ void CacheFileData(Archive* const a) {
     }
 
     if (status == ARCHIVE_WARN) {
-      Log(LOG_WARNING, archive_error_string(a));
+      Warning(archive_error_string(a));
     } else if (status != ARCHIVE_OK) {
       assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
       const std::string_view error = archive_error_string(a);
-      Log(LOG_ERR, error);
+      Error(error);
       throw determine_passphrase_exit_code(error);
     }
 
@@ -1513,7 +1542,7 @@ void CacheFileData(Archive* const a) {
           continue;
         }
 
-        Log(LOG_ERR, "Cannot write to cache: ", strerror(errno));
+        Error("Cannot write to cache: ", strerror(errno));
         throw ExitCode::CANNOT_WRITE_CACHE;
       }
 
@@ -1530,22 +1559,22 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
   if (!IsValid(ft)) {
-    Log(LOG_DEBUG, "Skipped ", ft, " [", id, "]");
+    Debug("Skipped ", ft, " [", id, "]");
     return;
   }
 
   std::string path = GetNormalizedPath(e);
   if (path.empty()) {
-    Log(LOG_DEBUG, "Skipped ", ft, " [", id, "]: Invalid path");
+    Debug("Skipped ", ft, " [", id, "]: Invalid path");
     return;
   }
 
   if (ShouldSkip(ft)) {
-    Log(LOG_DEBUG, "Skipped ", ft, " [", id, "] ", Path(path));
+    Debug("Skipped ", ft, " [", id, "] ", Path(path));
     return;
   }
 
-  Log(LOG_DEBUG, "Processing ", ft, " [", id, "] ", Path(path));
+  Debug("Processing ", ft, " [", id, "] ", Path(path));
 
   const time_t mtime = archive_entry_mtime(e);
   if (ft == FileType::Directory) {
@@ -1618,14 +1647,14 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     // We'll have to decompress it to find out. Some 'cooked' archives also
     // don't explicitly record this (at the time archive_read_next_header
     // returns). See https://github.com/libarchive/libarchive/issues/1764
-    Log(LOG_INFO, "Extracting ", *node);
+    Info("Extracting ", *node);
 
     while (const ssize_t n = archive_read_data(
                a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
                SIDE_BUFFER_SIZE)) {
       if (n < 0) {
         const std::string_view error = archive_error_string(a);
-        Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
+        Error("Cannot extract ", *node, ": ", error);
         throw determine_passphrase_exit_code(error);
       }
 
@@ -1643,7 +1672,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
         a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
       const std::string_view error = archive_error_string(a);
-      Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
+      Error("Cannot extract ", *node, ": ", error);
       throw determine_passphrase_exit_code(error);
     }
 
@@ -1655,35 +1684,33 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
 
 void BuildTree() {
   if (g_archive_path.empty()) {
-    Log(LOG_ERR, "Missing archive_filename argument");
+    Error("Missing archive_filename argument");
     throw ExitCode::GENERIC_FAILURE;
   }
 
   g_archive_realpath = realpath(g_archive_path.c_str(), nullptr);
   if (!g_archive_realpath) {
-    Log(LOG_ERR, "Cannot get absolute path of ", Path(g_archive_path), ": ",
-        strerror(errno));
+    Error("Cannot get absolute path of ", Path(g_archive_path), ": ",
+          strerror(errno));
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
   g_archive_fd = open(g_archive_realpath, O_RDONLY);
   if (g_archive_fd < 0) {
-    Log(LOG_ERR, "Cannot open ", Path(g_archive_path), ": ", strerror(errno));
+    Error("Cannot open ", Path(g_archive_path), ": ", strerror(errno));
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
-  {
-    struct stat z;
-    if (fstat(g_archive_fd, &z) != 0) {
-      Log(LOG_ERR, "Cannot stat ", Path(g_archive_path), ": ", strerror(errno));
-      throw ExitCode::CANNOT_OPEN_ARCHIVE;
-    }
+  if (struct stat z; fstat(g_archive_fd, &z) != 0) {
+    Error("Cannot stat ", Path(g_archive_path), ": ", strerror(errno));
+    throw ExitCode::CANNOT_OPEN_ARCHIVE;
+  } else {
     g_archive_file_size = z.st_size;
   }
 
   const ArchivePtr a(archive_read_new());
   if (!a) {
-    Log(LOG_ERR, "Out of memory");
+    Error("Out of memory");
     throw std::bad_alloc();
   }
 
@@ -1693,7 +1720,7 @@ void BuildTree() {
   archive_read_support_format_all(a.get());
   archive_read_support_format_raw(a.get());
   if (my_archive_read_open(a.get()) != ARCHIVE_OK) {
-    Log(LOG_ERR, "Cannot open archive: ", archive_error_string(a.get()));
+    Error("Cannot open archive: ", archive_error_string(a.get()));
     throw ExitCode::INVALID_ARCHIVE_HEADER;
   }
 
@@ -1712,10 +1739,10 @@ void BuildTree() {
     }
 
     if (status == ARCHIVE_WARN) {
-      Log(LOG_WARNING, archive_error_string(a.get()));
+      Warning(archive_error_string(a.get()));
     } else if (status != ARCHIVE_OK) {
       const std::string_view error = archive_error_string(a.get());
-      Log(LOG_ERR, error);
+      Error(error);
       throw determine_passphrase_exit_code(error);
     }
 
@@ -1725,11 +1752,11 @@ void BuildTree() {
       // data (e.g. foo.jpeg).
       if (archive_format(a.get()) == ARCHIVE_FORMAT_RAW) {
         g_archive_is_raw = true;
-        Log(LOG_DEBUG, "The archive is a 'raw' archive");
+        Debug("The archive is a 'raw' archive");
 
         for (int n = archive_filter_count(a.get());;) {
           if (n == 0) {
-            Log(LOG_ERR, "Invalid raw archive");
+            Error("Invalid raw archive");
             throw ExitCode::INVALID_RAW_ARCHIVE;
           }
 
@@ -1744,15 +1771,17 @@ void BuildTree() {
   }
 
   if (g_displayed_progress) {
-    Log(LOG_INFO, "Loaded 100%");
+    Info("Loaded 100%");
   }
 
-  Log(LOG_INFO, "The tree contains ", g_nodes_by_path.size(), " nodes");
-  if (struct stat z; g_options.cache && fstat(g_cache_fd, &z) == 0) {
-    Log(LOG_INFO, "The cache uses ",
-        static_cast<int64_t>(z.st_blocks) * block_size,
-        " bytes of storage space");
-    assert(z.st_size == g_cache_size);
+  if (LogIsOn(LOG_INFO)) {
+    Info("The archive contains ", g_nodes_by_path.size(),
+         " files or directories");
+    if (struct stat z; g_options.cache && fstat(g_cache_fd, &z) == 0) {
+      Info("The cache uses ", static_cast<int64_t>(z.st_blocks) * block_size,
+           " bytes of storage space");
+      assert(z.st_size == g_cache_size);
+    }
   }
 }
 
@@ -1807,7 +1836,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
     assert(n->cache_offset >= 0);
     static_assert(sizeof(ffi->fh) >= sizeof(n));
     ffi->fh = reinterpret_cast<uintptr_t>(n);
-    Log(LOG_DEBUG, "Opened ", *n);
+    Debug("Opened ", *n);
     return 0;
   }
 
@@ -1820,7 +1849,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
 
   static_assert(sizeof(ffi->fh) >= sizeof(Reader*));
   ffi->fh = reinterpret_cast<uintptr_t>(ur.release());
-  Log(LOG_DEBUG, "Opened ", *n);
+  Debug("Opened ", *n);
   return 0;
 }
 
@@ -1854,8 +1883,8 @@ int my_read(const char*,
     const ssize_t n = pread(g_cache_fd, dst_ptr, dst_len, offset);
     if (n < 0) {
       const error_t e = errno;
-      Log(LOG_ERR, "Cannot read ", dst_len, " bytes from cache at offset ",
-          offset, ": ", strerror(e));
+      Error("Cannot read ", dst_len, " bytes from cache at offset ", offset,
+            ": ", strerror(e));
       return -e;
     }
 
@@ -1921,7 +1950,7 @@ int my_release(const char*, fuse_file_info* const ffi) {
   if (g_options.cache) {
     const Node* const n = reinterpret_cast<const Node*>(ffi->fh);
     assert(n);
-    Log(LOG_DEBUG, "Closed ", *n);
+    Debug("Closed ", *n);
     return 0;
   }
 
@@ -1935,7 +1964,7 @@ int my_release(const char*, fuse_file_info* const ffi) {
   assert(n);
 
   ReleaseReader(std::unique_ptr<Reader>(r));
-  Log(LOG_DEBUG, "Closed ", *n);
+  Debug("Closed ", *n);
 
   return 0;
 }
@@ -2038,12 +2067,11 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       return DISCARD;
 
     case KEY_QUIET:
-      setlogmask(LOG_UPTO(LOG_ERR));
-      g_options.quiet = true;
+      SetLogLevel(LOG_ERR);
       return DISCARD;
 
     case KEY_VERBOSE:
-      setlogmask(LOG_UPTO(LOG_DEBUG));
+      SetLogLevel(LOG_DEBUG);
       return DISCARD;
 
     case KEY_REDACT:
@@ -2096,7 +2124,7 @@ void ensure_utf_8_encoding() {
     }
   }
 
-  Log(LOG_ERR, "Cannot ensure UTF-8 encoding");
+  Error("Cannot ensure UTF-8 encoding");
   throw ExitCode::GENERIC_FAILURE;
 }
 
@@ -2124,7 +2152,7 @@ int main(int const argc, char** const argv) try {
   // It makes big numbers much easier to read (eg sizes expressed in bytes).
   std::locale::global(std::locale(std::locale::classic(), new NumPunct));
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
-  setlogmask(LOG_UPTO(LOG_INFO));
+  SetLogLevel(LOG_INFO);
 
   // Initialize side buffers as invalid.
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
@@ -2139,7 +2167,7 @@ int main(int const argc, char** const argv) try {
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
   if (fuse_opt_parse(&args, nullptr, g_fuse_opts, &my_opt_proc) < 0) {
-    Log(LOG_ERR, "Cannot parse command line arguments");
+    Error("Cannot parse command line arguments");
     throw ExitCode::GENERIC_FAILURE;
   }
 
@@ -2190,7 +2218,7 @@ general options:
       Path(g_mount_point).WithoutTrailingSeparator().Split();
 
   if (mount_point_basename.empty()) {
-    Log(LOG_ERR, "Cannot use ", Path(g_mount_point), " as a mount point");
+    Error("Cannot use ", Path(g_mount_point), " as a mount point");
     throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
   }
 
@@ -2199,12 +2227,12 @@ general options:
       open(!mount_point_parent.empty() ? mount_point_parent.c_str() : ".",
            O_DIRECTORY | O_PATH);
   if (mount_point_parent_fd < 0) {
-    Log(LOG_ERR, "Cannot access directory ", Path(mount_point_parent), ": ",
-        strerror(errno));
+    Error("Cannot access directory ", Path(mount_point_parent), ": ",
+          strerror(errno));
     throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
   }
 
-  Log(LOG_DEBUG, "Opened directory ", Path(mount_point_parent));
+  Debug("Opened directory ", Path(mount_point_parent));
 
   // Create cache file if necessary.
   if (g_options.cache) {
@@ -2229,17 +2257,17 @@ general options:
 
       if (mkdirat(mount_point_parent_fd, mount_point_basename.c_str(), 0777) ==
           0) {
-        Log(LOG_INFO, "Created mount point ", Path(g_mount_point));
+        Info("Created mount point ", Path(g_mount_point));
 
         // Set the cleanup function that will eventually remove this mount
         // point.
         cleanup.fn = [mount_point_parent_fd, mount_point_basename]() {
           if (unlinkat(mount_point_parent_fd, mount_point_basename.c_str(),
                        AT_REMOVEDIR) == 0) {
-            Log(LOG_INFO, "Removed mount point ", Path(g_mount_point));
+            Info("Removed mount point ", Path(g_mount_point));
           } else {
-            Log(LOG_ERR, "Cannot remove mount point ", Path(g_mount_point),
-                ": ", strerror(errno));
+            Error("Cannot remove mount point ", Path(g_mount_point), ": ",
+                  strerror(errno));
           }
         };
 
@@ -2247,17 +2275,17 @@ general options:
       }
 
       if (errno != EEXIST) {
-        Log(LOG_ERR, "Cannot create mount point ", Path(g_mount_point), ": ",
-            strerror(errno));
+        Error("Cannot create mount point ", Path(g_mount_point), ": ",
+              strerror(errno));
         throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
       }
 
       if (mount_point_specified_by_user) {
-        Log(LOG_INFO, "Using existing mount point ", Path(g_mount_point));
+        Info("Using existing mount point ", Path(g_mount_point));
         break;
       }
 
-      Log(LOG_DEBUG, "Mount point ", Path(g_mount_point), " already exists");
+      Debug("Mount point ", Path(g_mount_point), " already exists");
       mount_point_basename.resize(n);
       mount_point_basename += StrCat(" (", ++i, ")");
     }
@@ -2271,6 +2299,6 @@ general options:
 } catch (const ExitCode e) {
   return static_cast<int>(e);
 } catch (const std::exception& e) {
-  Log(LOG_ERR, e.what());
+  Error(e.what());
   return EXIT_FAILURE;
 }
