@@ -239,6 +239,9 @@ struct archive_entry* g_archive_entry = nullptr;
 // g_displayed_progress is whether we have printed a progress message.
 bool g_displayed_progress = false;
 
+using Clock = std::chrono::system_clock;
+const time_t g_now = Clock::to_time_t(Clock::now());
+
 // Path manipulations.
 class Path : public std::string_view {
  public:
@@ -533,7 +536,7 @@ struct Node {
   // Where does the cached data start in the cache file?
   int64_t cache_offset = std::numeric_limits<int64_t>::min();
 
-  time_t mtime = 0;
+  time_t mtime = g_now;
   dev_t rdev = 0;
   int nlink = 0;
 
@@ -579,6 +582,8 @@ struct Node {
     z.st_uid = g_uid;
     z.st_gid = g_gid;
     z.st_size = size;
+    z.st_atime = g_now;
+    z.st_ctime = g_now;
     z.st_mtime = mtime;
     z.st_blksize = block_size;
     z.st_blocks = get_block_count();
@@ -1530,7 +1535,9 @@ void ProcessEntry(struct archive* const a,
   const time_t mtime = archive_entry_mtime(e);
   if (ft == FileType::Directory) {
     Node* const node = GetOrCreateDirNode(path);
-    node->mtime = mtime;
+    if (mtime > 0) {
+      node->mtime = mtime;
+    }
     return;
   }
 
@@ -1546,7 +1553,7 @@ void ProcessEntry(struct archive* const a,
       new Node{.name = std::string(name),
                .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
                .index_within_archive = id,
-               .mtime = mtime};
+               .mtime = mtime ?: g_now};
   parent->add_child(node);
   g_block_count += 1;
 
@@ -1618,7 +1625,7 @@ void ProcessEntry(struct archive* const a,
     // Reading the first byte of the first file will reveal whether we also
     // need a passphrase.
     const ssize_t n = archive_read_data(
-        g_archive, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
+        a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
     if (n < 0) {
       const std::string_view error = archive_error_string(a);
       Log(LOG_ERR, "Cannot extract ", *node, ": ", error);
