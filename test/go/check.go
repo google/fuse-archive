@@ -59,12 +59,14 @@ func main1() error {
 	}
 	for _, archiveFilename := range archiveFilenames {
 		for _, directIO := range []bool{false, true} {
-			if err := run(archiveFilename, directIO, ""); err != nil {
-				return err
-			}
-			if strings.Contains(archiveFilename, "password-is-asdf") {
-				if err := run(archiveFilename, directIO, "asdf"); err != nil {
+			for _, cache := range []bool{false, true} {
+				if err := run(archiveFilename, directIO, cache, ""); err != nil {
 					return err
+				}
+				if strings.Contains(archiveFilename, "password-is-asdf") {
+					if err := run(archiveFilename, directIO, cache, "asdf"); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -73,9 +75,9 @@ func main1() error {
 	return nil
 }
 
-func run(archiveFilename string, directIO bool, passphrase string) error {
-	fmt.Printf("--- archiveFilename=%q directIO=%t passphrase=%q\n",
-		archiveFilename, directIO, passphrase)
+func run(archiveFilename string, directIO, cache bool, passphrase string) error {
+	fmt.Printf("--- archiveFilename=%q directIO=%t cache=%t passphrase=%q\n",
+		archiveFilename, directIO, cache, passphrase)
 	if !placeholderTxtExists() {
 		return fmt.Errorf(`Cannot verify pre-mount state. Try "fusermount -u test/mnt"?`)
 	}
@@ -83,6 +85,10 @@ func run(archiveFilename string, directIO bool, passphrase string) error {
 	args := []string(nil)
 	if directIO {
 		args = append(args, "-o", "direct_io")
+	}
+
+	if !cache {
+		args = append(args, "-o", "no_cache")
 	}
 
 	// The -f flag means to run in the foreground (not as a daemon).

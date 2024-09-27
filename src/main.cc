@@ -134,6 +134,7 @@ struct {
   bool version = false;
   bool quiet = false;
   bool redact = false;
+  bool cache = true;
   bool no_specials = false;
   bool no_symlinks = false;
 } g_options;
@@ -144,6 +145,7 @@ enum {
   KEY_QUIET,
   KEY_VERBOSE,
   KEY_REDACT,
+  KEY_NO_CACHE,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
 };
@@ -159,6 +161,7 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-v", KEY_VERBOSE),
     FUSE_OPT_KEY("--redact", KEY_REDACT),
     FUSE_OPT_KEY("redact", KEY_REDACT),
+    FUSE_OPT_KEY("no_cache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
     // The remaining options are listed for e.g. "-o formatraw" command line
@@ -538,7 +541,7 @@ struct Node {
   int64_t size = 0;
 
   // Where does the cached data start in the cache file?
-  int64_t cache_offset = -1;
+  int64_t cache_offset = std::numeric_limits<int64_t>::min();
 
   time_t mtime = 0;
   dev_t rdev = 0;
@@ -1460,7 +1463,6 @@ bool ShouldSkip(FileType const ft) {
 }
 
 void CacheFileData(struct archive* const a) {
-  assert(g_cache_fd >= 0);
   assert(g_cache_size >= 0);
   const int64_t file_start_offset = g_cache_size;
 
@@ -1493,7 +1495,7 @@ void CacheFileData(struct archive* const a) {
     g_cache_size = offset;
 
     while (len > 0) {
-      ssize_t n = pwrite(g_cache_fd, buff, len, offset);
+      const ssize_t n = pwrite(g_cache_fd, buff, len, offset);
       if (n < 0) {
         if (errno == EINTR) {
           continue;
@@ -1593,7 +1595,7 @@ void ProcessEntry(struct archive* const a,
   }
 
   // Cache file data.
-  if (g_cache_fd >= 0) {
+  if (g_options.cache) {
     node->cache_offset = g_cache_size;
     CacheFileData(a);
     node->size = g_cache_size - node->cache_offset;
@@ -1733,13 +1735,11 @@ void BuildTree() {
   }
 
   Log(LOG_INFO, "The tree contains ", g_nodes_by_path.size(), " nodes");
-  if (g_cache_fd >= 0) {
-    Log(LOG_INFO, "The cache contains ", g_cache_size, " bytes");
-    if (struct stat z; fstat(g_cache_fd, &z) == 0) {
-      Log(LOG_INFO, "The cache uses ",
-          static_cast<int64_t>(z.st_blocks) * block_size,
-          " bytes of storage space");
-    }
+  if (struct stat z; g_options.cache && fstat(g_cache_fd, &z) == 0) {
+    Log(LOG_INFO, "The cache uses ",
+        static_cast<int64_t>(z.st_blocks) * block_size,
+        " bytes of storage space");
+    assert(z.st_size == g_cache_size);
   }
 }
 
@@ -1782,24 +1782,16 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
 
   const Node* const n = it->second;
   assert(n);
-  if (n->is_dir()) {
-    return -EISDIR;
-  }
-
-  if (n->index_within_archive < 0) {
-    return -EIO;
-  }
+  assert(!n->is_dir());
+  assert(n->index_within_archive >= 0);
 
   assert(ffi);
   if ((ffi->flags & O_ACCMODE) != O_RDONLY) {
     return -EACCES;
   }
 
-  if (g_cache_fd >= 0) {
-    if (n->cache_offset < 0) {
-      return -EIO;
-    }
-
+  if (g_options.cache) {
+    assert(n->cache_offset >= 0);
     static_assert(sizeof(ffi->fh) >= sizeof(n));
     ffi->fh = reinterpret_cast<uintptr_t>(n);
     return 0;
@@ -1826,7 +1818,7 @@ int my_read(const char* const path,
     return -EINVAL;
   }
 
-  if (g_cache_fd >= 0) {
+  if (g_options.cache) {
     const Node* const node = reinterpret_cast<const Node*>(ffi->fh);
 
     if (offset >= node->size) {
@@ -1834,7 +1826,7 @@ int my_read(const char* const path,
       return 0;
     }
 
-    if (offset + dst_len >= node->size) {
+    if (dst_len >= node->size - offset) {
       // No data past the end of a file.
       dst_len = node->size - offset;
     }
@@ -1916,7 +1908,7 @@ int my_read(const char* const path,
 }
 
 int my_release(const char*, fuse_file_info* const ffi) {
-  if (g_cache_fd >= 0) {
+  if (g_options.cache) {
     return 0;
   }
 
@@ -2038,6 +2030,10 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       g_options.redact = true;
       return DISCARD;
 
+    case KEY_NO_CACHE:
+      g_options.cache = false;
+      return DISCARD;
+
     case KEY_NO_SPECIALS:
       g_options.no_specials = true;
       return DISCARD;
@@ -2127,12 +2123,6 @@ int main(int const argc, char** const argv) try {
     throw ExitCode::GENERIC_FAILURE;
   }
 
-  // Force single-threading. It's simpler.
-  //
-  // For example, there may be complications about acquiring an unused side
-  // buffer if NUM_SIDE_BUFFERS is less than the number of threads.
-  fuse_opt_add_arg(&args, "-s");
-
   // Mount read-only.
   fuse_opt_add_arg(&args, "-o");
   fuse_opt_add_arg(&args, "ro");
@@ -2150,7 +2140,7 @@ general options:
     -q   --quiet           do not print progress messages
     -v   --verbose         print more log messages
          --redact          redact pathnames from log messages
-         -o redact         ditto
+         -o no_cache       no caching of uncompressed data
          -o nospecials     no special files (FIFOs, sockets, devices)
          -o nosymlinks     no symbolic links
 
@@ -2196,9 +2186,14 @@ general options:
 
   Log(LOG_DEBUG, "Opened directory ", Path(mount_point_parent));
 
-  // Create cache file.
-  CreateCacheFile();
-  CheckCacheFile();
+  // Create cache file if necessary.
+  if (g_options.cache) {
+    CreateCacheFile();
+    CheckCacheFile();
+  } else {
+    // Force single-threading if no cache is used.
+    fuse_opt_add_arg(&args, "-s");
+  }
 
   // Read archive and build tree.
   BuildTree();
@@ -2251,6 +2246,7 @@ general options:
   // The mount point is in place.
   fuse_opt_add_arg(&args, g_mount_point.c_str());
 
+  // Start serving the filesystem.
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
 } catch (const ExitCode e) {
   return static_cast<int>(e);
