@@ -164,16 +164,6 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("no_cache", KEY_NO_CACHE),
     FUSE_OPT_KEY("no_specials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("no_symlinks", KEY_NO_SYMLINKS),
-    // The remaining options are listed for e.g. "-o formatraw" command line
-    // compatibility with the https://github.com/cybernoid/archivemount program
-    // but are otherwise ignored. For example, this program detects 'raw'
-    // archives automatically and only supports read-only, not read-write.
-    FUSE_OPT_KEY("--passphrase", FUSE_OPT_KEY_DISCARD),
-    FUSE_OPT_KEY("passphrase", FUSE_OPT_KEY_DISCARD),
-    FUSE_OPT_KEY("formatraw", FUSE_OPT_KEY_DISCARD),
-    FUSE_OPT_KEY("nobackup", FUSE_OPT_KEY_DISCARD),
-    FUSE_OPT_KEY("nosave", FUSE_OPT_KEY_DISCARD),
-    FUSE_OPT_KEY("readonly", FUSE_OPT_KEY_DISCARD),
     FUSE_OPT_END,
 };
 
