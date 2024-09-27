@@ -456,7 +456,7 @@ enum class FileType : mode_t {
   Symlink = S_IFLNK,      // Symbolic link
 };
 
-FileType GetFileType(mode_t mode) {
+FileType GetFileType(mode_t const mode) {
   return FileType(mode & S_IFMT);
 }
 
@@ -529,16 +529,17 @@ struct Node {
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
 
-  bool is_dir() const { return S_ISDIR(mode); }
+  FileType GetType() const { return GetFileType(mode); }
+  bool IsDir() const { return S_ISDIR(mode); }
 
-  void add_child(Node* n) {
+  void AddChild(Node* const n) {
     assert(n);
     assert(!n->parent);
-    assert(is_dir());
+    assert(IsDir());
     // Count one "block" for each directory entry.
     size += block_size;
     n->nlink += 1;
-    nlink += n->is_dir();
+    nlink += n->IsDir();
     n->parent = this;
     if (last_child == nullptr) {
       last_child = n;
@@ -549,11 +550,11 @@ struct Node {
     }
   }
 
-  int64_t get_block_count() const {
+  int64_t GetBlockCount() const {
     return (size + (block_size - 1)) / block_size;
   }
 
-  struct stat get_stat() const {
+  struct stat GetStat() const {
     struct stat z = {};
     z.st_nlink = nlink;
     z.st_mode = mode;
@@ -565,17 +566,17 @@ struct Node {
     z.st_ctime = g_now;
     z.st_mtime = mtime;
     z.st_blksize = block_size;
-    z.st_blocks = get_block_count();
+    z.st_blocks = GetBlockCount();
     z.st_rdev = rdev;
     return z;
   }
 
-  std::string path() const {
+  std::string GetPath() const {
     if (!parent) {
       return name;
     }
 
-    std::string path = parent->path();
+    std::string path = parent->GetPath();
     Path::Append(&path, name);
     return path;
   }
@@ -588,8 +589,7 @@ std::strong_ordering ComparePath(const Node& a, const Node& b) {
     return std::strong_ordering::equal;
   }
 
-  if (const auto c = ComparePath(a.parent, b.parent);
-      c != std::strong_ordering::equal) {
+  if (const auto c = ComparePath(a.parent, b.parent); c != 0) {
     return c;
   }
 
@@ -613,8 +613,8 @@ std::strong_ordering ComparePath(const Node* const a, const Node* const b) {
 }
 
 std::ostream& operator<<(std::ostream& out, const Node& n) {
-  return out << GetFileType(n.mode) << " [" << n.index_within_archive << "] "
-             << Path(n.path());
+  return out << n.GetType() << " [" << n.index_within_archive << "] "
+             << Path(n.GetPath());
 }
 
 // These global variables are the in-memory directory tree of nodes.
@@ -911,7 +911,7 @@ struct ArchiveDeleter {
 
 using ArchivePtr = std::unique_ptr<Archive, ArchiveDeleter>;
 
-const char* read_password_from_stdin(Archive*, void* /*data*/) {
+const char* ReadPassword(Archive*, void* /*data*/) {
   if (g_password_count++) {
     return nullptr;
   }
@@ -985,7 +985,7 @@ int my_file_open(Archive*, void* /*data*/) {
   return ARCHIVE_OK;
 }
 
-ssize_t my_file_read(Archive* const a, void*, const void** out_dst_ptr) {
+ssize_t my_file_read(Archive* const a, void*, const void** const out_dst_ptr) {
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
   while (true) {
     const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
@@ -1000,14 +1000,16 @@ ssize_t my_file_read(Archive* const a, void*, const void** out_dst_ptr) {
       continue;
     }
 
-    archive_set_error(a, errno, "could not read archive file: %s",
+    archive_set_error(a, errno, "Cannot read archive file: %s",
                       strerror(errno));
-    break;
+    return ARCHIVE_FATAL;
   }
-  return ARCHIVE_FATAL;
 }
 
-int64_t my_file_seek(Archive* const a, void*, int64_t offset, int whence) {
+int64_t my_file_seek(Archive* const a,
+                     void*,
+                     int64_t const offset,
+                     int const whence) {
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
     g_archive_position = o;
@@ -1015,12 +1017,12 @@ int64_t my_file_seek(Archive* const a, void*, int64_t offset, int whence) {
     return o;
   }
 
-  archive_set_error(a, errno, "could not seek in archive file: %s",
+  archive_set_error(a, errno, "Cannot seek in archive file: %s",
                     strerror(errno));
   return ARCHIVE_FATAL;
 }
 
-int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t delta) {
+int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t const delta) {
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if (o1 >= 0 && o0 >= 0) {
@@ -1029,7 +1031,7 @@ int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t delta) {
     return o1 - o0;
   }
 
-  archive_set_error(a, errno, "could not seek in archive file: %s",
+  archive_set_error(a, errno, "Cannot seek in archive file: %s",
                     strerror(errno));
   return ARCHIVE_FATAL;
 }
@@ -1064,10 +1066,10 @@ int acquire_side_buffer() {
   return oldest_i;
 }
 
-bool read_from_side_buffer(int64_t index_within_archive,
-                           char* dst_ptr,
-                           size_t dst_len,
-                           int64_t offset_within_entry) {
+bool read_from_side_buffer(int64_t const index_within_archive,
+                           char* const dst_ptr,
+                           size_t const dst_len,
+                           int64_t const offset_within_entry) {
   // Find the longest side buffer that contains (index_within_archive,
   // offset_within_entry, dst_len).
   int best_i = -1;
@@ -1384,7 +1386,7 @@ void RemoveNumericSuffix(std::string& s) {
 
 void Attach(Node* const node) {
   assert(node);
-  const auto [pos, ok] = g_nodes_by_path.try_emplace(node->path(), node);
+  const auto [pos, ok] = g_nodes_by_path.try_emplace(node->GetPath(), node);
   if (ok) {
     return;
   }
@@ -1407,7 +1409,7 @@ void Attach(Node* const node) {
     f.assign(base, 0, Path(base).TruncationPosition(NAME_MAX - suffix.size()));
     f += suffix;
 
-    const auto [pos, ok] = g_nodes_by_path.try_emplace(node->path(), node);
+    const auto [pos, ok] = g_nodes_by_path.try_emplace(node->GetPath(), node);
     if (ok) {
       Debug("Resolved conflict for ", *node);
       return;
@@ -1422,7 +1424,7 @@ void Attach(Node* const node) {
 Node* GetOrCreateDirNode(std::string_view const path) {
   if (path == "/") {
     assert(g_root_node);
-    assert(g_root_node->is_dir());
+    assert(g_root_node->IsDir());
     return g_root_node;
   }
 
@@ -1433,7 +1435,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   Node*& node = g_nodes_by_path[std::string(path)];
 
   if (node) {
-    if (node->is_dir())
+    if (node->IsDir())
       return node;
 
     // There is an existing node with the given name, but it's not a
@@ -1456,9 +1458,9 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   node = new Node{.name = std::string(name),
                   .mode = S_IFDIR | (0777 & ~g_dmask),
                   .nlink = 1};
-  parent->add_child(node);
+  parent->AddChild(node);
   g_block_count += 1;
-  assert(node->path() == path);
+  assert(node->GetPath() == path);
 
   if (to_rename) {
     Attach(to_rename);
@@ -1570,7 +1572,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   // Get or create the parent node.
   Node* const parent = GetOrCreateDirNode(parent_path);
   assert(parent);
-  assert(parent->is_dir());
+  assert(parent->IsDir());
 
   // Create the node for this entry.
   Node* const node =
@@ -1578,7 +1580,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
                .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
                .index_within_archive = id,
                .mtime = mtime ?: g_now};
-  parent->add_child(node);
+  parent->AddChild(node);
   g_block_count += 1;
 
   // Add to g_nodes_by_path.
@@ -1659,7 +1661,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     g_password_checked = true;
   }
 
-  g_block_count += node->get_block_count();
+  g_block_count += node->GetBlockCount();
 }
 
 void BuildTree() {
@@ -1694,8 +1696,7 @@ void BuildTree() {
     throw std::bad_alloc();
   }
 
-  Check(archive_read_set_passphrase_callback(a.get(), nullptr,
-                                             &read_password_from_stdin));
+  Check(archive_read_set_passphrase_callback(a.get(), nullptr, &ReadPassword));
   Check(archive_read_support_filter_all(a.get()));
   Check(archive_read_support_format_all(a.get()));
   Check(archive_read_support_format_raw(a.get()));
@@ -1716,7 +1717,7 @@ void BuildTree() {
   assert(!g_root_node);
   g_root_node =
       new Node{.name = "/", .mode = S_IFDIR | (0777 & ~g_dmask), .nlink = 1};
-  g_nodes_by_path[g_root_node->path()] = g_root_node;
+  g_nodes_by_path[g_root_node->GetPath()] = g_root_node;
 
   // Read and process every entry of the archive.
   for (int64_t id = 0;; id++) {
@@ -1782,7 +1783,7 @@ int my_getattr(const char* const path, struct stat* const z) {
   }
 
   assert(z);
-  *z = it->second->get_stat();
+  *z = it->second->GetStat();
   return 0;
 }
 
@@ -1796,6 +1797,7 @@ int my_readlink(const char* const path,
 
   const Node* const n = it->second;
   assert(n);
+  assert(n->GetType() == FileType::Symlink);
   if (n->symlink.empty() || dst_len == 0) {
     return -ENOLINK;
   }
@@ -1812,7 +1814,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
 
   const Node* const n = it->second;
   assert(n);
-  assert(!n->is_dir());
+  assert(!n->IsDir());
   assert(n->index_within_archive >= 0);
 
   assert(ffi);
@@ -1968,7 +1970,7 @@ int my_readdir(const char* path,
   }
 
   const Node* const n = it->second;
-  if (!n->is_dir()) {
+  if (!n->IsDir()) {
     return -ENOTDIR;
   }
 
@@ -1977,7 +1979,7 @@ int my_readdir(const char* path,
   }
 
   for (const Node* p = n->first_child; p; p = p->next_sibling) {
-    const struct stat z = p->get_stat();
+    const struct stat z = p->GetStat();
     if (filler(buf, p->name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
@@ -2187,7 +2189,7 @@ general options:
 
   if (g_options.version) {
     std::cerr << PROGRAM_NAME " version: " FUSE_ARCHIVE_VERSION "\n";
-    std::cerr << "libarchive version: " <<  archive_version_string() << "\n";
+    std::cerr << "libarchive version: " << archive_version_string() << "\n";
     if (const char* const s = archive_bzlib_version()) {
       std::cerr << "bzlib version: " << s << "\n";
     }
