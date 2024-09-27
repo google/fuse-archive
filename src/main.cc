@@ -716,19 +716,19 @@ uint64_t side_buffer_metadata::next_lru_priority = 0;
 
 // ---- Libarchive Error Codes
 
-// determine_passphrase_exit_code converts libarchive errors to fuse-archive
-// exit codes. libarchive doesn't have designated passphrase-related error
-// numbers. As for whether a particular archive file's encryption is supported,
-// libarchive isn't consistent in archive_read_has_encrypted_entries returning
+// Converts libarchive errors to fuse-archive exit codes. libarchive doesn't
+// have designated passphrase-related error numbers. As for whether a particular
+// archive file's encryption is supported, libarchive isn't consistent in
+// archive_read_has_encrypted_entries returning
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
-ExitCode determine_passphrase_exit_code(const std::string_view e) {
+[[noreturn]] void ThrowExitCode(std::string_view const e) {
   if (e.starts_with("Incorrect passphrase")) {
-    return ExitCode::PASSPHRASE_INCORRECT;
+    throw ExitCode::PASSPHRASE_INCORRECT;
   }
 
   if (e.starts_with("Passphrase required")) {
-    return ExitCode::PASSPHRASE_REQUIRED;
+    throw ExitCode::PASSPHRASE_REQUIRED;
   }
 
   const std::string_view not_supported_prefixes[] = {
@@ -744,11 +744,11 @@ ExitCode determine_passphrase_exit_code(const std::string_view e) {
 
   for (const std::string_view prefix : not_supported_prefixes) {
     if (e.starts_with(prefix)) {
-      return ExitCode::PASSPHRASE_NOT_SUPPORTED;
+      throw ExitCode::PASSPHRASE_NOT_SUPPORTED;
     }
   }
 
-  return ExitCode::INVALID_ARCHIVE_CONTENTS;
+  throw ExitCode::INVALID_ARCHIVE_CONTENTS;
 }
 
 template <typename... Args>
@@ -1514,7 +1514,7 @@ void CacheFileData(Archive* const a) {
       assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
       const std::string_view error = archive_error_string(a);
       Error(error);
-      throw determine_passphrase_exit_code(error);
+      ThrowExitCode(error);
     }
 
     assert(offset >= g_cache_size - file_start_offset);
@@ -1642,7 +1642,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
       if (n < 0) {
         const std::string_view error = archive_error_string(a);
         Error("Cannot extract ", *node, ": ", error);
-        throw determine_passphrase_exit_code(error);
+        ThrowExitCode(error);
       }
 
       assert(n <= SIDE_BUFFER_SIZE);
@@ -1660,7 +1660,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     if (n < 0) {
       const std::string_view error = archive_error_string(a);
       Error("Cannot extract ", *node, ": ", error);
-      throw determine_passphrase_exit_code(error);
+      ThrowExitCode(error);
     }
 
     g_password_checked = true;
@@ -1738,7 +1738,7 @@ void BuildTree() {
     } else if (status != ARCHIVE_OK) {
       const std::string_view error = archive_error_string(a.get());
       Error(error);
-      throw determine_passphrase_exit_code(error);
+      ThrowExitCode(error);
     }
 
     if (id == 0) {
