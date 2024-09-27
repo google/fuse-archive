@@ -629,7 +629,8 @@ std::strong_ordering ComparePath(const Node* const a, const Node* const b) {
 }
 
 std::ostream& operator<<(std::ostream& out, const Node& n) {
-  return out << GetFileType(n.mode) << " " << Path(n.path());
+  return out << GetFileType(n.mode) << " [" << n.index_within_archive << "] "
+             << Path(n.path());
 }
 
 // These global variables are the in-memory directory tree of nodes.
@@ -1089,10 +1090,23 @@ bool read_from_side_buffer(int64_t index_within_archive,
 // A Reader is backed by its own archive_read_open_filename call, managed by
 // libarchive, so each can be positioned independently.
 struct Reader {
+  static int count;
+
   ArchivePtr archive;
   Entry* entry = nullptr;
   int64_t index_within_archive = -1;
   int64_t offset_within_entry = 0;
+  int id = ++count;
+
+  ~Reader() { Log(LOG_DEBUG, "Deleted ", *this); }
+
+  explicit Reader(ArchivePtr archive) : archive(std::move(archive)) {
+    Log(LOG_DEBUG, "Created ", *this);
+  }
+
+  friend std::ostream& operator<<(std::ostream& out, const Reader& r) {
+    return out << "Reader #" << r.id;
+  }
 
   // Walks forward until positioned at the want'th index. An index identifies an
   // archive entry. If this Reader wasn't already positioned at that index, it
@@ -1103,6 +1117,10 @@ struct Reader {
     if (!archive) {
       return false;
     }
+
+    assert(index_within_archive <= want);
+    Log(LOG_DEBUG, "Advancing ", *this, " from [", index_within_archive,
+        "] to [", want, "]");
 
     while (index_within_archive < want) {
       const int status = archive_read_next_header(archive.get(), &entry);
@@ -1121,6 +1139,7 @@ struct Reader {
       offset_within_entry = 0;
     }
 
+    assert(index_within_archive == want);
     return true;
   }
 
@@ -1143,6 +1162,9 @@ struct Reader {
       // We are exactly where we want to be.
       return true;
     }
+
+    Log(LOG_DEBUG, "Advancing ", *this, " from offset ", offset_within_entry,
+        " to offset ", want, " in [", index_within_archive, "]");
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
@@ -1203,17 +1225,20 @@ struct Reader {
   }
 };
 
+int Reader::count = 0;
+
 // Swaps fields of two Readers.
 void swap(Reader& a, Reader& b) {
   std::swap(a.archive, b.archive);
   std::swap(a.entry, b.entry);
   std::swap(a.index_within_archive, b.index_within_archive);
   std::swap(a.offset_within_entry, b.offset_within_entry);
+  std::swap(a.id, b.id);
 }
 
 // Returns a Reader positioned at the start (offset == 0) of the given index'th
 // entry of the archive.
-std::unique_ptr<Reader> acquire_reader(int64_t want_index_within_archive) {
+std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
   assert(want_index_within_archive >= 0);
 
   int best_i = -1;
@@ -1263,11 +1288,13 @@ std::unique_ptr<Reader> acquire_reader(int64_t want_index_within_archive) {
     return nullptr;
   }
 
+  Log(LOG_DEBUG, "Acquiring ", *r);
   return r;
 }
 
-// release_reader returns r to the reader cache.
-void release_reader(std::unique_ptr<Reader> r) {
+// Returns r to the reader cache.
+void ReleaseReader(std::unique_ptr<Reader> r) {
+  Log(LOG_DEBUG, "Releasing ", *r);
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_saved_readers[0].second;
   for (int i = 1; i < NUM_SAVED_READERS; i++) {
@@ -1780,10 +1807,11 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
     assert(n->cache_offset >= 0);
     static_assert(sizeof(ffi->fh) >= sizeof(n));
     ffi->fh = reinterpret_cast<uintptr_t>(n);
+    Log(LOG_DEBUG, "Opened ", *n);
     return 0;
   }
 
-  std::unique_ptr<Reader> ur = acquire_reader(n->index_within_archive);
+  std::unique_ptr<Reader> ur = AcquireReader(n->index_within_archive);
   if (!ur) {
     return -EIO;
   }
@@ -1792,6 +1820,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
 
   static_assert(sizeof(ffi->fh) >= sizeof(Reader*));
   ffi->fh = reinterpret_cast<uintptr_t>(ur.release());
+  Log(LOG_DEBUG, "Opened ", *n);
   return 0;
 }
 
@@ -1806,6 +1835,7 @@ int my_read(const char*,
 
   if (g_options.cache) {
     const Node* const node = reinterpret_cast<const Node*>(ffi->fh);
+    assert(node);
 
     if (offset >= node->size) {
       // No data past the end of a file.
@@ -1834,19 +1864,13 @@ int my_read(const char*,
   }
 
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
-  if (!r || !r->archive || !r->entry) {
-    return -EIO;
-  }
+  assert(r);
 
   const uint64_t i = r->index_within_archive;
-  if (i >= g_nodes_by_index.size()) {
-    return -EIO;
-  }
+  assert(i < g_nodes_by_index.size());
 
   const Node* const n = g_nodes_by_index[i];
-  if (!n) {
-    return -EIO;
-  }
+  assert(n);
 
   const int64_t size = n->size;
   if (size < 0) {
@@ -1878,12 +1902,12 @@ int my_read(const char*,
     // swap (modify r in-place) instead of updating ffi->fh to point to the
     // new Reader, because libfuse ignores any changes to the ffi->fh value
     // after this function returns (this function is not an 'open' callback).
-    std::unique_ptr<Reader> ur = acquire_reader(r->index_within_archive);
+    std::unique_ptr<Reader> ur = AcquireReader(r->index_within_archive);
     if (!ur || !ur->archive || !ur->entry) {
       return -EIO;
     }
     swap(*r, *ur);
-    release_reader(std::move(ur));
+    ReleaseReader(std::move(ur));
   }
 
   if (!r->AdvanceOffset(offset)) {
@@ -1895,14 +1919,24 @@ int my_read(const char*,
 
 int my_release(const char*, fuse_file_info* const ffi) {
   if (g_options.cache) {
+    const Node* const n = reinterpret_cast<const Node*>(ffi->fh);
+    assert(n);
+    Log(LOG_DEBUG, "Closed ", *n);
     return 0;
   }
 
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
-  if (!r) {
-    return -EIO;
-  }
-  release_reader(std::unique_ptr<Reader>(r));
+  assert(r);
+
+  const uint64_t i = r->index_within_archive;
+  assert(i < g_nodes_by_index.size());
+
+  const Node* const n = g_nodes_by_index[i];
+  assert(n);
+
+  ReleaseReader(std::unique_ptr<Reader>(r));
+  Log(LOG_DEBUG, "Closed ", *n);
+
   return 0;
 }
 
