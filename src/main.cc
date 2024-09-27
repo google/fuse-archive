@@ -135,8 +135,8 @@ struct {
   bool quiet = false;
   bool redact = false;
   bool cache = true;
-  bool no_specials = false;
-  bool no_symlinks = false;
+  bool specials = true;
+  bool symlinks = true;
 } g_options;
 
 enum {
@@ -162,8 +162,8 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("--redact", KEY_REDACT),
     FUSE_OPT_KEY("redact", KEY_REDACT),
     FUSE_OPT_KEY("no_cache", KEY_NO_CACHE),
-    FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
-    FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
+    FUSE_OPT_KEY("no_specials", KEY_NO_SPECIALS),
+    FUSE_OPT_KEY("no_symlinks", KEY_NO_SYMLINKS),
     // The remaining options are listed for e.g. "-o formatraw" command line
     // compatibility with the https://github.com/cybernoid/archivemount program
     // but are otherwise ignored. For example, this program detects 'raw'
@@ -1452,10 +1452,10 @@ bool ShouldSkip(FileType const ft) {
     case FileType::CharDevice:
     case FileType::Fifo:
     case FileType::Socket:
-      return g_options.no_specials;
+      return !g_options.specials;
 
     case FileType::Symlink:
-      return g_options.no_symlinks;
+      return !g_options.symlinks;
 
     default:
       return false;
@@ -2035,11 +2035,11 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       return DISCARD;
 
     case KEY_NO_SPECIALS:
-      g_options.no_specials = true;
+      g_options.specials = false;
       return DISCARD;
 
     case KEY_NO_SYMLINKS:
-      g_options.no_symlinks = true;
+      g_options.symlinks = false;
       return DISCARD;
   }
 
@@ -2141,8 +2141,8 @@ general options:
     -v   --verbose         print more log messages
          --redact          redact pathnames from log messages
          -o no_cache       no caching of uncompressed data
-         -o nospecials     no special files (FIFOs, sockets, devices)
-         -o nosymlinks     no symbolic links
+         -o no_specials    no special files (FIFOs, sockets, devices)
+         -o no_symlinks    no symbolic links
 
 )",
             PROGRAM_NAME, PROGRAM_NAME);
