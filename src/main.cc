@@ -2040,9 +2040,7 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
           return DISCARD;
 
         default:
-          fprintf(stderr,
-                  "%s: only two arguments allowed: filename and mountpoint\n",
-                  PROGRAM_NAME);
+          Error("Too many arguments");
           return ERROR;
       }
 
@@ -2188,7 +2186,24 @@ general options:
   }
 
   if (g_options.version) {
-    fprintf(stderr, PROGRAM_NAME " version: %s\n", FUSE_ARCHIVE_VERSION);
+    std::cerr << PROGRAM_NAME " version: " FUSE_ARCHIVE_VERSION "\n";
+    std::cerr << "libarchive version: " <<  archive_version_string() << "\n";
+    if (const char* const s = archive_bzlib_version()) {
+      std::cerr << "bzlib version: " << s << "\n";
+    }
+    if (const char* const s = archive_liblz4_version()) {
+      std::cerr << "liblz4 version: " << s << "\n";
+    }
+    if (const char* const s = archive_liblzma_version()) {
+      std::cerr << "liblzma version: " << s << "\n";
+    }
+    if (const char* const s = archive_libzstd_version()) {
+      std::cerr << "libzstd version: " << s << "\n";
+    }
+    if (const char* const s = archive_zlib_version()) {
+      std::cerr << "zlib version: " << s << "\n";
+    }
+
     fuse_opt_add_arg(&args, "--version");
     fuse_main(args.argc, args.argv, &my_operations, nullptr);
     return EXIT_SUCCESS;
