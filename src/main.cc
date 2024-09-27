@@ -176,15 +176,8 @@ int g_archive_fd = -1;
 // Size of the g_archive_path file.
 int64_t g_archive_file_size = 0;
 
-// g_archive_fd_position_current is the read position of g_archive_fd.
-//
-// etc_hwm is the etc_current high water mark (the largest value seen). When
-// compared to g_archive_file_size, it proxies what proportion of the archive
-// has been processed. This matters for 'raw' archives that need a complete
-// decompression pass (as they do not have a table of contents within to
-// explicitly record the decompressed file size).
-int64_t g_archive_fd_position_current = 0;
-int64_t g_archive_fd_position_hwm = 0;
+// Read position of g_archive_fd.
+int64_t g_archive_position = 0;
 
 // Canonicalised absolute path of the archive file. The command line argument
 // may give a relative filename (one that doesn't start with a slash) and the
@@ -953,26 +946,27 @@ const char* read_password_from_stdin(Archive*, void* /*data*/) {
 
 // ---- Libarchive Read Callbacks
 
-void update_g_archive_fd_position_hwm() {
-  int64_t h = g_archive_fd_position_hwm;
-  if (h < g_archive_fd_position_current) {
-    g_archive_fd_position_hwm = g_archive_fd_position_current;
+void PrintProgress() {
+  if (!LogIsOn(LOG_INFO)) {
+    return;
   }
 
-  const auto period = std::chrono::seconds(1);
+  constexpr auto period = std::chrono::seconds(1);
   static auto next = std::chrono::steady_clock::now() + period;
   const auto now = std::chrono::steady_clock::now();
-  if (LogIsOn(LOG_INFO) && now >= next) {
-    next = now + period;
-    const int percent = g_archive_file_size > 0
-                            ? 100 *
-                                  std::clamp<int64_t>(g_archive_fd_position_hwm,
-                                                      0, g_archive_file_size) /
-                                  g_archive_file_size
-                            : 0;
-    Info("Loading ", percent, "%");
-    g_displayed_progress = true;
+  if (now < next) {
+    return;
   }
+
+  next = now + period;
+  const int percent = g_archive_file_size > 0
+                          ? 100 *
+                                std::clamp<int64_t>(g_archive_position, 0,
+                                                    g_archive_file_size) /
+                                g_archive_file_size
+                          : 0;
+  Info("Loading ", percent, "%");
+  g_displayed_progress = true;
 }
 
 // The callbacks below are only used during start-up, for the initial pass
@@ -987,8 +981,7 @@ int my_file_close(Archive*, void* /*data*/) {
 }
 
 int my_file_open(Archive*, void* /*data*/) {
-  g_archive_fd_position_current = 0;
-  g_archive_fd_position_hwm = 0;
+  g_archive_position = 0;
   return ARCHIVE_OK;
 }
 
@@ -997,8 +990,8 @@ ssize_t my_file_read(Archive* const a, void*, const void** out_dst_ptr) {
   while (true) {
     const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
     if (n >= 0) {
-      g_archive_fd_position_current += n;
-      update_g_archive_fd_position_hwm();
+      g_archive_position += n;
+      PrintProgress();
       *out_dst_ptr = dst_ptr;
       return n;
     }
@@ -1017,8 +1010,8 @@ ssize_t my_file_read(Archive* const a, void*, const void** out_dst_ptr) {
 int64_t my_file_seek(Archive* const a, void*, int64_t offset, int whence) {
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
-    g_archive_fd_position_current = o;
-    update_g_archive_fd_position_hwm();
+    g_archive_position = o;
+    PrintProgress();
     return o;
   }
 
@@ -1031,8 +1024,8 @@ int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t delta) {
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if (o1 >= 0 && o0 >= 0) {
-    g_archive_fd_position_current = o1;
-    update_g_archive_fd_position_hwm();
+    g_archive_position = o1;
+    PrintProgress();
     return o1 - o0;
   }
 
