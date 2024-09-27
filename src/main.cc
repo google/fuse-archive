@@ -231,11 +231,6 @@ const gid_t g_gid = getgid();
 const mode_t g_dmask = 0022;
 const mode_t g_fmask = 0022;
 
-// We serve ls and stat requests from an in-memory directory tree of nodes.
-// Building that tree is one of the first things that we do.
-struct archive* g_archive = nullptr;
-struct archive_entry* g_archive_entry = nullptr;
-
 // g_displayed_progress is whether we have printed a progress message.
 bool g_displayed_progress = false;
 
@@ -715,7 +710,7 @@ struct side_buffer_metadata {
         this->index_within_archive == index_within_archive &&
         this->offset_within_entry <= offset_within_entry) {
       const int64_t o = offset_within_entry - this->offset_within_entry;
-      return this->length >= o && (this->length - o) >= length;
+      return this->length >= o && this->length - o >= length;
     }
     return false;
   }
@@ -891,7 +886,16 @@ class SuppressEcho {
   bool reset_ = false;
 };
 
-const char* read_password_from_stdin(struct archive*, void* /*data*/) {
+using Archive = struct archive;
+using Entry = struct archive_entry;
+
+struct ArchiveDeleter {
+  void operator()(Archive* const a) const { archive_read_free(a); }
+};
+
+using ArchivePtr = std::unique_ptr<Archive, ArchiveDeleter>;
+
+const char* read_password_from_stdin(Archive*, void* /*data*/) {
   if (g_password_count++) {
     return nullptr;
   }
@@ -955,17 +959,17 @@ void update_g_archive_fd_position_hwm() {
 // g_archive_fd_position_etc. The data arguments are ignored in favor of global
 // variables.
 
-int my_file_close(struct archive* a, void* /*data*/) {
+int my_file_close(Archive*, void* /*data*/) {
   return ARCHIVE_OK;
 }
 
-int my_file_open(struct archive* a, void* /*data*/) {
+int my_file_open(Archive*, void* /*data*/) {
   g_archive_fd_position_current = 0;
   g_archive_fd_position_hwm = 0;
   return ARCHIVE_OK;
 }
 
-ssize_t my_file_read(struct archive* a, void*, const void** out_dst_ptr) {
+ssize_t my_file_read(Archive* const a, void*, const void** out_dst_ptr) {
   uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
   while (true) {
     const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
@@ -987,7 +991,7 @@ ssize_t my_file_read(struct archive* a, void*, const void** out_dst_ptr) {
   return ARCHIVE_FATAL;
 }
 
-int64_t my_file_seek(struct archive* a, void*, int64_t offset, int whence) {
+int64_t my_file_seek(Archive* const a, void*, int64_t offset, int whence) {
   int64_t o = lseek64(g_archive_fd, offset, whence);
   if (o >= 0) {
     g_archive_fd_position_current = o;
@@ -1000,7 +1004,7 @@ int64_t my_file_seek(struct archive* a, void*, int64_t offset, int whence) {
   return ARCHIVE_FATAL;
 }
 
-int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
+int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t delta) {
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
   const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
   if (o1 >= 0 && o0 >= 0) {
@@ -1014,11 +1018,11 @@ int64_t my_file_skip(struct archive* a, void* /*data*/, int64_t delta) {
   return ARCHIVE_FATAL;
 }
 
-int my_file_switch(struct archive*, void* /*data0*/, void* /*data1*/) {
+int my_file_switch(Archive*, void* /*data0*/, void* /*data1*/) {
   return ARCHIVE_OK;
 }
 
-int my_archive_read_open(struct archive* a) {
+int my_archive_read_open(Archive* const a) {
   TRY(archive_read_set_callback_data(a, nullptr));
   TRY(archive_read_set_close_callback(a, my_file_close));
   TRY(archive_read_set_open_callback(a, my_file_open));
@@ -1085,32 +1089,23 @@ bool read_from_side_buffer(int64_t index_within_archive,
 // A Reader is backed by its own archive_read_open_filename call, managed by
 // libarchive, so each can be positioned independently.
 struct Reader {
-  struct archive* archive;
-  struct archive_entry* archive_entry = nullptr;
+  ArchivePtr archive;
+  Entry* entry = nullptr;
   int64_t index_within_archive = -1;
   int64_t offset_within_entry = 0;
 
-  Reader(struct archive* _archive) : archive(_archive) {}
-
-  ~Reader() {
-    if (this->archive) {
-      archive_read_free(this->archive);
-    }
-  }
-
-  // advance_index walks forward until positioned at the want'th index. An
-  // index identifies an archive entry. If this Reader wasn't already
-  // positioned at that index, it also resets the Reader's offset to zero.
+  // Walks forward until positioned at the want'th index. An index identifies an
+  // archive entry. If this Reader wasn't already positioned at that index, it
+  // also resets the Reader's offset to zero.
   //
   // It returns success (true) or failure (false).
-  bool advance_index(int64_t want) {
-    if (!this->archive) {
+  bool AdvanceIndex(int64_t const want) {
+    if (!archive) {
       return false;
     }
 
-    while (this->index_within_archive < want) {
-      const int status =
-          archive_read_next_header(this->archive, &this->archive_entry);
+    while (index_within_archive < want) {
+      const int status = archive_read_next_header(archive.get(), &entry);
 
       if (status == ARCHIVE_EOF) {
         Log(LOG_ERR, "Inconsistent archive");
@@ -1118,36 +1113,33 @@ struct Reader {
       }
 
       if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
-        Log(LOG_ERR, "Invalid archive: %s",
-            archive_error_string(this->archive));
+        Log(LOG_ERR, archive_error_string(archive.get()));
         return false;
       }
 
-      this->index_within_archive++;
-      this->offset_within_entry = 0;
+      index_within_archive++;
+      offset_within_entry = 0;
     }
 
     return true;
   }
 
-  // advance_offset walks forward until positioned at the want'th offset. An
-  // offset identifies a byte position relative to the start of an archive
-  // entry's decompressed contents.
-  //
-  // The pathname is used for log messages.
+  // Walks forward until positioned at the want'th offset. An offset identifies
+  // a byte position relative to the start of an archive entry's decompressed
+  // contents.
   //
   // It returns success (true) or failure (false).
-  bool advance_offset(int64_t want, const char* pathname) {
-    if (!this->archive || !this->archive_entry) {
+  bool AdvanceOffset(int64_t const want) {
+    if (!archive.get() || !entry) {
       return false;
     }
 
-    if (want < this->offset_within_entry) {
+    if (want < offset_within_entry) {
       // We can't walk backwards.
       return false;
     }
 
-    if (want == this->offset_within_entry) {
+    if (want == offset_within_entry) {
       // We are exactly where we want to be.
       return true;
     }
@@ -1158,15 +1150,16 @@ struct Reader {
     if (sb < 0 || NUM_SIDE_BUFFERS <= sb) {
       return false;
     }
+
     uint8_t* dst_ptr = g_side_buffer_data[sb];
     struct side_buffer_metadata* meta = &g_side_buffer_metadata[sb];
-    while (want > this->offset_within_entry) {
-      const int64_t original_owe = this->offset_within_entry;
+    while (want > offset_within_entry) {
+      const int64_t original_owe = offset_within_entry;
       int64_t dst_len = want - original_owe;
       // If the amount we need to advance is greater than the SIDE_BUFFER_SIZE,
-      // we need multiple this->read calls, but the total advance might not be
-      // an exact multiple of SIDE_BUFFER_SIZE. Read that remainder amount
-      // first, not last. For example, if advancing 260KiB with a 128KiB
+      // we need multiple Read calls, but the total advance might not be an
+      // exact multiple of SIDE_BUFFER_SIZE. Read that remainder amount first,
+      // not last. For example, if advancing 260KiB with a 128KiB
       // SIDE_BUFFER_SIZE then read 4+128+128 instead of 128+128+4. This leaves
       // a full side buffer when we've finished advancing, maximizing later
       // requests' chances of side-buffer-as-cache hits.
@@ -1177,7 +1170,7 @@ struct Reader {
         }
       }
 
-      const ssize_t n = this->read(dst_ptr, dst_len, pathname);
+      const ssize_t n = Read(dst_ptr, dst_len);
       if (n < 0) {
         meta->index_within_archive = -1;
         meta->offset_within_entry = -1;
@@ -1186,7 +1179,7 @@ struct Reader {
         return false;
       }
 
-      meta->index_within_archive = this->index_within_archive;
+      meta->index_within_archive = index_within_archive;
       meta->offset_within_entry = original_owe;
       meta->length = n;
       meta->lru_priority = ++side_buffer_metadata::next_lru_priority;
@@ -1197,18 +1190,15 @@ struct Reader {
 
   // read copies from the archive entry's decompressed contents to the
   // destination buffer. It also advances the Reader's offset_within_entry.
-  //
-  // The path is used for log messages.
-  ssize_t read(void* dst_ptr, size_t dst_len, const char* path) {
-    const ssize_t n = archive_read_data(this->archive, dst_ptr, dst_len);
+  ssize_t Read(void* const dst_ptr, size_t const dst_len) {
+    const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
     if (n < 0) {
-      Log(LOG_ERR,
-          "Cannot read archive: ", archive_error_string(this->archive));
+      Log(LOG_ERR, archive_error_string(archive.get()));
       return -EIO;
     }
 
     assert(n <= dst_len);
-    this->offset_within_entry += n;
+    offset_within_entry += n;
     return n;
   }
 };
@@ -1216,7 +1206,7 @@ struct Reader {
 // Swaps fields of two Readers.
 void swap(Reader& a, Reader& b) {
   std::swap(a.archive, b.archive);
-  std::swap(a.archive_entry, b.archive_entry);
+  std::swap(a.entry, b.entry);
   std::swap(a.index_within_archive, b.index_within_archive);
   std::swap(a.offset_within_entry, b.offset_within_entry);
 }
@@ -1247,29 +1237,29 @@ std::unique_ptr<Reader> acquire_reader(int64_t want_index_within_archive) {
     r = std::move(g_saved_readers[best_i].first);
     g_saved_readers[best_i].second = 0;
   } else {
-    struct archive* const a = archive_read_new();
+    ArchivePtr a(archive_read_new());
     if (!a) {
       Log(LOG_ERR, "Out of memory");
       return nullptr;
     }
 
     if (!g_password.empty()) {
-      archive_read_add_passphrase(a, g_password.c_str());
+      archive_read_add_passphrase(a.get(), g_password.c_str());
     }
 
-    archive_read_support_filter_all(a);
-    archive_read_support_format_all(a);
-    archive_read_support_format_raw(a);
-    if (archive_read_open_filename(a, g_archive_realpath, 16384) !=
+    archive_read_support_filter_all(a.get());
+    archive_read_support_format_all(a.get());
+    archive_read_support_format_raw(a.get());
+    if (archive_read_open_filename(a.get(), g_archive_realpath, 16384) !=
         ARCHIVE_OK) {
-      Log(LOG_ERR, "Cannot read archive: ", archive_error_string(a));
-      archive_read_free(a);
+      Log(LOG_ERR, archive_error_string(a.get()));
       return nullptr;
     }
-    r = std::make_unique<Reader>(a);
+
+    r = std::make_unique<Reader>(std::move(a));
   }
 
-  if (!r->advance_index(want_index_within_archive)) {
+  if (!r->AdvanceIndex(want_index_within_archive)) {
     return nullptr;
   }
 
@@ -1295,7 +1285,7 @@ void release_reader(std::unique_ptr<Reader> r) {
 
 // Validates, normalizes and returns e's path, prepending a leading "/" if it
 // doesn't already have one.
-std::string GetNormalizedPath(struct archive_entry* const e) {
+std::string GetNormalizedPath(Entry* const e) {
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
   if (!s || !*s) {
@@ -1457,7 +1447,7 @@ bool ShouldSkip(FileType const ft) {
   }
 }
 
-void CacheFileData(struct archive* const a) {
+void CacheFileData(Archive* const a) {
   assert(g_cache_size >= 0);
   const int64_t file_start_offset = g_cache_size;
 
@@ -1509,9 +1499,7 @@ void CacheFileData(struct archive* const a) {
   }
 }
 
-void ProcessEntry(struct archive* const a,
-                  struct archive_entry* const e,
-                  int64_t const id) {
+void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
   if (!IsValid(ft)) {
@@ -1666,19 +1654,19 @@ void BuildTree() {
     g_archive_file_size = z.st_size;
   }
 
-  g_archive = archive_read_new();
-  if (!g_archive) {
+  const ArchivePtr a(archive_read_new());
+  if (!a) {
     Log(LOG_ERR, "Out of memory");
     throw std::bad_alloc();
   }
 
-  archive_read_set_passphrase_callback(g_archive, nullptr,
+  archive_read_set_passphrase_callback(a.get(), nullptr,
                                        &read_password_from_stdin);
-  archive_read_support_filter_all(g_archive);
-  archive_read_support_format_all(g_archive);
-  archive_read_support_format_raw(g_archive);
-  if (my_archive_read_open(g_archive) != ARCHIVE_OK) {
-    Log(LOG_ERR, "Cannot open archive: ", archive_error_string(g_archive));
+  archive_read_support_filter_all(a.get());
+  archive_read_support_format_all(a.get());
+  archive_read_support_format_raw(a.get());
+  if (my_archive_read_open(a.get()) != ARCHIVE_OK) {
+    Log(LOG_ERR, "Cannot open archive: ", archive_error_string(a.get()));
     throw ExitCode::INVALID_ARCHIVE_HEADER;
   }
 
@@ -1690,15 +1678,16 @@ void BuildTree() {
 
   // Read and process every entry of the archive.
   for (int64_t id = 0;; id++) {
-    const int status = archive_read_next_header(g_archive, &g_archive_entry);
+    Entry* entry;
+    const int status = archive_read_next_header(a.get(), &entry);
     if (status == ARCHIVE_EOF) {
       break;
     }
 
     if (status == ARCHIVE_WARN) {
-      Log(LOG_WARNING, archive_error_string(g_archive));
+      Log(LOG_WARNING, archive_error_string(a.get()));
     } else if (status != ARCHIVE_OK) {
-      const std::string_view error = archive_error_string(g_archive);
+      const std::string_view error = archive_error_string(a.get());
       Log(LOG_ERR, error);
       throw determine_passphrase_exit_code(error);
     }
@@ -1707,24 +1696,24 @@ void BuildTree() {
       // For 'raw' archives, check that at least one of the compression filters
       // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
       // data (e.g. foo.jpeg).
-      if (archive_format(g_archive) == ARCHIVE_FORMAT_RAW) {
+      if (archive_format(a.get()) == ARCHIVE_FORMAT_RAW) {
         g_archive_is_raw = true;
         Log(LOG_DEBUG, "The archive is a 'raw' archive");
 
-        for (int n = archive_filter_count(g_archive);;) {
+        for (int n = archive_filter_count(a.get());;) {
           if (n == 0) {
             Log(LOG_ERR, "Invalid raw archive");
             throw ExitCode::INVALID_RAW_ARCHIVE;
           }
 
-          if (archive_filter_code(g_archive, --n) != ARCHIVE_FILTER_NONE) {
+          if (archive_filter_code(a.get(), --n) != ARCHIVE_FILTER_NONE) {
             break;
           }
         }
       }
     }
 
-    ProcessEntry(g_archive, g_archive_entry, id);
+    ProcessEntry(a.get(), entry, id);
   }
 
   if (g_displayed_progress) {
@@ -1806,7 +1795,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
   return 0;
 }
 
-int my_read(const char* const path,
+int my_read(const char*,
             char* const dst_ptr,
             size_t dst_len,
             off_t offset,
@@ -1845,7 +1834,7 @@ int my_read(const char* const path,
   }
 
   Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
-  if (!r || !r->archive || !r->archive_entry) {
+  if (!r || !r->archive || !r->entry) {
     return -EIO;
   }
 
@@ -1890,18 +1879,18 @@ int my_read(const char* const path,
     // new Reader, because libfuse ignores any changes to the ffi->fh value
     // after this function returns (this function is not an 'open' callback).
     std::unique_ptr<Reader> ur = acquire_reader(r->index_within_archive);
-    if (!ur || !ur->archive || !ur->archive_entry) {
+    if (!ur || !ur->archive || !ur->entry) {
       return -EIO;
     }
     swap(*r, *ur);
     release_reader(std::move(ur));
   }
 
-  if (!r->advance_offset(offset, path)) {
+  if (!r->AdvanceOffset(offset)) {
     return -EIO;
   }
 
-  return r->read(dst_ptr, dst_len, path);
+  return r->Read(dst_ptr, dst_len);
 }
 
 int my_release(const char*, fuse_file_info* const ffi) {
@@ -2045,8 +2034,8 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
 
 void ensure_utf_8_encoding() {
   // libarchive (especially for reading 7z) has locale-dependent behavior.
-  // Non-ASCII pathnames can trigger "Pathname cannot be converted from
-  // UTF-16LE to current locale" warnings from archive_read_next_header and
+  // Non-ASCII paths can trigger "Pathname cannot be converted from UTF-16LE to
+  // current locale" warnings from archive_read_next_header and
   // archive_entry_pathname_utf8 subsequently returning nullptr.
   //
   // Calling setlocale to enforce a UTF-8 encoding can avoid that. Try various
@@ -2136,7 +2125,7 @@ general options:
 %s options:
     -q   --quiet           do not print progress messages
     -v   --verbose         print more log messages
-         --redact          redact pathnames from log messages
+         --redact          redact paths from log messages
          -o no_cache       no caching of uncompressed data
          -o no_specials    no special files (FIFOs, sockets, devices)
          -o no_symlinks    no symbolic links
