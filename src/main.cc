@@ -75,14 +75,6 @@
 
 namespace {
 
-#define TRY(operation)               \
-  do {                               \
-    int try_status_code = operation; \
-    if (try_status_code) {           \
-      return try_status_code;        \
-    }                                \
-  } while (false)
-
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -1053,15 +1045,10 @@ int my_file_switch(Archive*, void* /*data0*/, void* /*data1*/) {
   return ARCHIVE_OK;
 }
 
-int my_archive_read_open(Archive* const a) {
-  TRY(archive_read_set_callback_data(a, nullptr));
-  TRY(archive_read_set_close_callback(a, my_file_close));
-  TRY(archive_read_set_open_callback(a, my_file_open));
-  TRY(archive_read_set_read_callback(a, my_file_read));
-  TRY(archive_read_set_seek_callback(a, my_file_seek));
-  TRY(archive_read_set_skip_callback(a, my_file_skip));
-  TRY(archive_read_set_switch_callback(a, my_file_switch));
-  return archive_read_open1(a);
+void Check(int const status) {
+  if (status != ARCHIVE_OK) {
+    throw std::runtime_error("Unexpected archive error");
+  }
 }
 
 // ---- Side Buffer
@@ -1302,9 +1289,9 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
       archive_read_add_passphrase(a.get(), g_password.c_str());
     }
 
-    archive_read_support_filter_all(a.get());
-    archive_read_support_format_all(a.get());
-    archive_read_support_format_raw(a.get());
+    Check(archive_read_support_filter_all(a.get()));
+    Check(archive_read_support_format_all(a.get()));
+    Check(archive_read_support_format_raw(a.get()));
     if (archive_read_open_filename(a.get(), g_archive_realpath, 16384) !=
         ARCHIVE_OK) {
       Error(archive_error_string(a.get()));
@@ -1714,12 +1701,20 @@ void BuildTree() {
     throw std::bad_alloc();
   }
 
-  archive_read_set_passphrase_callback(a.get(), nullptr,
-                                       &read_password_from_stdin);
-  archive_read_support_filter_all(a.get());
-  archive_read_support_format_all(a.get());
-  archive_read_support_format_raw(a.get());
-  if (my_archive_read_open(a.get()) != ARCHIVE_OK) {
+  Check(archive_read_set_passphrase_callback(a.get(), nullptr,
+                                             &read_password_from_stdin));
+  Check(archive_read_support_filter_all(a.get()));
+  Check(archive_read_support_format_all(a.get()));
+  Check(archive_read_support_format_raw(a.get()));
+
+  Check(archive_read_set_callback_data(a.get(), nullptr));
+  Check(archive_read_set_close_callback(a.get(), my_file_close));
+  Check(archive_read_set_open_callback(a.get(), my_file_open));
+  Check(archive_read_set_read_callback(a.get(), my_file_read));
+  Check(archive_read_set_seek_callback(a.get(), my_file_seek));
+  Check(archive_read_set_skip_callback(a.get(), my_file_skip));
+  Check(archive_read_set_switch_callback(a.get(), my_file_switch));
+  if (archive_read_open1(a.get()) != ARCHIVE_OK) {
     Error("Cannot open archive: ", archive_error_string(a.get()));
     throw ExitCode::INVALID_ARCHIVE_HEADER;
   }
