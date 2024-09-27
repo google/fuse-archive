@@ -846,6 +846,25 @@ void CreateCacheFile() {
   }
 }
 
+// Checks that the cache file is open and empty.
+void CheckCacheFile() {
+  struct stat z;
+  if (fstat(g_cache_fd, &z) != 0) {
+    Log(LOG_ERR, "Cannot stat cache file: ", strerror(errno));
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+
+  if (z.st_size != 0) {
+    Log(LOG_ERR, "Cache file is not empty: It contains ", z.st_size, " bytes");
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+
+  if (z.st_nlink != 0) {
+    Log(LOG_ERR, "Cache file is not hidden: It has ", z.st_nlink, " links");
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+}
+
 // Temporarily suppresses the echo on the terminal.
 // Used when waiting for password to be typed.
 class SuppressEcho {
@@ -2179,6 +2198,7 @@ general options:
 
   // Create cache file.
   CreateCacheFile();
+  CheckCacheFile();
 
   // Read archive and build tree.
   BuildTree();
