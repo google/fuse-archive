@@ -1568,15 +1568,16 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
 
   Debug("Processing ", ft, " [", id, "] ", Path(path));
 
-  const time_t mtime = archive_entry_mtime(e);
+  // Is this entry a directory?
   if (ft == FileType::Directory) {
     Node* const node = GetOrCreateDirNode(path);
-    if (mtime > 0) {
-      node->mtime = mtime;
+    if (archive_entry_mtime_is_set(e)) {
+      node->mtime = archive_entry_mtime(e);
     }
     return;
   }
 
+  // This entry is not a directory.
   const auto [parent_path, name] = Path(path).Split();
 
   // Get or create the parent node.
@@ -1585,11 +1586,11 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   assert(parent->IsDir());
 
   // Create the node for this entry.
-  Node* const node =
-      new Node{.name = std::string(name),
-               .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
-               .index_within_archive = id,
-               .mtime = mtime ?: g_now};
+  Node* const node = new Node{
+      .name = std::string(name),
+      .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
+      .index_within_archive = id,
+      .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
   parent->AddChild(node);
   g_block_count += 1;
 
@@ -1659,7 +1660,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     g_password_checked = true;
   }
 
-  if (!g_password_checked) {
+  if (archive_entry_is_encrypted(e) && !g_password_checked) {
     // Reading the first byte of the first file will reveal whether we also
     // need a passphrase.
     const ssize_t n = archive_read_data(
