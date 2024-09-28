@@ -106,12 +106,6 @@ enum class ExitCode {
 #define FUSE_ARCHIVE_VERSION "0.1.14"
 #endif
 
-constexpr int NUM_SIDE_BUFFERS = 8;
-
-// This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
-// Linux, that seems to be the largest buffer size passed to my_read.
-constexpr ssize_t SIDE_BUFFER_SIZE = 131072;
-
 // ---- Platform specifics
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
@@ -119,16 +113,6 @@ constexpr ssize_t SIDE_BUFFER_SIZE = 131072;
 #endif
 
 // ---- Globals
-
-struct {
-  int arg_count = 0;
-  bool help = false;
-  bool version = false;
-  bool redact = false;
-  bool cache = true;
-  bool specials = true;
-  bool symlinks = true;
-} g_options;
 
 enum {
   KEY_HELP,
@@ -157,6 +141,17 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("no_symlinks", KEY_NO_SYMLINKS),
     FUSE_OPT_END,
 };
+
+// Command line options.
+bool g_help = false;
+bool g_version = false;
+bool g_redact = false;
+bool g_cache = true;
+bool g_specials = true;
+bool g_symlinks = true;
+
+// Number of command line arguments seen so far.
+int g_arg_count = 0;
 
 // Command line argument naming the archive file.
 std::string g_archive_path;
@@ -420,7 +415,7 @@ class Path : public std::string_view {
 };
 
 std::ostream& operator<<(std::ostream& out, Path const path) {
-  if (g_options.redact)
+  if (g_redact)
     return out << "(redacted)";
 
   out.put('\'');
@@ -679,8 +674,15 @@ std::pair<std::unique_ptr<Reader>, uint64_t>
 // the second-to-arrive request by a cheap memcpy instead of an expensive
 // "re-do decompression from the start". That side-buffer was filled by a
 // Reader::advance_offset side-effect from serving the first-to-arrive request.
+constexpr int NUM_SIDE_BUFFERS = 8;
+
+// This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
+// Linux, that seems to be the largest buffer size passed to my_read.
+constexpr ssize_t SIDE_BUFFER_SIZE = 128 << 10;
+
 uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
-struct side_buffer_metadata {
+
+struct SideBufferMetadata {
   int64_t index_within_archive;
   int64_t offset_within_entry;
   int64_t length;
@@ -688,19 +690,23 @@ struct side_buffer_metadata {
 
   static uint64_t next_lru_priority;
 
-  bool contains(int64_t index_within_archive,
-                int64_t offset_within_entry,
-                uint64_t length) {
+  bool Contains(int64_t const index_within_archive,
+                int64_t const offset_within_entry,
+                uint64_t const length) const {
     if (this->index_within_archive >= 0 &&
         this->index_within_archive == index_within_archive &&
         this->offset_within_entry <= offset_within_entry) {
       const int64_t o = offset_within_entry - this->offset_within_entry;
       return this->length >= o && this->length - o >= length;
     }
+
     return false;
   }
-} g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
-uint64_t side_buffer_metadata::next_lru_priority = 0;
+};
+
+uint64_t SideBufferMetadata::next_lru_priority = 0;
+
+SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 
 // The side buffers are also repurposed as source (compressed) and destination
 // (decompressed) buffers during the initial pass over the archive file.
@@ -1048,9 +1054,9 @@ void Check(int const status) {
 
 // ---- Side Buffer
 
-// acquire_side_buffer returns the index of the least recently used side
-// buffer. This indexes g_side_buffer_data and g_side_buffer_metadata.
-int acquire_side_buffer() {
+// Returns the index of the least recently used side buffer. This indexes
+// g_side_buffer_data and g_side_buffer_metadata.
+int AcquireSideBuffer() {
   int oldest_i = 0;
   uint64_t oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
   for (int i = 1; i < NUM_SIDE_BUFFERS; i++) {
@@ -1066,30 +1072,31 @@ int acquire_side_buffer() {
   return oldest_i;
 }
 
-bool read_from_side_buffer(int64_t const index_within_archive,
-                           char* const dst_ptr,
-                           size_t const dst_len,
-                           int64_t const offset_within_entry) {
+bool ReadFromSideBuffer(int64_t const index_within_archive,
+                        char* const dst_ptr,
+                        size_t const dst_len,
+                        int64_t const offset_within_entry) {
   // Find the longest side buffer that contains (index_within_archive,
   // offset_within_entry, dst_len).
   int best_i = -1;
   int64_t best_length = -1;
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
-    struct side_buffer_metadata* meta = &g_side_buffer_metadata[i];
-    if (meta->length > best_length &&
-        meta->contains(index_within_archive, offset_within_entry, dst_len)) {
+    const SideBufferMetadata& meta = g_side_buffer_metadata[i];
+    if (meta.length > best_length &&
+        meta.Contains(index_within_archive, offset_within_entry, dst_len)) {
       best_i = i;
-      best_length = meta->length;
+      best_length = meta.length;
     }
   }
 
   if (best_i >= 0) {
-    struct side_buffer_metadata* meta = &g_side_buffer_metadata[best_i];
-    meta->lru_priority = ++side_buffer_metadata::next_lru_priority;
-    int64_t o = offset_within_entry - meta->offset_within_entry;
+    SideBufferMetadata& meta = g_side_buffer_metadata[best_i];
+    meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
+    const int64_t o = offset_within_entry - meta.offset_within_entry;
     memcpy(dst_ptr, g_side_buffer_data[best_i] + o, dst_len);
     return true;
   }
+
   return false;
 }
 
@@ -1180,13 +1187,13 @@ struct Reader {
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
-    const int sb = acquire_side_buffer();
+    const int sb = AcquireSideBuffer();
     if (sb < 0 || NUM_SIDE_BUFFERS <= sb) {
       return false;
     }
 
     uint8_t* dst_ptr = g_side_buffer_data[sb];
-    struct side_buffer_metadata* meta = &g_side_buffer_metadata[sb];
+    SideBufferMetadata& meta = g_side_buffer_metadata[sb];
     while (want > offset_within_entry) {
       const int64_t original_owe = offset_within_entry;
       int64_t dst_len = want - original_owe;
@@ -1206,24 +1213,24 @@ struct Reader {
 
       const ssize_t n = Read(dst_ptr, dst_len);
       if (n < 0) {
-        meta->index_within_archive = -1;
-        meta->offset_within_entry = -1;
-        meta->length = -1;
-        meta->lru_priority = 0;
+        meta.index_within_archive = -1;
+        meta.offset_within_entry = -1;
+        meta.length = -1;
+        meta.lru_priority = 0;
         return false;
       }
 
-      meta->index_within_archive = index_within_archive;
-      meta->offset_within_entry = original_owe;
-      meta->length = n;
-      meta->lru_priority = ++side_buffer_metadata::next_lru_priority;
+      meta.index_within_archive = index_within_archive;
+      meta.offset_within_entry = original_owe;
+      meta.length = n;
+      meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
     }
 
     return true;
   }
 
-  // read copies from the archive entry's decompressed contents to the
-  // destination buffer. It also advances the Reader's offset_within_entry.
+  // Copies from the archive entry's decompressed contents to the destination
+  // buffer. It also advances the Reader's offset_within_entry.
   ssize_t Read(void* const dst_ptr, size_t const dst_len) {
     const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
     if (n < 0) {
@@ -1475,10 +1482,10 @@ bool ShouldSkip(FileType const ft) {
     case FileType::CharDevice:
     case FileType::Fifo:
     case FileType::Socket:
-      return !g_options.specials;
+      return !g_specials;
 
     case FileType::Symlink:
-      return !g_options.symlinks;
+      return !g_symlinks;
 
     default:
       return false;
@@ -1618,7 +1625,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   }
 
   // Cache file data.
-  if (g_options.cache) {
+  if (g_cache) {
     node->cache_offset = g_cache_size;
     CacheFileData(a);
     node->size = g_cache_size - node->cache_offset;
@@ -1766,7 +1773,7 @@ void BuildTree() {
   if (LogIsOn(LOG_INFO)) {
     Info("The archive contains ", g_nodes_by_path.size(),
          " files or directories");
-    if (struct stat z; g_options.cache && fstat(g_cache_fd, &z) == 0) {
+    if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
       Info("The cache uses ", static_cast<int64_t>(z.st_blocks) * block_size,
            " bytes of storage space");
       assert(z.st_size == g_cache_size);
@@ -1822,7 +1829,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
     return -EACCES;
   }
 
-  if (g_options.cache) {
+  if (g_cache) {
     assert(n->cache_offset >= 0);
     static_assert(sizeof(ffi->fh) >= sizeof(n));
     ffi->fh = reinterpret_cast<uintptr_t>(n);
@@ -1852,7 +1859,7 @@ int my_read(const char*,
     return -EINVAL;
   }
 
-  if (g_options.cache) {
+  if (g_cache) {
     const Node* const node = reinterpret_cast<const Node*>(ffi->fh);
     assert(node);
 
@@ -1909,8 +1916,7 @@ int my_read(const char*,
     return 0;
   }
 
-  if (read_from_side_buffer(r->index_within_archive, dst_ptr, dst_len,
-                            offset)) {
+  if (ReadFromSideBuffer(r->index_within_archive, dst_ptr, dst_len, offset)) {
     return dst_len;
   }
 
@@ -1937,7 +1943,7 @@ int my_read(const char*,
 }
 
 int my_release(const char*, fuse_file_info* const ffi) {
-  if (g_options.cache) {
+  if (g_cache) {
     const Node* const n = reinterpret_cast<const Node*>(ffi->fh);
     assert(n);
     Debug("Closed ", *n);
@@ -2032,7 +2038,7 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
 
   switch (key) {
     case FUSE_OPT_KEY_NONOPT:
-      switch (++g_options.arg_count) {
+      switch (++g_arg_count) {
         case 1:
           g_archive_path = arg;
           return DISCARD;
@@ -2047,11 +2053,11 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       }
 
     case KEY_HELP:
-      g_options.help = true;
+      g_help = true;
       return DISCARD;
 
     case KEY_VERSION:
-      g_options.version = true;
+      g_version = true;
       return DISCARD;
 
     case KEY_QUIET:
@@ -2063,19 +2069,19 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       return DISCARD;
 
     case KEY_REDACT:
-      g_options.redact = true;
+      g_redact = true;
       return DISCARD;
 
     case KEY_NO_CACHE:
-      g_options.cache = false;
+      g_cache = false;
       return DISCARD;
 
     case KEY_NO_SPECIALS:
-      g_options.specials = false;
+      g_specials = false;
       return DISCARD;
 
     case KEY_NO_SYMLINKS:
-      g_options.symlinks = false;
+      g_symlinks = false;
       return DISCARD;
   }
 
@@ -2163,7 +2169,7 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "-o");
   fuse_opt_add_arg(&args, "ro");
 
-  if (g_options.help) {
+  if (g_help) {
     fprintf(stderr,
             R"(usage: %s [options] <archive_file> [mount_point]
 
@@ -2187,7 +2193,7 @@ general options:
     return EXIT_SUCCESS;
   }
 
-  if (g_options.version) {
+  if (g_version) {
     std::cerr << PROGRAM_NAME " version: " FUSE_ARCHIVE_VERSION "\n";
     std::cerr << "libarchive version: " << archive_version_string() << "\n";
     if (const char* const s = archive_bzlib_version()) {
@@ -2240,7 +2246,7 @@ general options:
   Debug("Opened directory ", Path(mount_point_parent));
 
   // Create cache file if necessary.
-  if (g_options.cache) {
+  if (g_cache) {
     CreateCacheFile();
     CheckCacheFile();
   } else {
