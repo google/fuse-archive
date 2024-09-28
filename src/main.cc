@@ -1610,6 +1610,8 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     if (const char* const s =
             archive_entry_symlink_utf8(e) ?: archive_entry_symlink(e)) {
       node->symlink = s;
+      node->size = node->symlink.size();
+      g_block_count += node->GetBlockCount();
     }
     return;
   }
