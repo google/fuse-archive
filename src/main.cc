@@ -171,9 +171,6 @@ int g_archive_fd = -1;
 // Size of the g_archive_path file.
 int64_t g_archive_file_size = 0;
 
-// Read position of g_archive_fd.
-int64_t g_archive_position = 0;
-
 // Canonicalised absolute path of the archive file. The command line argument
 // may give a relative filename (one that doesn't start with a slash) and the
 // fuse_main function may change the current working directory, so subsequent
@@ -965,10 +962,14 @@ void PrintProgress() {
   }
 
   next = now + period;
+  const int64_t pos = lseek64(g_archive_fd, 0, SEEK_CUR);
+  if (pos < 0) {
+    Error("Cannot get current position in archive file: ", strerror(errno));
+    return;
+  }
+
   const int percent = g_archive_file_size > 0
-                          ? 100 *
-                                std::clamp<int64_t>(g_archive_position, 0,
-                                                    g_archive_file_size) /
+                          ? 100 * std::min<int64_t>(pos, g_archive_file_size) /
                                 g_archive_file_size
                           : 0;
   Info("Loading ", percent, "%");
@@ -978,16 +979,14 @@ void PrintProgress() {
 // The callbacks below are only used during start-up, for the initial pass
 // through the archive to build the node tree, based on the g_archive_fd file
 // descriptor that stays open for the lifetime of the process. They are like
-// libarchive's built-in "read from a file" callbacks but also update
-// g_archive_fd_position_etc. The data arguments are ignored in favor of global
-// variables.
+// libarchive's built-in "read from a file" callbacks but also call
+// PrintProgress(). The data arguments are ignored in favor of global variables.
 
 int my_file_close(Archive*, void* /*data*/) {
   return ARCHIVE_OK;
 }
 
 int my_file_open(Archive*, void* /*data*/) {
-  g_archive_position = 0;
   return ARCHIVE_OK;
 }
 
@@ -996,9 +995,8 @@ ssize_t my_file_read(Archive* const a, void*, const void** const out_dst_ptr) {
   while (true) {
     const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
     if (n >= 0) {
-      g_archive_position += n;
-      PrintProgress();
       *out_dst_ptr = dst_ptr;
+      PrintProgress();
       return n;
     }
 
@@ -1016,30 +1014,35 @@ int64_t my_file_seek(Archive* const a,
                      void*,
                      int64_t const offset,
                      int const whence) {
-  int64_t o = lseek64(g_archive_fd, offset, whence);
-  if (o >= 0) {
-    g_archive_position = o;
-    PrintProgress();
-    return o;
+  const int64_t o = lseek64(g_archive_fd, offset, whence);
+  if (o < 0) {
+    archive_set_error(a, errno, "Cannot seek in archive file: %s",
+                      strerror(errno));
+    return ARCHIVE_FATAL;
   }
 
-  archive_set_error(a, errno, "Cannot seek in archive file: %s",
-                    strerror(errno));
-  return ARCHIVE_FATAL;
+  PrintProgress();
+  return o;
 }
 
 int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t const delta) {
   const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
-  const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
-  if (o1 >= 0 && o0 >= 0) {
-    g_archive_position = o1;
-    PrintProgress();
-    return o1 - o0;
+  if (o0 < 0) {
+    archive_set_error(a, errno,
+                      "Cannot get current position in archive file: %s",
+                      strerror(errno));
+    return ARCHIVE_FATAL;
   }
 
-  archive_set_error(a, errno, "Cannot seek in archive file: %s",
-                    strerror(errno));
-  return ARCHIVE_FATAL;
+  const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
+  if (o1 < 0) {
+    archive_set_error(a, errno, "Cannot seek in archive file: %s",
+                      strerror(errno));
+    return ARCHIVE_FATAL;
+  }
+
+  PrintProgress();
+  return o1 - o0;
 }
 
 int my_file_switch(Archive*, void* /*data0*/, void* /*data1*/) {
