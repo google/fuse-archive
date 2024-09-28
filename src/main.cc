@@ -752,30 +752,33 @@ std::string StrCat(Args&&... args) {
   return (std::ostringstream() << ... << std::forward<Args>(args)).str();
 }
 
-int g_log_level = LOG_INFO;
+enum class LogLevel {
+  DEBUG = LOG_DEBUG,
+  INFO = LOG_INFO,
+  WARNING = LOG_WARNING,
+  ERROR = LOG_ERR,
+};
 
-void SetLogLevel(int const level) {
+LogLevel g_log_level = LogLevel::INFO;
+
+void SetLogLevel(LogLevel const level) {
   g_log_level = level;
-  setlogmask(LOG_UPTO(level));
+  setlogmask(LOG_UPTO(static_cast<int>(level)));
 }
 
-bool LogIsOn(int const level) {
+bool LogIsOn(LogLevel const level) {
   return level <= g_log_level;
 }
 
+#define LOG_IS_ON(level) (LogLevel::level <= g_log_level)
+
 // Logs a debug or error message.
-//
-// `level` is one of:
-// LOG_ERR        error conditions
-// LOG_WARNING    warning conditions
-// LOG_NOTICE     normal, but significant, condition
-// LOG_INFO       informational message
-// LOG_DEBUG      debug-level message
 template <typename... Args>
-void Log(int const level, Args&&... args) noexcept {
+void Log(LogLevel const level, Args&&... args) noexcept {
   if (LogIsOn(level)) {
     try {
-      syslog(level, "%s", StrCat(std::forward<Args>(args)...).c_str());
+      syslog(static_cast<int>(level), "%s",
+             StrCat(std::forward<Args>(args)...).c_str());
     } catch (const std::exception& e) {
       syslog(LOG_ERR, "Cannot log message: %s", e.what());
     }
@@ -784,22 +787,22 @@ void Log(int const level, Args&&... args) noexcept {
 
 template <typename... Args>
 void Error(Args&&... args) noexcept {
-  Log(LOG_ERR, std::forward<Args>(args)...);
+  Log(LogLevel::ERROR, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 void Warning(Args&&... args) noexcept {
-  Log(LOG_WARNING, std::forward<Args>(args)...);
+  Log(LogLevel::WARNING, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 void Info(Args&&... args) noexcept {
-  Log(LOG_INFO, std::forward<Args>(args)...);
+  Log(LogLevel::INFO, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 void Debug(Args&&... args) noexcept {
-  Log(LOG_DEBUG, std::forward<Args>(args)...);
+  Log(LogLevel::DEBUG, std::forward<Args>(args)...);
 }
 
 // Throws an std::system_error with the current errno.
@@ -950,7 +953,7 @@ const char* ReadPassword(Archive*, void* /*data*/) {
 // ---- Libarchive Read Callbacks
 
 void PrintProgress() {
-  if (!LogIsOn(LOG_INFO)) {
+  if (!LOG_IS_ON(INFO)) {
     return;
   }
 
@@ -1776,7 +1779,7 @@ void BuildTree() {
     Info("Loaded 100%");
   }
 
-  if (LogIsOn(LOG_INFO)) {
+  if (LOG_IS_ON(INFO)) {
     Info("The archive contains ", g_nodes_by_path.size(),
          " files or directories");
     if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
@@ -2067,11 +2070,11 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       return DISCARD;
 
     case KEY_QUIET:
-      SetLogLevel(LOG_ERR);
+      SetLogLevel(LogLevel::ERROR);
       return DISCARD;
 
     case KEY_VERBOSE:
-      SetLogLevel(LOG_DEBUG);
+      SetLogLevel(LogLevel::DEBUG);
       return DISCARD;
 
     case KEY_REDACT:
@@ -2152,7 +2155,7 @@ int main(int const argc, char** const argv) try {
   // It makes big numbers much easier to read (eg sizes expressed in bytes).
   std::locale::global(std::locale(std::locale::classic(), new NumPunct));
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
-  SetLogLevel(LOG_INFO);
+  SetLogLevel(LogLevel::INFO);
 
   // Initialize side buffers as invalid.
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
