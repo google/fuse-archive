@@ -379,6 +379,10 @@ class Path : public std::string_view {
     Path in = *this;
     std::string result = "/";
 
+    if (in == ".") {
+      return result;
+    }
+
     while (in.starts_with("./")) {
       in.remove_prefix(2);
     }
@@ -402,7 +406,7 @@ class Path : public std::string_view {
       part = part.substr(0, Path(part).TruncationPosition(NAME_MAX));
 
       if (part.empty() || part == "." || part == "..")
-        part = "-";
+        part = "?";
 
       Append(&result, part);
     }
@@ -1340,6 +1344,7 @@ std::string GetNormalizedPath(Entry* const e) {
   }
 
   const Path path = s;
+  LOG(DEBUG) << "Normalizing " << path;
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
