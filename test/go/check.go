@@ -88,7 +88,7 @@ func run(archiveFilename string, directIO, cache bool, passphrase string) error 
 	}
 
 	if !cache {
-		args = append(args, "-o", "no_cache")
+		args = append(args, "-o", "nocache")
 	}
 
 	// The -f flag means to run in the foreground (not as a daemon).

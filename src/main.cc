@@ -136,9 +136,9 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-v", KEY_VERBOSE),
     FUSE_OPT_KEY("--redact", KEY_REDACT),
     FUSE_OPT_KEY("redact", KEY_REDACT),
-    FUSE_OPT_KEY("no_cache", KEY_NO_CACHE),
-    FUSE_OPT_KEY("no_specials", KEY_NO_SPECIALS),
-    FUSE_OPT_KEY("no_symlinks", KEY_NO_SYMLINKS),
+    FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
+    FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
+    FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
     FUSE_OPT_END,
 };
 
@@ -2186,9 +2186,9 @@ general options:
     -q   --quiet           do not print progress messages
     -v   --verbose         print more log messages
          --redact          redact paths from log messages
-         -o no_cache       no caching of uncompressed data
-         -o no_specials    no special files (FIFOs, sockets, devices)
-         -o no_symlinks    no symbolic links
+         -o nocache        no caching of uncompressed data
+         -o nospecials     no special files (FIFOs, sockets, devices)
+         -o nosymlinks     no symbolic links
 
 )",
             PROGRAM_NAME, PROGRAM_NAME);
