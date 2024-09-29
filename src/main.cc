@@ -684,10 +684,10 @@ constexpr ssize_t SIDE_BUFFER_SIZE = 128 << 10;
 uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
 
 struct SideBufferMetadata {
-  int64_t index_within_archive;
-  int64_t offset_within_entry;
-  int64_t length;
-  uint64_t lru_priority;
+  int64_t index_within_archive = -1;
+  int64_t offset_within_entry = -1;
+  int64_t length = -1;
+  uint64_t lru_priority = 0;
 
   static uint64_t next_lru_priority;
 
@@ -2156,14 +2156,6 @@ int main(int const argc, char** const argv) try {
   std::locale::global(std::locale(std::locale::classic(), new NumPunct));
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   SetLogLevel(LogLevel::INFO);
-
-  // Initialize side buffers as invalid.
-  for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
-    g_side_buffer_metadata[i].index_within_archive = -1;
-    g_side_buffer_metadata[i].offset_within_entry = -1;
-    g_side_buffer_metadata[i].length = -1;
-    g_side_buffer_metadata[i].lru_priority = 0;
-  }
 
   ensure_utf_8_encoding();
 
