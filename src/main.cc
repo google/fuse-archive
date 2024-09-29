@@ -73,6 +73,14 @@
 #include <utility>
 #include <vector>
 
+// ---- Compile-time Configuration
+
+#define PROGRAM_NAME "fuse-archive"
+
+// Odd minor versions (e.g. 1.1.x or 1.3.x) are development versions.
+// Even minor versions (e.g. 1.2.x or 1.4.x) are stable versions.
+#define PROGRAM_VERSION "0.1.15"
+
 namespace {
 
 // ---- Exit Codes
@@ -97,14 +105,6 @@ enum class ExitCode {
   INVALID_ARCHIVE_HEADER = 31,
   INVALID_ARCHIVE_CONTENTS = 32,
 };
-
-// ---- Compile-time Configuration
-
-#define PROGRAM_NAME "fuse-archive"
-
-#ifndef FUSE_ARCHIVE_VERSION
-#define FUSE_ARCHIVE_VERSION "0.1.14"
-#endif
 
 // ---- Platform specifics
 
@@ -2203,7 +2203,7 @@ general options:
   }
 
   if (g_version) {
-    std::cerr << PROGRAM_NAME " version: " FUSE_ARCHIVE_VERSION "\n";
+    std::cerr << PROGRAM_NAME " version: " PROGRAM_VERSION "\n";
     std::cerr << "libarchive version: " << archive_version_string() << "\n";
     if (const char* const s = archive_bzlib_version()) {
       std::cerr << "bzlib version: " << s << "\n";
