@@ -2148,6 +2148,26 @@ class NumPunct : public std::numpunct<char> {
   std::string do_grouping() const override { return "\3"; }
 };
 
+void PrintUsage() {
+  std::cerr << "usage: " PROGRAM_NAME
+               R"( [options] <archive_file> [mount_point]
+
+general options:
+    -o opt,[opt...]        mount options
+    -h   --help            print help
+    -V   --version         print version
+
+)" PROGRAM_NAME R"( options:
+    -q   --quiet           do not print progress messages
+    -v   --verbose         print more log messages
+         --redact          redact paths from log messages
+         -o nocache        no caching of uncompressed data
+         -o nospecials     no special files (FIFOs, sockets, devices)
+         -o nosymlinks     no symbolic links
+
+)";
+}
+
 }  // namespace
 
 int main(int const argc, char** const argv) try {
@@ -2160,7 +2180,6 @@ int main(int const argc, char** const argv) try {
   ensure_utf_8_encoding();
 
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
-
   if (fuse_opt_parse(&args, nullptr, g_fuse_opts, &my_opt_proc) < 0) {
     LOG(ERROR) << "Cannot parse command line arguments";
     throw ExitCode::GENERIC_FAILURE;
@@ -2171,24 +2190,7 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "ro");
 
   if (g_help) {
-    fprintf(stderr,
-            R"(usage: %s [options] <archive_file> [mount_point]
-
-general options:
-    -o opt,[opt...]        mount options
-    -h   --help            print help
-    -V   --version         print version
-
-%s options:
-    -q   --quiet           do not print progress messages
-    -v   --verbose         print more log messages
-         --redact          redact paths from log messages
-         -o nocache        no caching of uncompressed data
-         -o nospecials     no special files (FIFOs, sockets, devices)
-         -o nosymlinks     no symbolic links
-
-)",
-            PROGRAM_NAME, PROGRAM_NAME);
+    PrintUsage();
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
     fuse_main(args.argc, args.argv, &my_operations, nullptr);
     return EXIT_SUCCESS;
@@ -2216,6 +2218,11 @@ general options:
     fuse_opt_add_arg(&args, "--version");
     fuse_main(args.argc, args.argv, &my_operations, nullptr);
     return EXIT_SUCCESS;
+  }
+
+  if (g_archive_path.empty()) {
+    PrintUsage();
+    return EXIT_FAILURE;
   }
 
   // Determine where the mount point should be.

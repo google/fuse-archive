@@ -20,11 +20,11 @@
 - [x] Remove unused options.
 - [x] Automatically request a decryption password when dealing with an encrypted archive.
 - [x] Add comprehensive tests.
+- [x] Document the version numbering system.
 - [x] Create a `man` page.
 - [x] Modify the `Makefile` so that `make doc` refreshes the `man` page.
 - [ ] Modify the `Makefile` so that `make install` also installs the `man` page.
 - [ ] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
-- [ ] Document the version numbering system.
 - [ ] Handle hard links (https://github.com/google/fuse-archive/issues/18).
 - [ ] Add a `-o nohardlink` option.
 - [ ] Add a `-o fmask` option.
