@@ -12,6 +12,7 @@ MAN = fuse-archive.1
 
 prefix=/usr
 bindir=$(prefix)/bin
+mandir=$(prefix)/share/man/man1
 
 all: out/fuse-archive
 
@@ -30,6 +31,8 @@ $(MAN): README.md
 install: all
 	mkdir -p "$(DESTDIR)$(bindir)"
 	install out/fuse-archive "$(DESTDIR)$(bindir)"
+	mkdir -p "$(DESTDIR)$(mandir)"
+	install fuse-archive.1 "$(DESTDIR)$(mandir)"
 
 uninstall:
 	rm "$(DESTDIR)$(prefix)/bin/fuse-archive"
