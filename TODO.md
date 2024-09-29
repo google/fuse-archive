@@ -1,0 +1,45 @@
+# Improvement Ideas
+
+- [x] Automatically create the mount point if it does not already exist.
+- [x] Automatically remove the mount point if it has been created by `fuse-archive` in the first place.
+- [x] Handle special files (sockets, FIFOs or pipes, character and block devices).
+- [x] Add a `-o nospecials` option.
+- [x] Handle symlinks.
+- [x] Add a `-o nosymlinks` option.
+- [x] Handle empty directories (https://github.com/google/fuse-archive/issues/17).
+- [x] Improve the computation of the access bits of each inode.
+- [x] Gracefully handle file name collisions by deduplicating the colliding names.
+- [x] Add a convenient logging system.
+- [x] Add a `--verbose` option.
+- [x] Keep track of the number of links to each inode.
+- [x] Keep track of the number of blocks used by each inode.
+- [x] Implement the `statfs` function.
+- [x] Print versions of linked libraries when using the `--version` option.
+- [x] Add a cache system holding the full extracted data.
+- [x] Add a `-o nocache` option.
+- [x] Remove unused options.
+- [x] Automatically request a decryption password when dealing with an encrypted archive.
+- [x] Add comprehensive tests.
+- [x] Create a `man` page.
+- [x] Modify the `Makefile` so that `make doc` refreshes the `man` page.
+- [ ] Modify the `Makefile` so that `make install` also installs the `man` page.
+- [ ] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
+- [ ] Document the version numbering system.
+- [ ] Handle hard links (https://github.com/google/fuse-archive/issues/18).
+- [ ] Add a `-o nohardlink` option.
+- [ ] Add a `-o fmask` option.
+- [ ] Add a `-o dmask` option.
+- [ ] Honor the original UID and GID when using the `-o default_permissions` option.
+- [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
+- [ ] Add tests for big files.
+- [ ] Modify the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
+- [ ] Document the cache system.
+- [ ] Document the `-o nocache` option.
+- [ ] Document the `-o nosymlink` option.
+- [ ] Document the `-o nospecials` option.
+- [ ] Document the returned error values.
+- [ ] Add tests for the `lzma` compression method.
+- [ ] Add tests for the `xz` compression method.
+- [ ] Add tests for the `zstd` compression method.
+- [ ] Add tests for the `Z` compression method.
+- [ ] Check if `fuse-archive` could handle non-seekable archive files (e.g. streamed via a pipe).
