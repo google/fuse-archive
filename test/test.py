@@ -633,7 +633,7 @@ def TestArchiveWithSpecialFiles():
 def TestInvalidArchive():
     CheckArchiveMountingError('', 31)
     CheckArchiveMountingError('absent.zip', 11)
-    CheckArchiveMountingError('invalid.zip', 30)
+    CheckArchiveMountingError('romeo.txt', 30)
     if os.getuid() != 0:
         with tempfile.NamedTemporaryFile() as f:
             os.chmod(f.name, 0)
