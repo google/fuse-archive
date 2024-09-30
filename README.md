@@ -2,7 +2,7 @@
 title: fuse-archive
 section: 1
 header: User Manual
-footer: fuse-archive 0.15
+footer: fuse-archive 0.1.15
 date: September 2024
 ---
 
@@ -31,45 +31,31 @@ mount read-only, not read-write.
 # Options
 
 **-\-help** **-h**
-:   print help
+:   Print help
 
 **-\-version**
-:   print version
+:   Print version
 
 **-\-quiet** **-q**
-:   print fewer log messages
+:   Print fewer log messages
 
-**-\-verbose**
-:   print more log messages
+**-\-verbose** **-v**
+:   Print more log messages
 
 **-\-redact**
-:   redact file names from log messages
+:   Redact file names from log messages
 
 **-o nospecials**
-:   hide special files (FIFOs, sockets, devices)
+:   Hide special files (FIFOs, sockets, devices)
 
 **-o nosymlinks**
-:   hide symbolic links
+:   Hide symbolic links
 
 **-f**
-:   foreground mode
+:   Foreground mode
 
 **-d**
-:   foreground mode with debug output
-
-# Build
-
-```
-$ git clone https://github.com/google/fuse-archive.git
-$ cd fuse-archive
-$ make
-```
-
-On a Debian system, you may first need to install some dependencies:
-
-```
-$ sudo apt install libarchive-dev libfuse-dev
-```
+:   Foreground mode with debug output
 
 # Performance
 

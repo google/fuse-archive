@@ -14,7 +14,7 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "fuse-archive" "1" "September 2024" "fuse-archive 0.15" "User Manual"
+.TH "fuse-archive" "1" "September 2024" "fuse-archive 0.1.15" "User Manual"
 .hy
 .SH Name
 .PP
@@ -45,48 +45,31 @@ only mount read-only, not read-write.
 .SH Options
 .TP
 \f[B]--help\f[R] \f[B]-h\f[R]
-print help
+Print help
 .TP
 \f[B]--version\f[R]
-print version
+Print version
 .TP
 \f[B]--quiet\f[R] \f[B]-q\f[R]
-print fewer log messages
+Print fewer log messages
 .TP
-\f[B]--verbose\f[R]
-print more log messages
+\f[B]--verbose\f[R] \f[B]-v\f[R]
+Print more log messages
 .TP
 \f[B]--redact\f[R]
-redact file names from log messages
+Redact file names from log messages
 .TP
 \f[B]-o nospecials\f[R]
-hide special files (FIFOs, sockets, devices)
+Hide special files (FIFOs, sockets, devices)
 .TP
 \f[B]-o nosymlinks\f[R]
-hide symbolic links
+Hide symbolic links
 .TP
 \f[B]-f\f[R]
-foreground mode
+Foreground mode
 .TP
 \f[B]-d\f[R]
-foreground mode with debug output
-.SH Build
-.IP
-.nf
-\f[C]
-$ git clone https://github.com/google/fuse-archive.git
-$ cd fuse-archive
-$ make
-\f[R]
-.fi
-.PP
-On a Debian system, you may first need to install some dependencies:
-.IP
-.nf
-\f[C]
-$ sudo apt install libarchive-dev libfuse-dev
-\f[R]
-.fi
+Foreground mode with debug output
 .SH Performance
 .PP
 Create a single \f[V].tar.gz\f[R] file that is 256 MiB decompressed and
