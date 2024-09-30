@@ -507,14 +507,14 @@ constexpr blksize_t block_size = 512;
 blkcnt_t g_block_count = 1;
 
 struct Node {
-  static ino_t count;
-  ino_t ino = ++count;
   // Name of this node in the context of its parent. This name should be a valid
   // and non-empty filename, and it shouldn't contain any '/' separator. The
   // only exception is the root directory, which is just named "/".
   std::string name;
   std::string symlink;
   mode_t mode;
+  static ino_t count;
+  ino_t ino = ++count;
 
   uid_t uid = g_uid;
   gid_t gid = g_gid;
@@ -552,6 +552,8 @@ struct Node {
     assert(n);
     assert(!n->parent);
     assert(IsDir());
+    assert(!hardlink_target);
+    assert(nlink >= 2);
     // Count one "block" for each directory entry.
     size += block_size;
     g_block_count += 1;
@@ -573,6 +575,7 @@ struct Node {
   struct stat GetStat() const {
     struct stat z = {};
     z.st_nlink = (hardlink_target ?: this)->nlink;
+    assert(z.st_nlinks > 0);
     z.st_ino = ino;
     z.st_mode = mode;
     z.st_uid = uid;
@@ -648,6 +651,15 @@ NodesByIndex g_nodes_by_index;
 
 // Root node of the tree.
 Node* g_root_node = nullptr;
+
+// Hardlink to resolve.
+struct Hardlink {
+  std::string source_path;
+  std::string target_path;
+};
+
+// Hardlinks to resolve.
+std::vector<Hardlink> g_hardlinks;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
@@ -1571,7 +1583,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
 
-  const std::string path = GetNormalizedPath(e);
+  std::string path = GetNormalizedPath(e);
   if (path.empty()) {
     LOG(DEBUG) << "Skipped " << ft << " [" << id << "]: Invalid path";
     return;
@@ -1579,29 +1591,11 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
 
   if (const char* const s =
           archive_entry_hardlink_utf8(e) ?: archive_entry_hardlink(e)) {
-    // This entry is a hard link.
-    const std::string target = Path(s).Normalize();
-    LOG(WARNING) << "Entry " << ft << " [" << id << "] " << Path(path)
-                 << " is a hard link to " << Path(target);
-    // Find its target.
-    const auto it = g_nodes_by_path.find(target);
-
-    if (it == g_nodes_by_path.end()) {
-      // TODO Try again when all the entries have been processed.
-      LOG(WARNING) << "Target is not in view";
-      return;
-    }
-
-    Node* const p = it->second;
-    assert(p);
-    if (p->IsDir()) {
-      LOG(ERROR) << "Target is " << *p;
-      return;
-    }
-
-    LOG(DEBUG) << "Target is " << *p;
-    // TODO Link to the target
-
+    // Entry is a hard link. Save it for further resolution.
+    std::string target = Path(s).Normalize();
+    LOG(DEBUG) << "Processing Hardlink [" << id << "] " << Path(path) << " -> "
+               << Path(target);
+    g_hardlinks.emplace_back(std::move(path), std::move(target));
     return;
   }
 
@@ -1743,6 +1737,67 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   g_block_count += node->GetBlockCount();
 }
 
+void ResolveHardlinks() {
+  for (const Hardlink& entry : g_hardlinks) {
+    // Find its target.
+    const auto it = g_nodes_by_path.find(entry.target_path);
+
+    if (it == g_nodes_by_path.end()) {
+      LOG(DEBUG) << "Skipped hardlink " << Path(entry.source_path)
+                 << ": Cannot find target " << Path(entry.target_path);
+      continue;
+    }
+
+    Node* target = it->second;
+    assert(target);
+
+    while (target->hardlink_target) {
+      target = target->hardlink_target;
+    }
+
+    if (target->IsDir()) {
+      LOG(DEBUG) << "Skipped hardlink " << Path(entry.source_path)
+                 << ": Target " << Path(entry.target_path) << " is a directory";
+      continue;
+    }
+
+    const auto [parent_path, name] = Path(entry.source_path).Split();
+
+    // Get or create the parent node.
+    Node* const parent = GetOrCreateDirNode(parent_path);
+    assert(parent);
+    assert(parent->IsDir());
+
+    // Create the node for this entry.
+    Node* const node = new Node{
+        .name = std::string(name),
+        .symlink = target->symlink,
+        .mode = target->mode,
+        .ino = target->ino,
+        .uid = target->uid,
+        .gid = target->gid,
+        .index_within_archive = target->index_within_archive,
+        .size = target->size,
+        .cache_offset = target->cache_offset,
+        .mtime = target->mtime,
+        .rdev = target->rdev,
+        .nlink = 0,  // This nlink should never be used.
+        .hardlink_target = target,
+    };
+
+    target->nlink += 1;
+    assert(target->nlink > 1);
+
+    parent->AddChild(node);
+    Attach(node);
+
+    LOG(DEBUG) << "Resolved Hardlink " << Path(node->GetPath()) << " -> "
+               << *target;
+  }
+
+  g_hardlinks.clear();
+}
+
 void BuildTree() {
   if (g_archive_path.empty()) {
     LOG(ERROR) << "Missing archive_filename argument";
@@ -1837,13 +1892,17 @@ void BuildTree() {
     ProcessEntry(a.get(), entry, id);
   }
 
+  // Resolve hardlinks.
+  ResolveHardlinks();
+
   if (g_displayed_progress) {
     LOG(INFO) << "Loaded 100%";
   }
 
   if (LOG_IS_ON(INFO)) {
     LOG(INFO) << "The archive contains " << g_nodes_by_path.size()
-              << " files or directories";
+              << " named entries (files or directories) and " << Node::count
+              << " inodes";
     if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
       LOG(INFO) << "The cache uses "
                 << static_cast<int64_t>(z.st_blocks) * block_size
@@ -2073,7 +2132,7 @@ int my_statfs(const char*, struct statvfs* const st) {
   st->f_blocks = g_block_count;
   st->f_bfree = 0;
   st->f_bavail = 0;
-  st->f_files = g_nodes_by_path.size();
+  st->f_files = Node::count;
   st->f_ffree = 0;
   st->f_favail = 0;
   st->f_flag = ST_RDONLY;
@@ -2254,10 +2313,6 @@ int main(int const argc, char** const argv) try {
     throw ExitCode::GENERIC_FAILURE;
   }
 
-  // Mount read-only.
-  fuse_opt_add_arg(&args, "-o");
-  fuse_opt_add_arg(&args, "ro");
-
   if (g_help) {
     PrintUsage();
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
@@ -2376,6 +2431,13 @@ int main(int const argc, char** const argv) try {
 
   // The mount point is in place.
   fuse_opt_add_arg(&args, g_mount_point.c_str());
+
+  // Respect inode numbers.
+  fuse_opt_add_arg(&args, "-ouse_ino");
+
+  // Mount read-only.
+  fuse_opt_add_arg(&args, "-o");
+  fuse_opt_add_arg(&args, "ro");
 
   // Start serving the filesystem.
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);

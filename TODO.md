@@ -28,7 +28,7 @@
 - [x] Add a `-o dmask` option.
 - [x] Honor the original UID and GID when using the `-o default_permissions` option.
 - [x] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
-- [ ] Handle hard links (https://github.com/google/fuse-archive/issues/18).
+- [x] Handle hard links (https://github.com/google/fuse-archive/issues/18).
 - [ ] Add a `-o nohardlink` option.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [ ] Add tests for big files.
