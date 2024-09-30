@@ -504,6 +504,8 @@ std::ostream& operator<<(std::ostream& out, FileType const t) {
 constexpr blksize_t block_size = 512;
 
 struct Node {
+  static ino_t count;
+  ino_t ino = ++count;
   // Name of this node in the context of its parent. This name should be a valid
   // and non-empty filename, and it shouldn't contain any '/' separator. The
   // only exception is the root directory, which is just named "/".
@@ -525,7 +527,7 @@ struct Node {
 
   time_t mtime = g_now;
   dev_t rdev = 0;
-  int nlink = 0;
+  int64_t nlink = 1;
 
   // Pointer to the parent node. Should be non null. The only exception is the
   // root directory which has a null parent pointer.
@@ -537,6 +539,9 @@ struct Node {
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
 
+  // Hard link target.
+  Node* hardlink_target = nullptr;
+
   FileType GetType() const { return GetFileType(mode); }
   bool IsDir() const { return S_ISDIR(mode); }
 
@@ -546,7 +551,6 @@ struct Node {
     assert(IsDir());
     // Count one "block" for each directory entry.
     size += block_size;
-    n->nlink += 1;
     nlink += n->IsDir();
     n->parent = this;
     if (last_child == nullptr) {
@@ -564,9 +568,9 @@ struct Node {
 
   struct stat GetStat() const {
     struct stat z = {};
-    z.st_nlink = nlink;
+    z.st_nlink = (hardlink_target ?: this)->nlink;
+    z.st_ino = ino;
     z.st_mode = mode;
-    z.st_nlink = 1;
     z.st_uid = uid;
     z.st_gid = gid;
     z.st_size = size;
@@ -589,6 +593,8 @@ struct Node {
     return path;
   }
 };
+
+ino_t Node::count = 0;
 
 std::strong_ordering ComparePath(const Node* a, const Node* b);
 
@@ -1356,7 +1362,6 @@ std::string GetNormalizedPath(Entry* const e) {
   }
 
   const Path path = s;
-  LOG(DEBUG) << "Normalizing " << path;
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
@@ -1482,7 +1487,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   // Create the Directory node.
   node = new Node{.name = std::string(name),
                   .mode = S_IFDIR | (0777 & ~g_options.dmask),
-                  .nlink = 1};
+                  .nlink = 2};
   parent->AddChild(node);
   g_block_count += 1;
   assert(node->GetPath() == path);
@@ -1565,14 +1570,43 @@ void CacheFileData(Archive* const a) {
 void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
-  if (!IsValid(ft)) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << id << "]";
+
+  const std::string path = GetNormalizedPath(e);
+  if (path.empty()) {
+    LOG(DEBUG) << "Skipped " << ft << " [" << id << "]: Invalid path";
     return;
   }
 
-  std::string path = GetNormalizedPath(e);
-  if (path.empty()) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << id << "]: Invalid path";
+  if (const char* const s =
+          archive_entry_hardlink_utf8(e) ?: archive_entry_hardlink(e)) {
+    // This entry is a hard link.
+    const std::string target = Path(s).Normalize();
+    LOG(WARNING) << "Entry " << ft << " [" << id << "] " << Path(path)
+                 << " is a hard link to " << Path(target);
+    // Find its target.
+    const auto it = g_nodes_by_path.find(target);
+
+    if (it == g_nodes_by_path.end()) {
+      // TODO Try again when all the entries have been processed.
+      LOG(WARNING) << "Target is not in view";
+      return;
+    }
+
+    Node* const p = it->second;
+    assert(p);
+    if (p->IsDir()) {
+      LOG(ERROR) << "Target is " << *p;
+      return;
+    }
+
+    LOG(DEBUG) << "Target is " << *p;
+    // TODO Link to the target
+
+    return;
+  }
+
+  if (!IsValid(ft)) {
+    LOG(DEBUG) << "Skipped " << ft << " [" << id << "] " << Path(path);
     return;
   }
 
@@ -1761,7 +1795,7 @@ void BuildTree() {
   // Create root node.
   assert(!g_root_node);
   g_root_node = new Node{
-      .name = "/", .mode = S_IFDIR | (0777 & ~g_options.dmask), .nlink = 1};
+      .name = "/", .mode = S_IFDIR | (0777 & ~g_options.dmask), .nlink = 2};
   g_nodes_by_path[g_root_node->GetPath()] = g_root_node;
 
   // Read and process every entry of the archive.
@@ -2285,8 +2319,6 @@ int main(int const argc, char** const argv) try {
     PLOG(ERROR) << "Cannot access directory " << Path(mount_point_parent);
     throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
   }
-
-  LOG(DEBUG) << "Opened directory " << Path(mount_point_parent);
 
   // Create cache file if necessary.
   if (g_cache) {
