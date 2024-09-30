@@ -24,11 +24,11 @@
 - [x] Create a `man` page.
 - [x] Modify the `Makefile` so that `make doc` refreshes the `man` page.
 - [x] Modify the `Makefile` so that `make install` also installs the `man` page (https://github.com/google/fuse-archive/issues/24).
+- [x] Add a `-o fmask` option.
+- [x] Add a `-o dmask` option.
 - [ ] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
 - [ ] Handle hard links (https://github.com/google/fuse-archive/issues/18).
 - [ ] Add a `-o nohardlink` option.
-- [ ] Add a `-o fmask` option.
-- [ ] Add a `-o dmask` option.
 - [ ] Honor the original UID and GID when using the `-o default_permissions` option.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [ ] Add tests for big files.

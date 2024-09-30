@@ -125,6 +125,13 @@ enum {
   KEY_NO_SYMLINKS,
 };
 
+struct Options {
+  unsigned int dmask = 0022;
+  unsigned int fmask = 0022;
+};
+
+Options g_options;
+
 const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-h", KEY_HELP),
     FUSE_OPT_KEY("--help", KEY_HELP),
@@ -139,6 +146,8 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
+    {"dmask=%o", offsetof(Options, dmask)},
+    {"fmask=%o", offsetof(Options, fmask)},
     FUSE_OPT_END,
 };
 
@@ -203,9 +212,6 @@ bool g_archive_is_raw = false;
 // or "-o gid=N" command line options are set.
 const uid_t g_uid = getuid();
 const gid_t g_gid = getgid();
-
-const mode_t g_dmask = 0022;
-const mode_t g_fmask = 0022;
 
 // g_displayed_progress is whether we have printed a progress message.
 bool g_displayed_progress = false;
@@ -1469,7 +1475,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
 
   // Create the Directory node.
   node = new Node{.name = std::string(name),
-                  .mode = S_IFDIR | (0777 & ~g_dmask),
+                  .mode = S_IFDIR | (0777 & ~g_options.dmask),
                   .nlink = 1};
   parent->AddChild(node);
   g_block_count += 1;
@@ -1591,7 +1597,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   // Create the node for this entry.
   Node* const node = new Node{
       .name = std::string(name),
-      .mode = static_cast<mode_t>(ft) | (0666 & ~g_fmask),
+      .mode = static_cast<mode_t>(ft) | (0666 & ~g_options.fmask),
       .index_within_archive = id,
       .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
   parent->AddChild(node);
@@ -1630,7 +1636,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   // Regular file.
   // Adjust the access bits if the file is executable.
   if (const mode_t xbits = 0111; mode & xbits) {
-    node->mode |= xbits & ~g_fmask;
+    node->mode |= xbits & ~g_options.fmask;
   }
 
   // Cache file data.
@@ -1730,8 +1736,8 @@ void BuildTree() {
 
   // Create root node.
   assert(!g_root_node);
-  g_root_node =
-      new Node{.name = "/", .mode = S_IFDIR | (0777 & ~g_dmask), .nlink = 1};
+  g_root_node = new Node{
+      .name = "/", .mode = S_IFDIR | (0777 & ~g_options.dmask), .nlink = 1};
   g_nodes_by_path[g_root_node->GetPath()] = g_root_node;
 
   // Read and process every entry of the archive.
@@ -2164,6 +2170,8 @@ general options:
          -o nocache        no caching of uncompressed data
          -o nospecials     no special files (FIFOs, sockets, devices)
          -o nosymlinks     no symbolic links
+         -o dmask=M        directory permission mask in octal (default 0022)
+         -o fmask=M        file permission mask in octal (default 0022)
 
 )";
 }
@@ -2180,7 +2188,7 @@ int main(int const argc, char** const argv) try {
   ensure_utf_8_encoding();
 
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
-  if (fuse_opt_parse(&args, nullptr, g_fuse_opts, &my_opt_proc) < 0) {
+  if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
     LOG(ERROR) << "Cannot parse command line arguments";
     throw ExitCode::GENERIC_FAILURE;
   }
