@@ -20,7 +20,8 @@ INSTALL = install
 
 all: out/$(PROJECT)
 
-check: all
+check: out/$(PROJECT)
+	python3 test/test.py
 	go run test/go/check.go
 
 clean:
@@ -39,7 +40,7 @@ install: out/$(PROJECT)
 uninstall:
 	rm "$(BINDIR)/$(PROJECT)" "$(MANDIR)/$(MAN)"
 
-out/fuse-archive: src/main.cc
+out/$(PROJECT): src/main.cc
 	mkdir -p out
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(LDFLAGS) -o $@
 
