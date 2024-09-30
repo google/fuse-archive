@@ -503,6 +503,9 @@ std::ostream& operator<<(std::ostream& out, FileType const t) {
 
 constexpr blksize_t block_size = 512;
 
+// Total number of blocks taken by the tree of nodes.
+blkcnt_t g_block_count = 1;
+
 struct Node {
   static ino_t count;
   ino_t ino = ++count;
@@ -551,6 +554,7 @@ struct Node {
     assert(IsDir());
     // Count one "block" for each directory entry.
     size += block_size;
+    g_block_count += 1;
     nlink += n->IsDir();
     n->parent = this;
     if (last_child == nullptr) {
@@ -644,9 +648,6 @@ NodesByIndex g_nodes_by_index;
 
 // Root node of the tree.
 Node* g_root_node = nullptr;
-
-// Total number of blocks taken by the tree of nodes.
-blkcnt_t g_block_count = 1;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
@@ -1489,7 +1490,6 @@ Node* GetOrCreateDirNode(std::string_view const path) {
                   .mode = S_IFDIR | (0777 & ~g_options.dmask),
                   .nlink = 2};
   parent->AddChild(node);
-  g_block_count += 1;
   assert(node->GetPath() == path);
 
   if (to_rename) {
@@ -1664,7 +1664,6 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   }
 
   parent->AddChild(node);
-  g_block_count += 1;
 
   // Add to g_nodes_by_path.
   Attach(node);
