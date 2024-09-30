@@ -1,19 +1,24 @@
+PROJECT = fuse-archive
 PKG_CONFIG ?= pkg-config
 DEPS = fuse libarchive
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
+
 ifeq ($(DEBUG), 1)
 CXXFLAGS += -O0 -g
 else
 CXXFLAGS += -O2 -DNDEBUG
 endif
-MAN = fuse-archive.1
 
-prefix=/usr
-bindir=$(prefix)/bin
+PREFIX = $(DESTDIR)/usr
+BINDIR = $(PREFIX)/bin
+MAN = $(PROJECT).1
+MANDIR = $(PREFIX)/share/man/man1
+INSTALL = install
 
-all: out/fuse-archive
+
+all: out/$(PROJECT)
 
 check: all
 	go run test/go/check.go
@@ -27,12 +32,12 @@ doc: $(MAN)
 $(MAN): README.md
 	pandoc $< -s -t man -o $@
 
-install: all
-	mkdir -p "$(DESTDIR)$(bindir)"
-	install out/fuse-archive "$(DESTDIR)$(bindir)"
+install: out/$(PROJECT)
+	$(INSTALL) -D "out/$(PROJECT)" "$(BINDIR)/$(PROJECT)"
+	$(INSTALL) -D -m 644 $(MAN) "$(MANDIR)/$(MAN)"
 
 uninstall:
-	rm "$(DESTDIR)$(prefix)/bin/fuse-archive"
+	rm "$(BINDIR)/$(PROJECT)" "$(MANDIR)/$(MAN)"
 
 out/fuse-archive: src/main.cc
 	mkdir -p out

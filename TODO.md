@@ -23,7 +23,7 @@
 - [x] Document the version numbering system.
 - [x] Create a `man` page.
 - [x] Modify the `Makefile` so that `make doc` refreshes the `man` page.
-- [ ] Modify the `Makefile` so that `make install` also installs the `man` page.
+- [x] Modify the `Makefile` so that `make install` also installs the `man` page (https://github.com/google/fuse-archive/issues/24).
 - [ ] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
 - [ ] Handle hard links (https://github.com/google/fuse-archive/issues/18).
 - [ ] Add a `-o nohardlink` option.
