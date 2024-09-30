@@ -26,10 +26,10 @@
 - [x] Modify the `Makefile` so that `make install` also installs the `man` page (https://github.com/google/fuse-archive/issues/24).
 - [x] Add a `-o fmask` option.
 - [x] Add a `-o dmask` option.
+- [x] Honor the original UID and GID when using the `-o default_permissions` option.
 - [ ] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
 - [ ] Handle hard links (https://github.com/google/fuse-archive/issues/18).
 - [ ] Add a `-o nohardlink` option.
-- [ ] Honor the original UID and GID when using the `-o default_permissions` option.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [ ] Add tests for big files.
 - [ ] Modify the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
@@ -42,4 +42,4 @@
 - [ ] Add tests for the `xz` compression method.
 - [ ] Add tests for the `zstd` compression method.
 - [ ] Add tests for the `Z` compression method.
-- [ ] Check if `fuse-archive` could handle non-seekable archive files (e.g. streamed via a pipe).
+- [ ] Check if `fuse-archive` handles non-seekable archive files (e.g. streamed via a pipe).

@@ -123,6 +123,7 @@ enum {
   KEY_NO_CACHE,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
+  KEY_DEFAULT_PERMISSIONS,
 };
 
 struct Options {
@@ -146,6 +147,7 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
+    FUSE_OPT_KEY("default_permissions", KEY_DEFAULT_PERMISSIONS),
     {"dmask=%o", offsetof(Options, dmask)},
     {"fmask=%o", offsetof(Options, fmask)},
     FUSE_OPT_END,
@@ -158,6 +160,7 @@ bool g_redact = false;
 bool g_cache = true;
 bool g_specials = true;
 bool g_symlinks = true;
+bool g_default_permissions = false;
 
 // Number of command line arguments seen so far.
 int g_arg_count = 0;
@@ -508,6 +511,9 @@ struct Node {
   std::string symlink;
   mode_t mode;
 
+  uid_t uid = g_uid;
+  gid_t gid = g_gid;
+
   // Index of the entry represented by this node in the archive, or -1 if it is
   // not directly represented in the archive (like the root directory, or any
   // intermediate directory).
@@ -561,8 +567,8 @@ struct Node {
     z.st_nlink = nlink;
     z.st_mode = mode;
     z.st_nlink = 1;
-    z.st_uid = g_uid;
-    z.st_gid = g_gid;
+    z.st_uid = uid;
+    z.st_gid = gid;
     z.st_size = size;
     z.st_atime = g_now;
     z.st_ctime = g_now;
@@ -1580,9 +1586,20 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   // Is this entry a directory?
   if (ft == FileType::Directory) {
     Node* const node = GetOrCreateDirNode(path);
+    assert(node);
+
     if (archive_entry_mtime_is_set(e)) {
       node->mtime = archive_entry_mtime(e);
     }
+
+    if (g_default_permissions) {
+      node->uid = archive_entry_uid(e);
+      node->gid = archive_entry_gid(e);
+      const mode_t pbits = 0777;
+      node->mode &= ~pbits;
+      node->mode |= mode & pbits;
+    }
+
     return;
   }
 
@@ -1600,6 +1617,18 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
       .mode = static_cast<mode_t>(ft) | (0666 & ~g_options.fmask),
       .index_within_archive = id,
       .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
+
+  if (g_default_permissions) {
+    node->uid = archive_entry_uid(e);
+    node->gid = archive_entry_gid(e);
+    const mode_t pbits = 0777;
+    node->mode &= ~pbits;
+    node->mode |= mode & pbits;
+  } else if (const mode_t xbits = 0111; (mode & xbits) != 0) {
+    // Adjust the access bits if the file is executable.
+    node->mode |= xbits & ~g_options.fmask;
+  }
+
   parent->AddChild(node);
   g_block_count += 1;
 
@@ -1634,11 +1663,6 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   }
 
   // Regular file.
-  // Adjust the access bits if the file is executable.
-  if (const mode_t xbits = 0111; mode & xbits) {
-    node->mode |= xbits & ~g_options.fmask;
-  }
-
   // Cache file data.
   if (g_cache) {
     node->cache_offset = g_cache_size;
@@ -2098,6 +2122,10 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
     case KEY_NO_SYMLINKS:
       g_symlinks = false;
       return DISCARD;
+
+    case KEY_DEFAULT_PERMISSIONS:
+      g_default_permissions = true;
+      return KEEP;
   }
 
   return KEEP;

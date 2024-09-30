@@ -769,7 +769,7 @@ def TestEncryptedArchive():
     CheckArchiveMountingError(zip_name, 20)
 
 
-# Tests the nosymlinks and nospecials mount options.
+# Tests the default_permissions, nosymlinks and nospecials mount options.
 def TestArchiveWithSpecialFiles():
     zip_name = 'specials.tar.gz'
 
@@ -778,11 +778,23 @@ def TestArchiveWithSpecialFiles():
         'char': {'mode': 'crw-r--r--', 'mtime': 1564833480000000000, 'rdev': 1024},
         'fifo': {'mode': 'prw-r--r--', 'mtime': 1565809123000000000},
         'regular': {'mode': '-rw-r--r--', 'mtime': 1565290018000000000, 'size': 32, 'md5': '456e611a5420b7dd09bae143a7b2deb0'},
-        'symlink': {'mode': 'lrw-r--r--', 'mtime': 1564834729000000000, 'target': 'regular'},
+        'symlink': {'mode': 'lrwxr-xr-x', 'mtime': 1564834729000000000, 'target': 'regular'},
     }
 
     MountArchiveAndCheckTree(
         zip_name, want_tree, want_blocks=8, want_inodes=6)
+
+    # Test -o default_permissions
+    want_tree = {
+        'block': {'mode': 'brw-rw----', 'uid': 0, 'gid': 6, 'rdev': 2049},
+        'char': {'mode': 'crw--w----', 'uid': 0, 'gid': 5, 'rdev': 1024},
+        'fifo': {'mode': 'prw-r--r--', 'uid': 1000, 'gid': 1000},
+        'regular': {'mode': '-rw-r--r--', 'uid': 1000, 'gid': 1000, 'size': 32, 'md5': '456e611a5420b7dd09bae143a7b2deb0'},
+        'symlink': {'mode': 'lrwxrwxrwx', 'uid': 1000, 'gid': 1000, 'target': 'regular'},
+    }
+
+    MountArchiveAndCheckTree(
+        zip_name, want_tree, want_blocks=8, want_inodes=6, options=['-o', 'default_permissions'],)
 
     # Test -o nosymlinks
     want_tree = {
@@ -803,7 +815,7 @@ def TestArchiveWithSpecialFiles():
     # Test -o nospecials
     want_tree = {
         'regular': {'mode': '-rw-r--r--', 'mtime': 1565290018000000000, 'size': 32, 'md5': '456e611a5420b7dd09bae143a7b2deb0'},
-        'symlink': {'mode': 'lrw-r--r--', 'mtime': 1564834729000000000, 'target': 'regular'},
+        'symlink': {'mode': 'lrwxr-xr-x', 'mtime': 1564834729000000000, 'target': 'regular'},
     }
 
     MountArchiveAndCheckTree(
