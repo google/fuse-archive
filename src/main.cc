@@ -945,7 +945,8 @@ struct ArchiveDeleter {
 
 using ArchivePtr = std::unique_ptr<Archive, ArchiveDeleter>;
 
-const char* ReadPassword(Archive*, void* /*data*/) {
+// Read a password from the standard input if necessary.
+const char* ReadPassword(Archive*, void*) {
   if (g_password_count++) {
     return nullptr;
   }
@@ -1132,9 +1133,7 @@ bool ReadFromSideBuffer(int64_t const index_within_archive,
   return false;
 }
 
-// ---- Reader
-
-// Reader bundles libarchive concepts (an archive and an archive entry) and
+// A Reader bundles libarchive concepts (an archive and an archive entry) and
 // other state to point to a particular offset (in decompressed space) of a
 // particular archive entry (identified by its index) in an archive.
 //
@@ -1424,7 +1423,7 @@ void RemoveNumericSuffix(std::string& s) {
   s.resize(i);
 }
 
-void Attach(Node* const node) {
+void RenameIfCollision(Node* const node) {
   assert(node);
   const auto [pos, ok] = g_nodes_by_path.try_emplace(node->GetPath(), node);
   if (ok) {
@@ -1503,7 +1502,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   assert(node->GetPath() == path);
 
   if (to_rename) {
-    Attach(to_rename);
+    RenameIfCollision(to_rename);
   }
 
   return node;
@@ -1575,6 +1574,54 @@ void CacheFileData(Archive* const a) {
       g_cache_size = offset;
     }
   }
+}
+
+int64_t GetEntrySize(Archive* const a, Entry* const e) {
+  if (archive_entry_size_is_set(e)) {
+    return archive_entry_size(e);
+  }
+
+  // 'Raw' archives don't always explicitly record the decompressed size.
+  // We'll have to decompress it to find out. Some 'cooked' archives also
+  // don't explicitly record this (at the time archive_read_next_header
+  // returns). See https://github.com/libarchive/libarchive/issues/1764
+
+  int64_t size = 0;
+  std::byte buffer[16 << 10];
+  while (const ssize_t n = archive_read_data(a, buffer, sizeof(buffer))) {
+    if (n < 0) {
+      const std::string_view error = archive_error_string(a);
+      LOG(ERROR) << error;
+      ThrowExitCode(error);
+    }
+
+    assert(n <= sizeof(buffer));
+    size += n;
+  }
+
+  if (archive_entry_is_encrypted(e)) {
+    g_password_checked = true;
+  }
+
+  return size;
+}
+
+void CheckPassword(Archive* const a, Entry* const e) {
+  if (g_password_checked || !archive_entry_is_encrypted(e)) {
+    return;
+  }
+
+  // Reading the first bytes of the first encrypted entry will reveal whether we
+  // also need a passphrase.
+  std::byte buffer[16];
+  const ssize_t n = archive_read_data(a, buffer, sizeof(buffer));
+  if (n < 0) {
+    const std::string_view error = archive_error_string(a);
+    LOG(ERROR) << error;
+    ThrowExitCode(error);
+  }
+
+  g_password_checked = n > 0;
 }
 
 void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
@@ -1658,7 +1705,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   parent->AddChild(node);
 
   // Add to g_nodes_by_path.
-  Attach(node);
+  RenameIfCollision(node);
 
   // Add to g_nodes_by_index.
   assert(g_nodes_by_index.size() <= id);
@@ -1688,53 +1735,24 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   }
 
   // Regular file.
-  // Cache file data.
   if (g_cache) {
+    // Cache file data.
     node->cache_offset = g_cache_size;
     CacheFileData(a);
     node->size = g_cache_size - node->cache_offset;
-  } else if (archive_entry_size_is_set(e)) {
-    node->size = archive_entry_size(e);
   } else {
-    // 'Raw' archives don't always explicitly record the decompressed size.
-    // We'll have to decompress it to find out. Some 'cooked' archives also
-    // don't explicitly record this (at the time archive_read_next_header
-    // returns). See https://github.com/libarchive/libarchive/issues/1764
-    LOG(INFO) << "Extracting " << *node;
-
-    while (const ssize_t n = archive_read_data(
-               a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED],
-               SIDE_BUFFER_SIZE)) {
-      if (n < 0) {
-        const std::string_view error = archive_error_string(a);
-        LOG(ERROR) << "Cannot extract " << *node << ": " << error;
-        ThrowExitCode(error);
-      }
-
-      assert(n <= SIDE_BUFFER_SIZE);
-      node->size += n;
-    }
-
-    g_password_checked = true;
+    // Get the entry size without caching the data.
+    node->size = GetEntrySize(a, e);
   }
 
-  if (archive_entry_is_encrypted(e) && !g_password_checked) {
-    // Reading the first byte of the first file will reveal whether we also
-    // need a passphrase.
-    const ssize_t n = archive_read_data(
-        a, g_side_buffer_data[SIDE_BUFFER_INDEX_DECOMPRESSED], 1);
-    if (n < 0) {
-      const std::string_view error = archive_error_string(a);
-      LOG(ERROR) << "Cannot extract " << *node << ": " << error;
-      ThrowExitCode(error);
-    }
+  // Check password if necessary.
+  CheckPassword(a, e);
 
-    g_password_checked = true;
-  }
-
+  // Adjust the total block count.
   g_block_count += node->GetBlockCount();
 }
 
+// Resolve the hardlinks set aside in g_hardlinks.
 void ResolveHardlinks() {
   for (const Hardlink& entry : g_hardlinks) {
     // Find its target.
@@ -1787,13 +1805,34 @@ void ResolveHardlinks() {
     assert(target->nlink > 1);
 
     parent->AddChild(node);
-    Attach(node);
+    RenameIfCollision(node);
 
     LOG(DEBUG) << "Resolved Hardlink " << Path(node->GetPath()) << " -> "
                << *target;
   }
 
   g_hardlinks.clear();
+}
+
+void CheckRawArchive(Archive* const a) {
+  if (archive_format(a) != ARCHIVE_FORMAT_RAW) {
+    return;
+  }
+
+  // For 'raw' archives, check that at least one of the compression filters
+  // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
+  // data (e.g. foo.jpeg).
+  g_archive_is_raw = true;
+  LOG(DEBUG) << "The archive is a 'raw' archive";
+
+  for (int n = archive_filter_count(a); n > 0;) {
+    if (archive_filter_code(a, --n) != ARCHIVE_FILTER_NONE) {
+      return;
+    }
+  }
+
+  LOG(ERROR) << "Cannot recognize the archive format";
+  throw ExitCode::INVALID_RAW_ARCHIVE;
 }
 
 void BuildTree() {
@@ -1867,24 +1906,7 @@ void BuildTree() {
     }
 
     if (id == 0) {
-      // For 'raw' archives, check that at least one of the compression filters
-      // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
-      // data (e.g. foo.jpeg).
-      if (archive_format(a.get()) == ARCHIVE_FORMAT_RAW) {
-        g_archive_is_raw = true;
-        LOG(DEBUG) << "The archive is a 'raw' archive";
-
-        for (int n = archive_filter_count(a.get());;) {
-          if (n == 0) {
-            LOG(ERROR) << "Invalid raw archive";
-            throw ExitCode::INVALID_RAW_ARCHIVE;
-          }
-
-          if (archive_filter_code(a.get(), --n) != ARCHIVE_FILTER_NONE) {
-            break;
-          }
-        }
-      }
+      CheckRawArchive(a.get());
     }
 
     ProcessEntry(a.get(), entry, id);
@@ -2216,7 +2238,7 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
   return KEEP;
 }
 
-void ensure_utf_8_encoding() {
+void EnsureUtf8() {
   // libarchive (especially for reading 7z) has locale-dependent behavior.
   // Non-ASCII paths can trigger "Pathname cannot be converted from UTF-16LE to
   // current locale" warnings from archive_read_next_header and
@@ -2298,7 +2320,7 @@ int main(int const argc, char** const argv) try {
   openlog(PROGRAM_NAME, LOG_PERROR, LOG_USER);
   SetLogLevel(LogLevel::INFO);
 
-  ensure_utf_8_encoding();
+  EnsureUtf8();
 
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
   if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
