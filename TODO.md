@@ -28,10 +28,11 @@
 - [x] Add a `-o dmask` option.
 - [x] Honor the original UID and GID when using the `-o default_permissions` option.
 - [x] Modify the `Makefile` so that `make check` runs the new tests in `test/test.py`.
-- [x] Handle hard links (https://github.com/google/fuse-archive/issues/18).
+- [x] Handle hardlinks (https://github.com/google/fuse-archive/issues/18).
+- [x] Add tests for hardlinks.
+- [x] Add tests for big files.
 - [ ] Add a `-o nohardlink` option.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
-- [ ] Add tests for big files.
 - [ ] Modify the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
 - [ ] Document the cache system.
 - [ ] Document the `-o nocache` option.

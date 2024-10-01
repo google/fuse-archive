@@ -20,7 +20,7 @@ INSTALL = install
 
 all: out/$(PROJECT)
 
-check: out/$(PROJECT)
+check: out/$(PROJECT) test/data/big.zip
 	python3 test/test.py
 	go run test/go/check.go
 
@@ -43,5 +43,8 @@ uninstall:
 out/$(PROJECT): src/main.cc
 	mkdir -p out
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(LDFLAGS) -o $@
+
+test/data/big.zip: test/make_big_zip.py
+	python3 test/make_big_zip.py
 
 .PHONY: all check clean doc install uninstall
