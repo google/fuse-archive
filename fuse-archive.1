@@ -74,6 +74,18 @@ Directory permission mask in octal (default 0022)
 \f[B]-o fmask=M\f[R]
 File permission mask in octal (default 0022)
 .TP
+\f[B]-o uid=N\f[R]
+Set the file owner of all the items in the mounted archive (default is
+current user)
+.TP
+\f[B]-o gid=N\f[R]
+Set file group of all the items in the mounted archive (default is
+current group)
+.TP
+\f[B]-o default_permissions\f[R]
+Use the file owner (UID), group (GID) and permissions stored with each
+item in the archive.
+.TP
 \f[B]-f\f[R]
 Foreground mode
 .TP

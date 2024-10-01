@@ -60,6 +60,15 @@ mount read-only, not read-write.
 **-o fmask=M**
 :   File permission mask in octal (default 0022)
 
+**-o uid=N**
+:   Set the file owner of all the items in the mounted archive (default is current user)
+
+**-o gid=N**
+:   Set file group of all the items in the mounted archive (default is current group)
+
+**-o default_permissions**
+:   Use the file owner (UID), group (GID) and permissions stored with each item in the archive. 
+
 **-f**
 :   Foreground mode
 
