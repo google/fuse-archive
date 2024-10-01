@@ -31,14 +31,18 @@
 - [x] Handle hardlinks (https://github.com/google/fuse-archive/issues/18).
 - [x] Add tests for hardlinks.
 - [x] Add tests for big files.
+- [x] Document the `-o nocache` option.
+- [x] Document the `-o nosymlink` option.
+- [x] Document the `-o nospecials` option.
+- [x] Document the returned error values.
+- [x] Document the `-o dmask=M` option.
+- [x] Document the `-o fmask=M` option.
+- [ ] Document the `-o uid=N` option.
+- [ ] Document the `-o gid=N` option.
 - [ ] Add a `-o nohardlink` option.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [ ] Modify the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
 - [ ] Document the cache system.
-- [ ] Document the `-o nocache` option.
-- [ ] Document the `-o nosymlink` option.
-- [ ] Document the `-o nospecials` option.
-- [ ] Document the returned error values.
 - [ ] Add tests for the `lzma` compression method.
 - [ ] Add tests for the `xz` compression method.
 - [ ] Add tests for the `zstd` compression method.

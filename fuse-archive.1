@@ -59,11 +59,20 @@ Print more log messages
 \f[B]--redact\f[R]
 Redact file names from log messages
 .TP
+\f[B]-o nocache\f[R]
+No caching of uncompressed data
+.TP
 \f[B]-o nospecials\f[R]
 Hide special files (FIFOs, sockets, devices)
 .TP
 \f[B]-o nosymlinks\f[R]
 Hide symbolic links
+.TP
+\f[B]-o dmask=M\f[R]
+Directory permission mask in octal (default 0022)
+.TP
+\f[B]-o fmask=M\f[R]
+File permission mask in octal (default 0022)
 .TP
 \f[B]-f\f[R]
 Foreground mode
@@ -121,6 +130,47 @@ faster\f[R] (0.83s vs 570s) to copy out the decompressed contents.
 This is because \f[B]fuse-archive\f[R] does not use
 \f[B]archivemount\f[R]\[cq]s quadratic complexity
 algorithm (https://github.com/cybernoid/archivemount/issues/21).
+.SH Return Value
+.TP
+\f[B]0\f[R]
+Success.
+.TP
+\f[B]1\f[R]
+Generic error code for: missing command line argument, too many command
+line arguments, unknown option, mount point is not empty, etc.
+.TP
+\f[B]10\f[R]
+Cannot create the mount point.
+.TP
+\f[B]11\f[R]
+Cannot open the archive file.
+.TP
+\f[B]12\f[R]
+Cannot create the cache file.
+.TP
+\f[B]13\f[R]
+Cannot write to the cache file.
+This is most likely the indication that there is not enough temp space.
+.TP
+\f[B]20\f[R]
+The archive contains an encrypted file, but no password was provided.
+.TP
+\f[B]21\f[R]
+The archive contains an encrypted file, and the provided password does
+not decrypt it.
+.TP
+\f[B]22\f[R]
+The archive contains an encrypted file, and the encryption method is not
+supported.
+.TP
+\f[B]30\f[R]
+Cannot recognize the archive format.
+.TP
+\f[B]31\f[R]
+Invalid archive header.
+.TP
+\f[B]32\f[R]
+Cannot read and extract the archive.
 .SH Disclaimer
 .PP
 This is not an official Google product.

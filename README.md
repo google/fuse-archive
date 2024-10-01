@@ -45,11 +45,20 @@ mount read-only, not read-write.
 **-\-redact**
 :   Redact file names from log messages
 
+**-o nocache**
+:   No caching of uncompressed data
+
 **-o nospecials**
 :   Hide special files (FIFOs, sockets, devices)
 
 **-o nosymlinks**
 :   Hide symbolic links
+
+**-o dmask=M**
+:   Directory permission mask in octal (default 0022)
+
+**-o fmask=M**
+:   File permission mask in octal (default 0022)
 
 **-f**
 :   Foreground mode
@@ -101,6 +110,48 @@ mountpoint and daemonize, but it is **~700× faster** (0.83s vs 570s) to copy ou
 the decompressed contents. This is because **fuse-archive** does not use
 **archivemount**'s
 [quadratic complexity algorithm](https://github.com/cybernoid/archivemount/issues/21).
+
+# Return Value
+
+**0**
+:   Success.
+
+**1**
+:   Generic error code for: missing command line argument, too many command line
+    arguments, unknown option, mount point is not empty, etc.
+
+**10**
+:   Cannot create the mount point.
+
+**11**
+:   Cannot open the archive file.
+
+**12**
+:   Cannot create the cache file.
+
+**13**
+:   Cannot write to the cache file. This is most likely the indication that
+    there is not enough temp space.
+
+**20**
+:   The archive contains an encrypted file, but no password was provided.
+
+**21**
+:   The archive contains an encrypted file, and the provided password does not
+    decrypt it.
+
+**22**
+:   The archive contains an encrypted file, and the encryption method is not
+    supported.
+
+**30**
+:   Cannot recognize the archive format.
+
+**31**
+:   Invalid archive header.
+
+**32**
+:   Cannot read and extract the archive.
 
 # Disclaimer
 
