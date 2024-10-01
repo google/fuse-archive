@@ -12,23 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// ----------------
-
-// fuse-archive read-only mounts an archive or compressed file (e.g. foo.tar,
-// foo.tar.gz, foo.xz, foo.zip) as a FUSE file system
+// fuse-archive mounts an archive or compressed file (e.g. foo.tar, foo.tar.gz,
+// foo.xz, foo.zip) as a read-only FUSE file system
 // (https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
-//
-// To build:
-//   g++ -O3 main.cc `pkg-config libarchive fuse --cflags --libs` -o example
-//
-// To use:
-//   ./example ../test/data/archive.zip the/path/to/the/mountpoint
-//   ls -l                              the/path/to/the/mountpoint
-//   fusermount -u                      the/path/to/the/mountpoint
-//
-// Pass the "-f" flag to "./example" for foreground operation.
-
-// ---- Preprocessor
 
 #define FUSE_USE_VERSION 26
 
@@ -105,6 +91,28 @@ enum class ExitCode {
   INVALID_ARCHIVE_HEADER = 31,
   INVALID_ARCHIVE_CONTENTS = 32,
 };
+
+std::ostream& operator<<(std::ostream& out, ExitCode const e) {
+  switch (e) {
+#define PRINT(s)    \
+  case ExitCode::s: \
+    return out << #s << " (" << int(ExitCode::s) << ")";
+    PRINT(GENERIC_FAILURE)
+    PRINT(CANNOT_CREATE_MOUNT_POINT)
+    PRINT(CANNOT_OPEN_ARCHIVE)
+    PRINT(CANNOT_CREATE_CACHE)
+    PRINT(CANNOT_WRITE_CACHE)
+    PRINT(PASSPHRASE_REQUIRED)
+    PRINT(PASSPHRASE_INCORRECT)
+    PRINT(PASSPHRASE_NOT_SUPPORTED)
+    PRINT(INVALID_RAW_ARCHIVE)
+    PRINT(INVALID_ARCHIVE_HEADER)
+    PRINT(INVALID_ARCHIVE_CONTENTS)
+#undef PRINT
+  }
+
+  return out << "Exit Code " << int(e);
+}
 
 // ---- Platform specifics
 
@@ -2457,6 +2465,7 @@ int main(int const argc, char** const argv) try {
   // Start serving the filesystem.
   return fuse_main(args.argc, args.argv, &my_operations, nullptr);
 } catch (const ExitCode e) {
+  LOG(DEBUG) << "Returning " << e;
   return static_cast<int>(e);
 } catch (const std::exception& e) {
   LOG(ERROR) << e.what();
