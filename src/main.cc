@@ -59,6 +59,9 @@
 #include <utility>
 #include <vector>
 
+#include <boost/intrusive/slist.hpp>
+#include <boost/intrusive/unordered_set.hpp>
+
 // ---- Compile-time Configuration
 
 #define PROGRAM_NAME "fuse-archive"
@@ -520,6 +523,8 @@ constexpr blksize_t block_size = 512;
 // Total number of blocks taken by the tree of nodes.
 blkcnt_t g_block_count = 1;
 
+namespace bi = boost::intrusive;
+
 struct Node {
   // Name of this node in the context of its parent. This name should be a valid
   // and non-empty filename, and it shouldn't contain any '/' separator. The
@@ -546,40 +551,60 @@ struct Node {
   dev_t rdev = 0;
   int64_t nlink = 1;
 
-  // Pointer to the parent node. Should be non null. The only exception is the
-  // root directory which has a null parent pointer.
-  Node* parent = nullptr;
-  Node* last_child = nullptr;
-  Node* first_child = nullptr;
-  Node* next_sibling = nullptr;
-
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
 
   // Hard link target.
   Node* hardlink_target = nullptr;
 
-  FileType GetType() const { return GetFileType(mode); }
-  bool IsDir() const { return S_ISDIR(mode); }
+  // Pointer to the parent node. Should be non null. The only exception is the
+  // root directory which has a null parent pointer.
+  Node* parent = nullptr;
 
-  void AddChild(Node* const n) {
-    assert(n);
-    assert(!n->parent);
+#ifdef NDEBUG
+  using LinkMode = bi::link_mode<bi::normal_link>;
+#else
+  using LinkMode = bi::link_mode<bi::safe_link>;
+#endif
+
+  // Hook used to index Nodes by parent.
+  using ByParent = bi::slist_member_hook<LinkMode>;
+  ByParent by_parent;
+
+  // Children of this Node. The children are not sorted and their order is not
+  // relevant. This Node doesn't own its children nodes. The `parent` pointer of
+  // every child in `children` should point back to this Node.
+  using Children = bi::slist<Node,
+                             bi::member_hook<Node, ByParent, &Node::by_parent>,
+                             bi::constant_time_size<false>,
+                             bi::linear<true>,
+                             bi::cache_last<true>>;
+  Children children;
+
+  // Hooks used to index Nodes by full path.
+  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<true>>;
+  ByPath by_path;
+
+  FileType GetType() const {
+    return GetFileType(mode);
+  }
+
+  bool IsDir() const {
+    return S_ISDIR(mode);
+  }
+
+  void AddChild(Node* const child) {
+    assert(child);
+    assert(!child->parent);
     assert(IsDir());
     assert(!hardlink_target);
     assert(nlink >= 2);
     // Count one "block" for each directory entry.
     size += block_size;
     g_block_count += 1;
-    nlink += n->IsDir();
-    n->parent = this;
-    if (last_child == nullptr) {
-      last_child = n;
-      first_child = n;
-    } else {
-      last_child->next_sibling = n;
-      last_child = n;
-    }
+    nlink += child->IsDir();
+    child->parent = this;
+    children.push_back(*child);
   }
 
   int64_t GetBlockCount() const {
@@ -617,36 +642,6 @@ struct Node {
 
 ino_t Node::count = 0;
 
-std::strong_ordering ComparePath(const Node* a, const Node* b);
-
-std::strong_ordering ComparePath(const Node& a, const Node& b) {
-  if (&a == &b) {
-    return std::strong_ordering::equal;
-  }
-
-  if (const auto c = ComparePath(a.parent, b.parent); c != 0) {
-    return c;
-  }
-
-  return a.name <=> b.name;
-}
-
-std::strong_ordering ComparePath(const Node* const a, const Node* const b) {
-  if (a) {
-    if (b) {
-      return ComparePath(*a, *b);
-    } else {
-      return std::strong_ordering::greater;
-    }
-  } else {
-    if (b) {
-      return std::strong_ordering::less;
-    } else {
-      return std::strong_ordering::equal;
-    }
-  }
-}
-
 std::ostream& operator<<(std::ostream& out, const Node& n) {
   return out << n.GetType() << " [" << n.index_within_archive << "] "
              << Path(n.GetPath());
@@ -657,8 +652,28 @@ std::ostream& operator<<(std::ostream& out, const Node& n) {
 // Building the directory tree can take minutes, for archive file formats like
 // .tar.gz that are compressed but also do not contain an explicit on-disk
 // directory of archive entries.
-using NodesByPath = std::unordered_map<std::string, Node*>;
-NodesByPath g_nodes_by_path;
+
+// Path extractor for Node.
+struct GetPath {
+  using type = std::string;
+  std::string operator()(const Node& node) const { return node.GetPath(); }
+};
+
+using NodesByPath =
+    bi::unordered_set<Node,
+                      bi::member_hook<Node, Node::ByPath, &Node::by_path>,
+                      bi::constant_time_size<true>,
+                      bi::power_2_buckets<true>,
+                      bi::compare_hash<true>,
+                      bi::key_of_value<GetPath>,
+                      bi::equal<std::equal_to<std::string_view>>,
+                      bi::hash<std::hash<std::string_view>>>;
+
+using Bucket = NodesByPath::bucket_type;
+using Buckets = std::vector<Bucket>;
+Buckets buckets(1 << 4);
+
+NodesByPath g_nodes_by_path({buckets.data(), buckets.size()});
 
 using NodesByIndex = std::vector<Node*>;
 NodesByIndex g_nodes_by_index;
@@ -1440,15 +1455,33 @@ void RemoveNumericSuffix(std::string& s) {
   s.resize(i);
 }
 
+// Finds a node by full path.
+Node* FindNode(std::string_view const path) {
+  const auto it = g_nodes_by_path.find(Path(path).WithoutTrailingSeparator(),
+                                       g_nodes_by_path.hash_function(),
+                                       g_nodes_by_path.key_eq());
+  return it == g_nodes_by_path.end() ? nullptr : &*it;
+}
+
+void RehashIfNecessary() {
+  if (g_nodes_by_path.size() > buckets.size()) {
+    Buckets new_buckets(buckets.size() * 2);
+    buckets.swap(new_buckets);
+    g_nodes_by_path.rehash({buckets.data(), buckets.size()});
+    LOG(DEBUG) << "Rehashed index with " << buckets.size() << " buckets";
+  }
+}
+
 void RenameIfCollision(Node* const node) {
   assert(node);
-  const auto [pos, ok] = g_nodes_by_path.try_emplace(node->GetPath(), node);
+  const auto [pos, ok] = g_nodes_by_path.insert(*node);
   if (ok) {
+    RehashIfNecessary();
     return;
   }
 
   // There is a name collision
-  LOG(DEBUG) << *node << " conflicts with " << *pos->second;
+  LOG(DEBUG) << *node << " conflicts with " << *pos;
 
   // Extract filename extension
   std::string& f = node->name;
@@ -1465,15 +1498,16 @@ void RenameIfCollision(Node* const node) {
     f.assign(base, 0, Path(base).TruncationPosition(NAME_MAX - suffix.size()));
     f += suffix;
 
-    const auto [pos, ok] = g_nodes_by_path.try_emplace(node->GetPath(), node);
+    const auto [pos, ok] = g_nodes_by_path.insert(*node);
     if (ok) {
       LOG(DEBUG) << "Resolved conflict for " << *node;
+      RehashIfNecessary();
       return;
     }
 
-    LOG(DEBUG) << *node << " conflicts with " << *pos->second;
+    LOG(DEBUG) << *node << " conflicts with " << *pos;
     if (!i)
-      i = &pos->second->collision_count;
+      i = &pos->collision_count;
   }
 }
 
@@ -1488,11 +1522,10 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   Node* to_rename = nullptr;
   Node* parent = nullptr;
 
-  Node*& node = g_nodes_by_path[std::string(path)];
-
-  if (node) {
-    if (node->IsDir())
+  if (Node* const node = FindNode(path)) {
+    if (node->IsDir()) {
       return node;
+    }
 
     // There is an existing node with the given name, but it's not a
     // directory.
@@ -1503,20 +1536,22 @@ Node* GetOrCreateDirNode(std::string_view const path) {
     // Remove it from g_nodes_by_path, in order to insert it again later with a
     // different name.
     to_rename = node;
-    node = nullptr;
+    g_nodes_by_path.erase(g_nodes_by_path.iterator_to(*node));
   } else {
     parent = GetOrCreateDirNode(parent_path);
   }
 
   assert(parent);
-  assert(!node);
 
   // Create the Directory node.
-  node = new Node{.name = std::string(name),
-                  .mode = S_IFDIR | (0777 & ~g_options.dmask),
-                  .nlink = 2};
+  Node* const node = new Node{.name = std::string(name),
+                              .mode = S_IFDIR | (0777 & ~g_options.dmask),
+                              .nlink = 2};
   parent->AddChild(node);
   assert(node->GetPath() == path);
+  [[maybe_unused]] const auto [_, ok] = g_nodes_by_path.insert(*node);
+  assert(ok);
+  RehashIfNecessary();
 
   if (to_rename) {
     RenameIfCollision(to_rename);
@@ -1775,16 +1810,12 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
 void ResolveHardlinks() {
   for (const Hardlink& entry : g_hardlinks_to_resolve) {
     // Find its target.
-    const auto it = g_nodes_by_path.find(entry.target_path);
-
-    if (it == g_nodes_by_path.end()) {
+    Node* target = FindNode(entry.target_path);
+    if (!target) {
       LOG(DEBUG) << "Skipped hardlink " << Path(entry.source_path)
                  << ": Cannot find target " << Path(entry.target_path);
       continue;
     }
-
-    Node* target = it->second;
-    assert(target);
 
     while (target->hardlink_target) {
       target = target->hardlink_target;
@@ -1903,7 +1934,8 @@ void BuildTree() {
   assert(!g_root_node);
   g_root_node = new Node{
       .name = "/", .mode = S_IFDIR | (0777 & ~g_options.dmask), .nlink = 2};
-  g_nodes_by_path[g_root_node->GetPath()] = g_root_node;
+  [[maybe_unused]] const auto [_, ok] = g_nodes_by_path.insert(*g_root_node);
+  assert(ok);
 
   // Read and process every entry of the archive.
   try {
@@ -1962,28 +1994,26 @@ void BuildTree() {
 // ---- FUSE Callbacks
 
 int my_getattr(const char* const path, struct stat* const z) {
-  const auto it = g_nodes_by_path.find(path);
-  if (it == g_nodes_by_path.end()) {
+  const Node* const n = FindNode(path);
+  if (!n) {
     LOG(DEBUG) << "Cannot stat " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
   assert(z);
-  *z = it->second->GetStat();
+  *z = n->GetStat();
   return 0;
 }
 
 int my_readlink(const char* const path,
                 char* const dst_ptr,
                 size_t const dst_len) {
-  const auto it = g_nodes_by_path.find(path);
-  if (it == g_nodes_by_path.end()) {
+  const Node* const n = FindNode(path);
+  if (!n) {
     LOG(ERROR) << "Cannot read link " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
-  const Node* const n = it->second;
-  assert(n);
   assert(n->GetType() == FileType::Symlink);
   if (n->symlink.empty() || dst_len == 0) {
     return -ENOLINK;
@@ -1994,14 +2024,12 @@ int my_readlink(const char* const path,
 }
 
 int my_open(const char* const path, fuse_file_info* const ffi) {
-  const auto it = g_nodes_by_path.find(path);
-  if (it == g_nodes_by_path.end()) {
+  const Node* const n = FindNode(path);
+  if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
-  const Node* const n = it->second;
-  assert(n);
   assert(!n->IsDir());
   assert(n->index_within_archive >= 0);
 
@@ -2155,13 +2183,12 @@ int my_readdir(const char* path,
                fuse_fill_dir_t const filler,
                off_t,
                fuse_file_info*) {
-  const auto it = g_nodes_by_path.find(path);
-  if (it == g_nodes_by_path.end()) {
+  const Node* const n = FindNode(path);
+  if (!n) {
     LOG(ERROR) << "Cannot read dir " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
-  const Node* const n = it->second;
   if (!n->IsDir()) {
     LOG(ERROR) << "Cannot read dir " << *n << ": Not a directory";
     return -ENOTDIR;
@@ -2171,9 +2198,9 @@ int my_readdir(const char* path,
     return -ENOMEM;
   }
 
-  for (const Node* p = n->first_child; p; p = p->next_sibling) {
-    const struct stat z = p->GetStat();
-    if (filler(buf, p->name.c_str(), &z, 0)) {
+  for (const Node& child : n->children) {
+    const struct stat z = child.GetStat();
+    if (filler(buf, child.name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
   }
