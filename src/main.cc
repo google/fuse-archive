@@ -575,7 +575,7 @@ struct Node {
   struct stat GetStat() const {
     struct stat z = {};
     z.st_nlink = (hardlink_target ?: this)->nlink;
-    assert(z.st_nlinks > 0);
+    assert(z.st_nlink > 0);
     z.st_ino = ino;
     z.st_mode = mode;
     z.st_uid = uid;
