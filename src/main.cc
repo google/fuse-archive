@@ -180,8 +180,8 @@ int64_t g_cache_size = 0;
 // File descriptor returned by opening g_archive_path.
 int g_archive_fd = -1;
 
-// Size of the g_archive_path file.
-int64_t g_archive_file_size = 0;
+// Size of the archive file.
+int64_t g_archive_size = 0;
 
 // Canonicalised absolute path of the archive file. The command line argument
 // may give a relative filename (one that doesn't start with a slash) and the
@@ -981,7 +981,7 @@ const char* ReadPassword(Archive*, void* /*data*/) {
 // ---- Libarchive Read Callbacks
 
 void PrintProgress() {
-  if (!LOG_IS_ON(INFO)) {
+  if (!LOG_IS_ON(INFO) || g_archive_size <= 0) {
     return;
   }
 
@@ -999,10 +999,8 @@ void PrintProgress() {
     return;
   }
 
-  const int percent = g_archive_file_size > 0
-                          ? 100 * std::min<int64_t>(pos, g_archive_file_size) /
-                                g_archive_file_size
-                          : 0;
+  const int percent =
+      100 * std::min<int64_t>(pos, g_archive_size) / g_archive_size;
   LOG(INFO) << "Loading " << percent << "%";
   g_displayed_progress = true;
 }
@@ -1820,7 +1818,7 @@ void BuildTree() {
     PLOG(ERROR) << "Cannot stat " << Path(g_archive_path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   } else {
-    g_archive_file_size = z.st_size;
+    g_archive_size = z.st_size;
   }
 
   const ArchivePtr a(archive_read_new());
@@ -1899,16 +1897,11 @@ void BuildTree() {
     LOG(INFO) << "Loaded 100%";
   }
 
-  if (LOG_IS_ON(INFO)) {
-    LOG(INFO) << "The archive contains " << g_nodes_by_path.size()
-              << " named entries (files or directories) and " << Node::count
-              << " inodes";
-    if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
-      LOG(INFO) << "The cache uses "
-                << static_cast<int64_t>(z.st_blocks) * block_size
-                << " bytes of storage space";
-      assert(z.st_size == g_cache_size);
-    }
+  LOG(INFO) << "The archive contains " << g_nodes_by_path.size() << " items";
+  if (struct stat z; LOG_IS_ON(INFO) && g_cache && fstat(g_cache_fd, &z) == 0) {
+    LOG(INFO) << "The cache takes " << int64_t(z.st_blocks) * block_size
+              << " bytes of disk space";
+    assert(z.st_size == g_cache_size);
   }
 }
 
