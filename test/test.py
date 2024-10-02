@@ -156,7 +156,7 @@ def MountArchiveAndCheckTree(
     use_md5=True,
 ):
     s = f'Test {zip_name!r}'
-    if options: s += f', options = {options}'
+    if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
     logging.info(s)
     try:
@@ -201,7 +201,7 @@ def MountArchiveAndCheckTree(
 # Logs an error if the archive can be mounted, or if the returned error code doesn't match.
 def CheckArchiveMountingError(zip_name, want_error_code, options=[], password=''):
     s = f'Test {zip_name!r}'
-    if options: s += f', options = {options}'
+    if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
     logging.info(s)
     try:
@@ -1062,7 +1062,7 @@ def TestArchiveWithManyFiles():
 def TestBigArchiveRandomOrder(options=['-o', 'direct_io']):
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
-    if options: s += f', options = {options}'
+    if options: s += f', options = {" ".join(options)!r}'
     logging.info(s)
     with tempfile.TemporaryDirectory() as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
@@ -1123,7 +1123,7 @@ def TestBigArchiveRandomOrder(options=['-o', 'direct_io']):
 def TestBigArchiveStreamedWithoutCache(options=['-o', 'nocache,direct_io']):
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
-    if options: s += f', options = {options}'
+    if options: s += f', options = {" ".join(options)!r}'
     logging.info(s)
     with tempfile.TemporaryDirectory() as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
