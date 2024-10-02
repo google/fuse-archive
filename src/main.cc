@@ -132,6 +132,7 @@ enum {
   KEY_NO_CACHE,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
+  KEY_NO_HARDLINKS,
   KEY_DEFAULT_PERMISSIONS,
 };
 
@@ -157,6 +158,7 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
+    FUSE_OPT_KEY("nohardlinks", KEY_NO_HARDLINKS),
     FUSE_OPT_KEY("default_permissions", KEY_DEFAULT_PERMISSIONS),
     {"dmask=%o", offsetof(Options, dmask)},
     {"fmask=%o", offsetof(Options, fmask)},
@@ -171,6 +173,7 @@ bool g_force = false;
 bool g_cache = true;
 bool g_specials = true;
 bool g_symlinks = true;
+bool g_hardlinks = true;
 bool g_default_permissions = false;
 
 // Number of command line arguments seen so far.
@@ -670,7 +673,7 @@ struct Hardlink {
 };
 
 // Hardlinks to resolve.
-std::vector<Hardlink> g_hardlinks;
+std::vector<Hardlink> g_hardlinks_to_resolve;
 
 // g_saved_readers is a cache of warm readers. libarchive is designed for
 // streaming access, not random access, and generally does not support seeking
@@ -1651,7 +1654,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     std::string target = Path(s).Normalize();
     LOG(DEBUG) << "Processing Hardlink [" << id << "] " << Path(path) << " -> "
                << Path(target);
-    g_hardlinks.emplace_back(std::move(path), std::move(target));
+    g_hardlinks_to_resolve.emplace_back(std::move(path), std::move(target));
     return;
   }
 
@@ -1765,9 +1768,9 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   g_block_count += node->GetBlockCount();
 }
 
-// Resolve the hardlinks set aside in g_hardlinks.
+// Resolve the hardlinks set aside in g_hardlinks_to_resolve.
 void ResolveHardlinks() {
-  for (const Hardlink& entry : g_hardlinks) {
+  for (const Hardlink& entry : g_hardlinks_to_resolve) {
     // Find its target.
     const auto it = g_nodes_by_path.find(entry.target_path);
 
@@ -1802,7 +1805,7 @@ void ResolveHardlinks() {
         .name = std::string(name),
         .symlink = target->symlink,
         .mode = target->mode,
-        .ino = target->ino,
+        .ino = g_hardlinks ? target->ino : ++Node::count,
         .uid = target->uid,
         .gid = target->gid,
         .index_within_archive = target->index_within_archive,
@@ -1810,12 +1813,9 @@ void ResolveHardlinks() {
         .cache_offset = target->cache_offset,
         .mtime = target->mtime,
         .rdev = target->rdev,
-        .nlink = 0,  // This nlink should never be used.
-        .hardlink_target = target,
+        .nlink = g_hardlinks ? (target->nlink++, 0) : 1,
+        .hardlink_target = g_hardlinks ? target : nullptr,
     };
-
-    target->nlink += 1;
-    assert(target->nlink > 1);
 
     parent->AddChild(node);
     RenameIfCollision(node);
@@ -1824,7 +1824,7 @@ void ResolveHardlinks() {
                << *target;
   }
 
-  g_hardlinks.clear();
+  g_hardlinks_to_resolve.clear();
 }
 
 void CheckRawArchive(Archive* const a) {
@@ -2264,6 +2264,10 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       g_symlinks = false;
       return DISCARD;
 
+    case KEY_NO_HARDLINKS:
+      g_hardlinks = false;
+      return DISCARD;
+
     case KEY_DEFAULT_PERMISSIONS:
       g_default_permissions = true;
       return KEEP;
@@ -2339,7 +2343,8 @@ general options:
          -o force          continue despite errors
          -o nocache        no caching of uncompressed data
          -o nospecials     no special files (FIFOs, sockets, devices)
-         -o nosymlinks     no symbolic links
+         -o nosymlinks     no symlinks
+         -o nohardlinks    no hardlinks
          -o dmask=M        directory permission mask in octal (default 0022)
          -o fmask=M        file permission mask in octal (default 0022)
 

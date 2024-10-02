@@ -382,21 +382,6 @@ def TestArchiveWithOptions(options=[]):
             'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
             'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
         },
-        'hardlinks.tgz': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
-            'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
-            'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
-            'Dir1/Dir2/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'Dir1/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'File1': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'File2': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'File3': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'File5': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-            'Symlink1': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-            'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-            'Symlink3': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        },
         'mixed-paths.zip': {
             '.': {'mode': 'drwxr-xr-x'},
             "Quote ' (1)": {'md5': '3ca0f2a7d572f3ad256fcd13e39bd8da'},
@@ -752,6 +737,46 @@ def TestArchiveWithOptions(options=[]):
 
     for zip_name, want_tree in want_trees.items():
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
+
+def TestHardlinks(options=[]):
+    zip_name = 'hardlinks.tgz'
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
+        'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
+        'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
+        'Dir1/Dir2/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Dir1/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File1': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File2': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File3': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File5': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Symlink1': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'Symlink3': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+    }
+
+    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=15, want_inodes=5, options=options)
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
+        'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
+        'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
+        'Dir1/Dir2/File': {'ino': 7, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Dir1/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File1': {'ino': 11, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File2': {'ino': 10, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File3': {'ino': 6, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File5': {'ino': 9, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Symlink1': {'ino': 13, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'Symlink3': {'ino': 12, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+    }
+
+    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=15, want_inodes=13, options=options + ['-o', 'nohardlinks'])
 
 
 # Tests dmask and fmask.
@@ -1307,6 +1332,8 @@ logging.getLogger().setLevel('INFO')
 
 TestArchiveWithOptions()
 TestArchiveWithOptions(['-o', 'nocache'])
+TestHardlinks()
+TestHardlinks(['-o', 'nocache'])
 TestArchiveWithSpecialFiles()
 TestEncryptedArchive()
 TestEncryptedArchive(['-o', 'nocache'])

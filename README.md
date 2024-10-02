@@ -57,6 +57,9 @@ mount read-only, not read-write.
 **-o nosymlinks**
 :   Hide symbolic links
 
+**-o nohardlinks**
+:   No files with multiple hardlinks
+
 **-o dmask=M**
 :   Directory permission mask in octal (default 0022)
 
