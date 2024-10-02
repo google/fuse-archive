@@ -1953,6 +1953,7 @@ void BuildTree() {
 int my_getattr(const char* const path, struct stat* const z) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
+    LOG(DEBUG) << "Cannot stat " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
@@ -1966,6 +1967,7 @@ int my_readlink(const char* const path,
                 size_t const dst_len) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
+    LOG(ERROR) << "Cannot read link " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
@@ -2144,11 +2146,13 @@ int my_readdir(const char* path,
                fuse_file_info*) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
+    LOG(ERROR) << "Cannot read dir " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
   const Node* const n = it->second;
   if (!n->IsDir()) {
+    LOG(ERROR) << "Cannot read dir " << *n << ": Not a directory";
     return -ENOTDIR;
   }
 
