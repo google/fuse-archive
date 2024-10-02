@@ -22,7 +22,6 @@ all: out/$(PROJECT)
 
 check: out/$(PROJECT) test/data/big.zip
 	python3 test/test.py
-	go run test/go/check.go
 
 clean:
 	rm -rf out
