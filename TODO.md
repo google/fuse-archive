@@ -40,8 +40,8 @@
 - [x] Document the `-o uid=N` option.
 - [x] Document the `-o gid=N` option.
 - [x] Document the `-o default_permissions` option.
+- [x] Add a `-o force` option.
 - [ ] Document the cache system.
-- [ ] Add a `-o force` option.
 - [ ] Add a `-o nohardlink` option.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [ ] Modify the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.

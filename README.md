@@ -45,6 +45,9 @@ mount read-only, not read-write.
 **-\-redact**
 :   Redact file names from log messages
 
+**-o force**
+:   Continue despite errors
+
 **-o nocache**
 :   No caching of uncompressed data
 

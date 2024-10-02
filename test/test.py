@@ -1113,6 +1113,40 @@ def TestEncryptedArchive(options=[]):
     CheckArchiveMountingError(zip_name, 20, options=options, password='\n')
     CheckArchiveMountingError(zip_name, 20, options=options)
 
+    # With wrong or no password and `-o force` option.
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'Encrypted ZipCrypto.txt': {
+            'mode': '-rw-r--r--',
+            'size': 34,
+            'errno': 5,
+        },
+        'Encrypted AES-256.txt': {
+            'mode': '-rw-r--r--',
+            'size': 32,
+            'errno': 5,
+        },
+        'Encrypted AES-192.txt': {
+            'mode': '-rw-r--r--',
+            'size': 32,
+            'errno': 5,
+        },
+        'Encrypted AES-128.txt': {
+            'mode': '-rw-r--r--',
+            'size': 32,
+            'errno': 5,
+        },
+        'ClearText.txt': {
+            'mode': '-rw-r--r--',
+            'size': 23,
+            'md5': '7a542815e2c51837b3d8a8b2ebf36490',
+        },
+    }
+    for password in ['wrong password', '\n', '']:
+        MountArchiveAndCheckTree(
+            zip_name, want_tree, want_inodes=6, options=options + ['-o', 'force'], password=password,
+        )
+
 
 # Tests the default_permissions, nosymlinks and nospecials mount options.
 def TestArchiveWithSpecialFiles():

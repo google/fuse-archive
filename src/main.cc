@@ -128,6 +128,7 @@ enum {
   KEY_QUIET,
   KEY_VERBOSE,
   KEY_REDACT,
+  KEY_FORCE,
   KEY_NO_CACHE,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
@@ -152,6 +153,7 @@ const fuse_opt g_fuse_opts[] = {
     FUSE_OPT_KEY("-v", KEY_VERBOSE),
     FUSE_OPT_KEY("--redact", KEY_REDACT),
     FUSE_OPT_KEY("redact", KEY_REDACT),
+    FUSE_OPT_KEY("force", KEY_FORCE),
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
@@ -165,6 +167,7 @@ const fuse_opt g_fuse_opts[] = {
 bool g_help = false;
 bool g_version = false;
 bool g_redact = false;
+bool g_force = false;
 bool g_cache = true;
 bool g_specials = true;
 bool g_symlinks = true;
@@ -1745,9 +1748,11 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   // Regular file.
   if (g_cache) {
     // Cache file data.
-    node->cache_offset = g_cache_size;
+    node->size = archive_entry_size(e);
+    int64_t const offset = g_cache_size;
     CacheFileData(a);
-    node->size = g_cache_size - node->cache_offset;
+    node->cache_offset = offset;
+    node->size = g_cache_size - offset;
   } else {
     // Get the entry size without caching the data.
     node->size = GetEntrySize(a, e);
@@ -1917,7 +1922,15 @@ void BuildTree() {
       CheckRawArchive(a.get());
     }
 
-    ProcessEntry(a.get(), entry, id);
+    try {
+      ProcessEntry(a.get(), entry, id);
+    } catch (ExitCode const error) {
+      if (!g_force) {
+        throw;
+      }
+
+      LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
+    }
   }
 
   // Resolve hardlinks.
@@ -1970,6 +1983,7 @@ int my_readlink(const char* const path,
 int my_open(const char* const path, fuse_file_info* const ffi) {
   const auto it = g_nodes_by_path.find(path);
   if (it == g_nodes_by_path.end()) {
+    LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
@@ -1984,7 +1998,11 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
   }
 
   if (g_cache) {
-    assert(n->cache_offset >= 0);
+    if (n->cache_offset < 0) {
+      LOG(ERROR) << "Cannot open " << *n << ": No cached data for this file";
+      return -EIO;
+    }
+
     static_assert(sizeof(ffi->fh) >= sizeof(n));
     ffi->fh = reinterpret_cast<uintptr_t>(n);
     LOG(DEBUG) << "Opened " << *n;
@@ -2226,6 +2244,10 @@ int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
       g_redact = true;
       return DISCARD;
 
+    case KEY_FORCE:
+      g_force = true;
+      return DISCARD;
+
     case KEY_NO_CACHE:
       g_cache = false;
       return DISCARD;
@@ -2310,6 +2332,7 @@ general options:
     -q   --quiet           do not print progress messages
     -v   --verbose         print more log messages
          --redact          redact paths from log messages
+         -o force          continue despite errors
          -o nocache        no caching of uncompressed data
          -o nospecials     no special files (FIFOs, sockets, devices)
          -o nosymlinks     no symbolic links
