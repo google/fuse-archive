@@ -49,4 +49,3 @@
 - [ ] Document the cache system.
 - [ ] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [ ] Optimize the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
-- [ ] Check if `fuse-archive` handles non-seekable archive files (e.g. streamed via a pipe).
