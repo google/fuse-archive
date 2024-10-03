@@ -1906,41 +1906,49 @@ void BuildTree() {
   g_nodes_by_path[g_root_node->GetPath()] = g_root_node;
 
   // Read and process every entry of the archive.
-  for (int64_t id = 0;; id++) {
-    Entry* entry;
-    const int status = archive_read_next_header(a.get(), &entry);
-    if (status == ARCHIVE_EOF) {
-      break;
-    }
-
-    if (status == ARCHIVE_WARN) {
-      LOG(WARNING) << archive_error_string(a.get());
-    } else if (status != ARCHIVE_OK) {
-      const std::string_view error = archive_error_string(a.get());
-      LOG(ERROR) << error;
-      ThrowExitCode(error);
-    }
-
-    if (id == 0) {
-      CheckRawArchive(a.get());
-    }
-
-    try {
-      ProcessEntry(a.get(), entry, id);
-    } catch (ExitCode const error) {
-      if (!g_force) {
-        throw;
+  try {
+    for (int64_t id = 0;; id++) {
+      Entry* entry;
+      const int status = archive_read_next_header(a.get(), &entry);
+      if (status == ARCHIVE_EOF) {
+        break;
       }
 
-      LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
+      if (status == ARCHIVE_WARN) {
+        LOG(WARNING) << archive_error_string(a.get());
+      } else if (status != ARCHIVE_OK) {
+        const std::string_view error = archive_error_string(a.get());
+        LOG(ERROR) << error;
+        ThrowExitCode(error);
+      }
+
+      if (id == 0) {
+        CheckRawArchive(a.get());
+      }
+
+      try {
+        ProcessEntry(a.get(), entry, id);
+      } catch (ExitCode const error) {
+        if (!g_force) {
+          throw;
+        }
+
+        LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
+      }
     }
-  }
 
-  // Resolve hardlinks.
-  ResolveHardlinks();
+    // Resolve hardlinks.
+    ResolveHardlinks();
 
-  if (g_displayed_progress) {
-    LOG(INFO) << "Loaded 100%";
+    if (g_displayed_progress) {
+      LOG(INFO) << "Loaded 100%";
+    }
+  } catch (ExitCode const error) {
+    if (!g_force || g_nodes_by_path.size() <= 1) {
+      throw;
+    }
+
+    LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
   }
 
   LOG(INFO) << "The archive contains " << g_nodes_by_path.size() << " items";
