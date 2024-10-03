@@ -967,7 +967,10 @@ const char* ReadPassword(Archive*, void*) {
 
   const SuppressEcho guard;
   if (guard) {
-    std::cout << "Password > " << std::flush;
+    std::cout << "The archive is encrypted.\n"
+                 "What is the passphrase that unlocks this archive?\n"
+                 "> "
+              << std::flush;
   }
 
   // Read password from standard input.
