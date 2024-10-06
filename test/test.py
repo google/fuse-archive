@@ -41,8 +41,7 @@ def md5(path):
 def GetTree(root, use_md5=True):
     result = {}
 
-    def scan(path):
-        st = os.stat(path, follow_symlinks=False)
+    def scan(path, st):
         mode = st.st_mode
         line = {
             'ino': st.st_ino,
@@ -68,9 +67,9 @@ def GetTree(root, use_md5=True):
             line['rdev'] = st.st_rdev
         elif stat.S_ISDIR(mode):
             for entry in os.scandir(path):
-                scan(entry.path)
+                scan(entry.path, entry.stat(follow_symlinks=False))
 
-    scan(root)
+    scan(root, os.stat(root, follow_symlinks=False))
     return result
 
 
