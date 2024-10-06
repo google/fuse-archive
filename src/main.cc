@@ -2533,11 +2533,14 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "ro");
 
   // Start serving the filesystem.
-  return fuse_main(args.argc, args.argv, &my_operations, nullptr);
+  const int res = fuse_main(args.argc, args.argv, &my_operations, nullptr);
+  LOG(DEBUG) << "Returning " << ExitCode(res);
+  return res;
 } catch (const ExitCode e) {
   LOG(DEBUG) << "Returning " << e;
   return static_cast<int>(e);
 } catch (const std::exception& e) {
   LOG(ERROR) << e.what();
-  return EXIT_FAILURE;
+  LOG(DEBUG) << "Returning " << ExitCode::GENERIC_FAILURE;
+  return static_cast<int>(ExitCode::GENERIC_FAILURE);
 }
