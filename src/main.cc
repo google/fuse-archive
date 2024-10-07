@@ -1200,26 +1200,34 @@ struct Reader {
       return false;
     }
 
-    assert(index_within_archive <= want);
-    LOG(DEBUG) << "Advancing " << *this << " from [" << index_within_archive
-               << "] to [" << want << "]";
+    if (index_within_archive == want) {
+      return true;
+    }
 
-    while (index_within_archive < want) {
+    assert(index_within_archive < want);
+    LOG(DEBUG) << "Advancing " << *this << " from entry "
+               << index_within_archive << " to entry " << want;
+
+    do {
       const int status = archive_read_next_header(archive.get(), &entry);
 
       if (status == ARCHIVE_EOF) {
-        LOG(ERROR) << "Inconsistent archive";
+        LOG(ERROR)
+            << "Inconsistent archive: Reached EOF while advancing from entry "
+            << index_within_archive << " to entry " << want;
         return false;
       }
 
       if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
-        LOG(ERROR) << archive_error_string(archive.get());
+        LOG(ERROR) << "Cannot advance from entry " << index_within_archive
+                   << " to entry " << want << ": "
+                   << archive_error_string(archive.get());
         return false;
       }
 
       index_within_archive++;
       offset_within_entry = 0;
-    }
+    } while (index_within_archive < want);
 
     assert(index_within_archive == want);
     return true;
@@ -1246,8 +1254,8 @@ struct Reader {
     }
 
     LOG(DEBUG) << "Advancing " << *this << " from offset "
-               << offset_within_entry << " to offset " << want << " in ["
-               << index_within_archive << "]";
+               << offset_within_entry << " to offset " << want << " in entry "
+               << index_within_archive;
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
@@ -1371,7 +1379,9 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
     return nullptr;
   }
 
-  LOG(DEBUG) << "Acquiring " << *r;
+  LOG(DEBUG) << "Acquiring " << *r << " currently at offset "
+             << r->offset_within_entry << " of entry ["
+             << r->index_within_archive << "]";
   return r;
 }
 
@@ -1862,6 +1872,16 @@ void ResolveHardlinks() {
 }
 
 void CheckRawArchive(Archive* const a) {
+  if (LOG_IS_ON(DEBUG)) {
+    LOG(DEBUG) << "Format " << archive_format_name(a);
+    const int n = archive_filter_count(a);
+    LOG(DEBUG) << "There are " << n << " filters";
+    for (int i = 0; i < n; i++) {
+      LOG(DEBUG) << "Filter #" << i << ": " << archive_filter_name(a, i) << " ("
+                 << archive_filter_code(a, i) << ")";
+    }
+  }
+
   if (archive_format(a) != ARCHIVE_FORMAT_RAW) {
     return;
   }
