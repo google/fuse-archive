@@ -1111,9 +1111,11 @@ int my_file_switch(Archive*, void* /*data0*/, void* /*data1*/) {
   return ARCHIVE_OK;
 }
 
-void Check(int const status) {
+void Check(int const status, Archive* const a) {
   if (status != ARCHIVE_OK) {
-    throw std::runtime_error("Unexpected archive error");
+    const std::string_view error = archive_error_string(a);
+    LOG(ERROR) << error;
+    ThrowExitCode(error);
   }
 }
 
@@ -1363,9 +1365,9 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
       archive_read_add_passphrase(a.get(), g_password.c_str());
     }
 
-    Check(archive_read_support_filter_all(a.get()));
-    Check(archive_read_support_format_all(a.get()));
-    Check(archive_read_support_format_raw(a.get()));
+    Check(archive_read_support_filter_all(a.get()), a.get());
+    Check(archive_read_support_format_all(a.get()), a.get());
+    Check(archive_read_support_format_raw(a.get()), a.get());
     if (archive_read_open_filename(a.get(), g_archive_realpath, 16384) !=
         ARCHIVE_OK) {
       LOG(ERROR) << archive_error_string(a.get());
@@ -1933,18 +1935,19 @@ void BuildTree() {
     throw std::bad_alloc();
   }
 
-  Check(archive_read_set_passphrase_callback(a.get(), nullptr, &ReadPassword));
-  Check(archive_read_support_filter_all(a.get()));
-  Check(archive_read_support_format_all(a.get()));
-  Check(archive_read_support_format_raw(a.get()));
+  Check(archive_read_set_passphrase_callback(a.get(), nullptr, &ReadPassword),
+        a.get());
+  Check(archive_read_support_filter_all(a.get()), a.get());
+  Check(archive_read_support_format_all(a.get()), a.get());
+  Check(archive_read_support_format_raw(a.get()), a.get());
 
-  Check(archive_read_set_callback_data(a.get(), nullptr));
-  Check(archive_read_set_close_callback(a.get(), my_file_close));
-  Check(archive_read_set_open_callback(a.get(), my_file_open));
-  Check(archive_read_set_read_callback(a.get(), my_file_read));
-  Check(archive_read_set_seek_callback(a.get(), my_file_seek));
-  Check(archive_read_set_skip_callback(a.get(), my_file_skip));
-  Check(archive_read_set_switch_callback(a.get(), my_file_switch));
+  Check(archive_read_set_callback_data(a.get(), nullptr), a.get());
+  Check(archive_read_set_close_callback(a.get(), my_file_close), a.get());
+  Check(archive_read_set_open_callback(a.get(), my_file_open), a.get());
+  Check(archive_read_set_read_callback(a.get(), my_file_read), a.get());
+  Check(archive_read_set_seek_callback(a.get(), my_file_seek), a.get());
+  Check(archive_read_set_skip_callback(a.get(), my_file_skip), a.get());
+  Check(archive_read_set_switch_callback(a.get(), my_file_switch), a.get());
   if (archive_read_open1(a.get()) != ARCHIVE_OK) {
     LOG(ERROR) << "Cannot open archive: " << archive_error_string(a.get());
     throw ExitCode::INVALID_ARCHIVE_HEADER;
@@ -2050,7 +2053,7 @@ int my_readlink(const char* const path,
   return 0;
 }
 
-int my_open(const char* const path, fuse_file_info* const ffi) {
+int my_open(const char* const path, fuse_file_info* const ffi) try {
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
@@ -2088,13 +2091,16 @@ int my_open(const char* const path, fuse_file_info* const ffi) {
   ffi->fh = reinterpret_cast<uintptr_t>(ur.release());
   LOG(DEBUG) << "Opened " << *n;
   return 0;
+} catch (...) {
+  LOG(DEBUG) << "Caught exception";
+  return -EIO;
 }
 
 int my_read(const char*,
             char* const dst_ptr,
             size_t dst_len,
             off_t offset,
-            fuse_file_info* const ffi) {
+            fuse_file_info* const ffi) try {
   if (offset < 0 || dst_len > std::numeric_limits<int>::max()) {
     return -EINVAL;
   }
@@ -2180,6 +2186,9 @@ int my_read(const char*,
   }
 
   return r->Read(dst_ptr, dst_len);
+} catch (...) {
+  LOG(DEBUG) << "Caught exception";
+  return -EIO;
 }
 
 int my_release(const char*, fuse_file_info* const ffi) {
@@ -2232,6 +2241,7 @@ int my_readdir(const char* path,
     }
   }
 
+  LOG(DEBUG) << "Listed contents of " << Path(path);
   return 0;
 }
 
