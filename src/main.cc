@@ -217,13 +217,11 @@ int g_password_count = 0;
 // Has the password been actually checked yet?
 bool g_password_checked = false;
 
-// g_archive_is_raw is whether the archive file is 'cooked' or 'raw'.
-//
 // We support 'cooked' archive files (e.g. foo.tar.gz or foo.zip) but also what
 // libarchive calls 'raw' files (e.g. foo.gz), which are compressed but not
 // explicitly an archive (a collection of files). libarchive can still present
 // it as an implicit archive containing 1 file.
-bool g_archive_is_raw = false;
+enum class ArchiveFormat : int { RAW = ARCHIVE_FORMAT_RAW } g_archive_format;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
@@ -1421,7 +1419,7 @@ std::string GetNormalizedPath(Entry* const e) {
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive_is_raw && path == "data") {
+  if (g_archive_format == ArchiveFormat::RAW && path == "data") {
     return Path(g_archive_path)
         .Split()
         .second.WithoutFinalExtension()
@@ -1874,8 +1872,11 @@ void ResolveHardlinks() {
 }
 
 void CheckRawArchive(Archive* const a) {
+  g_archive_format = ArchiveFormat(archive_format(a));
+
   if (LOG_IS_ON(DEBUG)) {
-    LOG(DEBUG) << "Format " << archive_format_name(a);
+    LOG(DEBUG) << "Format " << archive_format_name(a) << " ("
+               << static_cast<int>(g_archive_format) << ")";
     const int n = archive_filter_count(a);
     LOG(DEBUG) << "There are " << n << " filters";
     for (int i = 0; i < n; i++) {
@@ -1884,14 +1885,13 @@ void CheckRawArchive(Archive* const a) {
     }
   }
 
-  if (archive_format(a) != ARCHIVE_FORMAT_RAW) {
+  if (g_archive_format != ArchiveFormat::RAW) {
     return;
   }
 
   // For 'raw' archives, check that at least one of the compression filters
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
-  g_archive_is_raw = true;
   LOG(DEBUG) << "The archive is a 'raw' archive";
 
   for (int n = archive_filter_count(a); n > 0;) {
