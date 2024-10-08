@@ -2009,6 +2009,13 @@ void BuildTree() {
               << " bytes of disk space";
     assert(z.st_size == g_cache_size);
   }
+
+  if (g_cache) {
+    if (close(g_archive_fd) < 0) {
+      PLOG(ERROR) << "Cannot close archive file";
+    }
+    g_archive_fd = -1;
+  }
 }
 
 // ---- FUSE Callbacks
