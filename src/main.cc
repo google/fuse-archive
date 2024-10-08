@@ -200,14 +200,6 @@ int g_archive_fd = -1;
 // Size of the archive file.
 int64_t g_archive_size = 0;
 
-// Canonicalised absolute path of the archive file. The command line argument
-// may give a relative filename (one that doesn't start with a slash) and the
-// fuse_main function may change the current working directory, so subsequent
-// archive_read_open_filename calls use this absolute filepath instead.
-// g_archive_path is still used for logging. g_archive_realpath is allocated in
-// BuildTree() and never freed.
-const char* g_archive_realpath = nullptr;
-
 // Decryption password.
 std::string g_password;
 
@@ -1178,8 +1170,63 @@ struct Reader {
   struct Buffer {
     std::int64_t pos = 0;
     std::byte bytes[16 * 1024];
+
+    static int Close(Archive*, void*) { return ARCHIVE_OK; }
+
+    static int Open(Archive*, void*) { return ARCHIVE_OK; }
+
+    static ssize_t Read(Archive* const a,
+                        void* const p,
+                        const void** const out) {
+      assert(p);
+      Buffer& b = *static_cast<Buffer*>(p);
+      while (true) {
+        const ssize_t n = pread(g_archive_fd, b.bytes, sizeof(b.bytes), b.pos);
+        if (n >= 0) {
+          b.pos += n;
+          *out = b.bytes;
+          return n;
+        }
+
+        if (errno == EINTR) {
+          continue;
+        }
+
+        archive_set_error(a, errno, "Cannot read archive file: %s",
+                          strerror(errno));
+        return ARCHIVE_FATAL;
+      }
+    }
+
+    static int64_t Seek(Archive*,
+                        void* const p,
+                        int64_t const offset,
+                        int const whence) {
+      assert(p);
+      Buffer& b = *static_cast<Buffer*>(p);
+      switch (whence) {
+        case SEEK_SET:
+          b.pos = offset;
+          return b.pos;
+        case SEEK_CUR:
+          b.pos += offset;
+          return b.pos;
+        case SEEK_END:
+          b.pos = g_archive_size + offset;
+          return b.pos;
+      }
+      return ARCHIVE_FATAL;
+    }
+
+    static int64_t Skip(Archive*, void* const p, int64_t const delta) {
+      assert(p);
+      Buffer& b = *static_cast<Buffer*>(p);
+      b.pos += delta;
+      return delta;
+    }
   };
 
+  std::unique_ptr<Buffer> buffer = std::make_unique<Buffer>();
   ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
   int64_t index_within_archive = -1;
@@ -1202,9 +1249,20 @@ struct Reader {
     Check(archive_read_support_filter_all(archive.get()), archive.get());
     Check(archive_read_support_format_all(archive.get()), archive.get());
     Check(archive_read_support_format_raw(archive.get()), archive.get());
-    Check(archive_read_open_filename(archive.get(), g_archive_realpath,
-                                     16 * 1024),
+
+    Check(archive_read_set_callback_data(archive.get(), buffer.get()),
           archive.get());
+    Check(archive_read_set_close_callback(archive.get(), Buffer::Close),
+          archive.get());
+    Check(archive_read_set_open_callback(archive.get(), Buffer::Open),
+          archive.get());
+    Check(archive_read_set_read_callback(archive.get(), Buffer::Read),
+          archive.get());
+    Check(archive_read_set_seek_callback(archive.get(), Buffer::Seek),
+          archive.get());
+    Check(archive_read_set_skip_callback(archive.get(), Buffer::Skip),
+          archive.get());
+    Check(archive_read_open1(archive.get()), archive.get());
     LOG(DEBUG) << "Created " << *this;
   }
 
@@ -1340,6 +1398,7 @@ int Reader::count = 0;
 
 // Swaps fields of two Readers.
 void swap(Reader& a, Reader& b) {
+  std::swap(a.buffer, b.buffer);
   std::swap(a.archive, b.archive);
   std::swap(a.entry, b.entry);
   std::swap(a.index_within_archive, b.index_within_archive);
@@ -1911,13 +1970,7 @@ void BuildTree() {
     throw ExitCode::GENERIC_FAILURE;
   }
 
-  g_archive_realpath = realpath(g_archive_path.c_str(), nullptr);
-  if (!g_archive_realpath) {
-    PLOG(ERROR) << "Cannot get absolute path of " << Path(g_archive_path);
-    throw ExitCode::CANNOT_OPEN_ARCHIVE;
-  }
-
-  g_archive_fd = open(g_archive_realpath, O_RDONLY);
+  g_archive_fd = open(g_archive_path.c_str(), O_RDONLY);
   if (g_archive_fd < 0) {
     PLOG(ERROR) << "Cannot open " << Path(g_archive_path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
@@ -1928,6 +1981,7 @@ void BuildTree() {
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   } else {
     g_archive_size = z.st_size;
+    LOG(DEBUG) << "Archive file is " << g_archive_size << " bytes big";
   }
 
   const ArchivePtr a(archive_read_new());

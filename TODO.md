@@ -46,6 +46,6 @@
 - [x] Add tests for the `zstd` compression method.
 - [x] Add tests for the `Z` compression method.
 - [x] Add a `-o nohardlink` option.
-- [X] Optimize the tree structure in order to avoid storing all the full paths in memory.
+- [x] Optimize the tree structure in order to avoid storing all the full paths in memory.
+- [x] Optimize the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
 - [ ] Document the cache system.
-- [ ] Optimize the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
