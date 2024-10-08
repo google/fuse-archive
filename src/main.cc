@@ -1172,9 +1172,15 @@ bool ReadFromSideBuffer(int64_t const index_within_archive,
 // A Reader is backed by its own archive_read_open_filename call, managed by
 // libarchive, so each can be positioned independently.
 struct Reader {
+  // Number of Readers created so far.
   static int count;
 
-  ArchivePtr archive;
+  struct Buffer {
+    std::int64_t pos = 0;
+    std::byte bytes[16 * 1024];
+  };
+
+  ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
   int64_t index_within_archive = -1;
   int64_t offset_within_entry = 0;
@@ -1182,7 +1188,23 @@ struct Reader {
 
   ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
 
-  explicit Reader(ArchivePtr archive) : archive(std::move(archive)) {
+  Reader() {
+    if (!archive) {
+      LOG(ERROR) << "Out of memory";
+      throw std::bad_alloc();
+    }
+
+    if (!g_password.empty()) {
+      Check(archive_read_add_passphrase(archive.get(), g_password.c_str()),
+            archive.get());
+    }
+
+    Check(archive_read_support_filter_all(archive.get()), archive.get());
+    Check(archive_read_support_format_all(archive.get()), archive.get());
+    Check(archive_read_support_format_raw(archive.get()), archive.get());
+    Check(archive_read_open_filename(archive.get(), g_archive_realpath,
+                                     16 * 1024),
+          archive.get());
     LOG(DEBUG) << "Created " << *this;
   }
 
@@ -1196,10 +1218,6 @@ struct Reader {
   //
   // It returns success (true) or failure (false).
   bool AdvanceIndex(int64_t const want) {
-    if (!archive) {
-      return false;
-    }
-
     if (index_within_archive == want) {
       return true;
     }
@@ -1239,12 +1257,14 @@ struct Reader {
   //
   // It returns success (true) or failure (false).
   bool AdvanceOffset(int64_t const want) {
-    if (!archive.get() || !entry) {
+    if (!entry) {
       return false;
     }
 
     if (want < offset_within_entry) {
       // We can't walk backwards.
+      LOG(DEBUG) << *this << " cannot go backwards from offset "
+                 << offset_within_entry << " to offset " << want;
       return false;
     }
 
@@ -1353,26 +1373,7 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
     r = std::move(g_saved_readers[best_i].first);
     g_saved_readers[best_i].second = 0;
   } else {
-    ArchivePtr a(archive_read_new());
-    if (!a) {
-      LOG(ERROR) << "Out of memory";
-      return nullptr;
-    }
-
-    if (!g_password.empty()) {
-      archive_read_add_passphrase(a.get(), g_password.c_str());
-    }
-
-    Check(archive_read_support_filter_all(a.get()), a.get());
-    Check(archive_read_support_format_all(a.get()), a.get());
-    Check(archive_read_support_format_raw(a.get()), a.get());
-    if (archive_read_open_filename(a.get(), g_archive_realpath, 16384) !=
-        ARCHIVE_OK) {
-      LOG(ERROR) << archive_error_string(a.get());
-      return nullptr;
-    }
-
-    r = std::make_unique<Reader>(std::move(a));
+    r = std::make_unique<Reader>();
   }
 
   if (!r->AdvanceIndex(want_index_within_archive)) {
