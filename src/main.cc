@@ -59,6 +59,7 @@
 #include <utility>
 #include <vector>
 
+#include <boost/intrusive/list.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/intrusive/unordered_set.hpp>
 
@@ -519,6 +520,12 @@ blkcnt_t g_block_count = 1;
 
 namespace bi = boost::intrusive;
 
+#ifdef NDEBUG
+using LinkMode = bi::link_mode<bi::normal_link>;
+#else
+using LinkMode = bi::link_mode<bi::safe_link>;
+#endif
+
 struct Node {
   // Name of this node in the context of its parent. This name should be a valid
   // and non-empty filename, and it shouldn't contain any '/' separator. The
@@ -555,12 +562,6 @@ struct Node {
   // root directory which has a null parent pointer.
   Node* parent = nullptr;
 
-#ifdef NDEBUG
-  using LinkMode = bi::link_mode<bi::normal_link>;
-#else
-  using LinkMode = bi::link_mode<bi::safe_link>;
-#endif
-
   // Hook used to index Nodes by parent.
   using ByParent = bi::slist_member_hook<LinkMode>;
   ByParent by_parent;
@@ -579,13 +580,9 @@ struct Node {
   using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<true>>;
   ByPath by_path;
 
-  FileType GetType() const {
-    return GetFileType(mode);
-  }
+  FileType GetType() const { return GetFileType(mode); }
 
-  bool IsDir() const {
-    return S_ISDIR(mode);
-  }
+  bool IsDir() const { return S_ISDIR(mode); }
 
   void AddChild(Node* const child) {
     assert(child);
@@ -683,35 +680,6 @@ struct Hardlink {
 
 // Hardlinks to resolve.
 std::vector<Hardlink> g_hardlinks_to_resolve;
-
-// g_saved_readers is a cache of warm readers. libarchive is designed for
-// streaming access, not random access, and generally does not support seeking
-// backwards. For example, if some other program reads "/foo", "/bar" and then
-// "/baz" sequentially from an archive (via this program) and those correspond
-// to the 60th, 40th and 50th archive entries in that archive, then:
-//
-//  - A naive implementation (calling archive_read_free when each FUSE file is
-//    closed) would have to start iterating from the first archive entry each
-//    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
-//  - Saving readers in an LRU (Least Recently Used) cache (calling
-//    release_reader when each FUSE file is closed) allows just 110 iterations
-//    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for "/baz".
-//
-// Re-use eligibility is based on the archive entries' sequential numerical
-// indexes within the archive, not on their string pathnames.
-//
-// When copying all of the files out of an archive (e.g. "cp -r" from the
-// command line) and the files are accessed in the natural order, caching
-// readers means that the overall time can be linear instead of quadratic.
-//
-// Each array element is a pair. The first half of the pair is a unique_ptr for
-// the Reader. The second half of the pair is a uint64_t LRU priority value.
-// Higher/lower values are more/less recently used and the release_reader
-// function evicts the array element with the lowest LRU priority value.
-struct Reader;
-constexpr int NUM_SAVED_READERS = 8;
-std::pair<std::unique_ptr<Reader>, uint64_t>
-    g_saved_readers[NUM_SAVED_READERS] = {};
 
 // g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
 // statically allocated buffers used as a destination for decompressed bytes
@@ -1176,9 +1144,9 @@ bool ReadFromSideBuffer(int64_t const index_within_archive,
 // other state to point to a particular offset (in decompressed space) of a
 // particular archive entry (identified by its index) in an archive.
 //
-// A Reader is backed by its own archive_read_open_filename call, managed by
-// libarchive, so each can be positioned independently.
-struct Reader {
+// A Reader is backed by its own archive_read_open call so each can be
+// positioned independently.
+struct Reader : bi::list_base_hook<LinkMode> {
   // Number of Readers created so far.
   static int count;
 
@@ -1419,31 +1387,54 @@ void swap(Reader& a, Reader& b) {
   std::swap(a.id, b.id);
 }
 
-// Returns a Reader positioned at the start (offset == 0) of the given index'th
-// entry of the archive.
-std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
-  assert(want_index_within_archive >= 0);
+// A cache of warm Readers. Libarchive is designed for streaming access, not
+// random access, and does not support seeking backwards. For example, if some
+// other program reads "/foo", "/bar" and then "/baz" sequentially from an
+// archive (via this program) and those correspond to the 60th, 40th and 50th
+// archive entries in that archive, then:
+//
+//  - A naive implementation (calling archive_read_free when each FUSE file is
+//    closed) would have to start iterating from the first archive entry each
+//    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
+//  - Saving readers in an LRU (Least Recently Used) cache (calling
+//    release_reader when each FUSE file is closed) allows just 110 iterations
+//    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for "/baz".
+//
+// Re-use eligibility is based on the archive entries' sequential numerical
+// indexes within the archive, not on their string pathnames.
+//
+// When copying all of the files out of an archive (e.g. "cp -r" from the
+// command line) and the files are accessed in the natural order, caching
+// readers means that the overall time can be linear instead of quadratic.
+//
+// The warmest Reader is at the front of the list, and the coldest Reader is at
+// the back.
+bi::list<Reader> g_saved_readers;
 
-  int best_i = -1;
-  int64_t best_index_within_archive = -1;
-  int64_t best_offset_within_entry = -1;
-  for (int i = 0; i < NUM_SAVED_READERS; i++) {
-    const Reader* const sri = g_saved_readers[i].first.get();
-    if (sri &&
-        std::pair(best_index_within_archive, best_offset_within_entry) <
-            std::pair(sri->index_within_archive, sri->offset_within_entry) &&
-        std::pair(sri->index_within_archive, sri->offset_within_entry) <=
-            std::pair(want_index_within_archive, int64_t(0))) {
-      best_i = i;
-      best_index_within_archive = sri->index_within_archive;
-      best_offset_within_entry = sri->offset_within_entry;
+// Returns a Reader positioned at the given offset of the given index'th entry
+// of the archive.
+std::unique_ptr<Reader> AcquireReader(
+    int64_t const want_index_within_archive,
+    int64_t const want_offset_within_entry = 0) {
+  assert(want_index_within_archive >= 0);
+  assert(want_offset_within_entry >= 0);
+
+  // Find the closest warm Reader that is below or at the requested position.
+  Reader* best = nullptr;
+  for (Reader& r : g_saved_readers) {
+    if (std::pair(r.index_within_archive, r.offset_within_entry) <=
+            std::pair(want_index_within_archive, want_offset_within_entry) &&
+        (!best ||
+         std::pair(best->index_within_archive, best->offset_within_entry) <
+             std::pair(r.index_within_archive, r.offset_within_entry))) {
+      best = &r;
     }
   }
 
   std::unique_ptr<Reader> r;
-  if (best_i >= 0) {
-    r = std::move(g_saved_readers[best_i].first);
-    g_saved_readers[best_i].second = 0;
+  if (best) {
+    r.reset(best);
+    g_saved_readers.erase(g_saved_readers.iterator_to(*best));
     LOG(DEBUG) << "Reusing " << *r << " currently at offset "
                << r->offset_within_entry << " of entry "
                << r->index_within_archive;
@@ -1451,7 +1442,8 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
     r = std::make_unique<Reader>();
   }
 
-  if (!r->AdvanceIndex(want_index_within_archive)) {
+  if (!r->AdvanceIndex(want_index_within_archive) ||
+      !r->AdvanceOffset(want_offset_within_entry)) {
     return nullptr;
   }
 
@@ -1460,18 +1452,12 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
 
 // Returns r to the reader cache.
 void ReleaseReader(std::unique_ptr<Reader> r) {
-  LOG(DEBUG) << "Releasing " << *r;
-  int oldest_i = 0;
-  uint64_t oldest_lru_priority = g_saved_readers[0].second;
-  for (int i = 1; i < NUM_SAVED_READERS; i++) {
-    if (oldest_lru_priority > g_saved_readers[i].second) {
-      oldest_lru_priority = g_saved_readers[i].second;
-      oldest_i = i;
-    }
+  LOG(DEBUG) << "Released " << *r;
+  g_saved_readers.push_front(*r.release());
+  constexpr int max_saved_readers = 8;
+  if (g_saved_readers.size() > max_saved_readers) {
+    g_saved_readers.pop_back_and_dispose(std::default_delete<Reader>());
   }
-  static uint64_t next_lru_priority = 0;
-  g_saved_readers[oldest_i].first = std::move(r);
-  g_saved_readers[oldest_i].second = ++next_lru_priority;
 }
 
 // ---- In-Memory Directory Tree
@@ -2226,12 +2212,14 @@ int my_read(const char*,
   // libarchive is designed for streaming access, not random access. If we
   // need to seek backwards, there's more work to do.
   if (offset < r->offset_within_entry) {
+    LOG(DEBUG) << *r << " cannot jump backwards from offset "
+               << r->offset_within_entry << " to " << offset;
     // Acquire a new Reader, swap it with r and release the new Reader. We
     // swap (modify r in-place) instead of updating ffi->fh to point to the
     // new Reader, because libfuse ignores any changes to the ffi->fh value
     // after this function returns (this function is not an 'open' callback).
-    std::unique_ptr<Reader> ur = AcquireReader(r->index_within_archive);
-    if (!ur || !ur->archive || !ur->entry) {
+    std::unique_ptr<Reader> ur = AcquireReader(r->index_within_archive, offset);
+    if (!ur) {
       return -EIO;
     }
     swap(*r, *ur);
