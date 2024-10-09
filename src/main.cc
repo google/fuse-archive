@@ -72,6 +72,28 @@
 
 namespace {
 
+// Timer for debug logs.
+struct Timer {
+  using Clock = std::chrono::steady_clock;
+
+  // Start time.
+  Clock::time_point start = Clock::now();
+
+  // Resets this timer.
+  void Reset() { start = Clock::now(); }
+
+  // Elapsed time in milliseconds.
+  auto Milliseconds() const {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() -
+                                                                 start)
+        .count();
+  }
+
+  friend std::ostream& operator<<(std::ostream& out, const Timer& timer) {
+    return out << timer.Milliseconds() << " ms";
+  }
+};
+
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -470,21 +492,6 @@ enum class FileType : mode_t {
 
 FileType GetFileType(mode_t const mode) {
   return FileType(mode & S_IFMT);
-}
-
-bool IsValid(FileType const t) {
-  switch (t) {
-    case FileType::BlockDevice:
-    case FileType::CharDevice:
-    case FileType::Directory:
-    case FileType::Fifo:
-    case FileType::File:
-    case FileType::Socket:
-    case FileType::Symlink:
-      return true;
-  }
-
-  return false;
 }
 
 std::ostream& operator<<(std::ostream& out, FileType const t) {
@@ -1073,7 +1080,6 @@ int64_t my_file_seek(Archive* const a,
     return ARCHIVE_FATAL;
   }
 
-  PrintProgress();
   return o;
 }
 
@@ -1093,7 +1099,6 @@ int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t const delta) {
     return ARCHIVE_FATAL;
   }
 
-  PrintProgress();
   return o1 - o0;
 }
 
@@ -1538,7 +1543,6 @@ void RehashIfNecessary() {
     Buckets new_buckets(buckets.size() * 2);
     buckets.swap(new_buckets);
     g_nodes_by_path.rehash({buckets.data(), buckets.size()});
-    LOG(DEBUG) << "Rehashed index with " << buckets.size() << " buckets";
   }
 }
 
@@ -1641,9 +1645,12 @@ bool ShouldSkip(FileType const ft) {
     case FileType::Symlink:
       return !g_symlinks;
 
-    default:
+    case FileType::Directory:
+    case FileType::File:
       return false;
   }
+
+  return true;
 }
 
 void CacheFileData(Archive* const a) {
@@ -1760,14 +1767,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
           archive_entry_hardlink_utf8(e) ?: archive_entry_hardlink(e)) {
     // Entry is a hard link. Save it for further resolution.
     std::string target = Path(s).Normalize();
-    LOG(DEBUG) << "Processing Hardlink [" << id << "] " << Path(path) << " -> "
-               << Path(target);
     g_hardlinks_to_resolve.emplace_back(std::move(path), std::move(target));
-    return;
-  }
-
-  if (!IsValid(ft)) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << id << "] " << Path(path);
     return;
   }
 
@@ -1775,8 +1775,6 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
     LOG(DEBUG) << "Skipped " << ft << " [" << id << "] " << Path(path);
     return;
   }
-
-  LOG(DEBUG) << "Processing " << ft << " [" << id << "] " << Path(path);
 
   // Is this entry a directory?
   if (ft == FileType::Directory) {
@@ -1933,35 +1931,24 @@ void ResolveHardlinks() {
 
 void CheckRawArchive(Archive* const a) {
   g_archive_format = ArchiveFormat(archive_format(a));
+  LOG(DEBUG) << "Archive format is " << archive_format_name(a);
 
-  if (LOG_IS_ON(DEBUG)) {
-    LOG(DEBUG) << "Format " << archive_format_name(a) << " ("
-               << static_cast<int>(g_archive_format) << ")";
-    const int n = archive_filter_count(a);
-    LOG(DEBUG) << "There are " << n << " filters";
-    for (int i = 0; i < n; i++) {
-      LOG(DEBUG) << "Filter #" << i << ": " << archive_filter_name(a, i) << " ("
-                 << archive_filter_code(a, i) << ")";
+  int filter_count = 0;
+  for (int i = archive_filter_count(a); i > 0;) {
+    if (archive_filter_code(a, --i) != ARCHIVE_FILTER_NONE) {
+      ++filter_count;
+      LOG(DEBUG) << "Filter #" << filter_count << " is "
+                 << archive_filter_name(a, i);
     }
-  }
-
-  if (g_archive_format != ArchiveFormat::RAW) {
-    return;
   }
 
   // For 'raw' archives, check that at least one of the compression filters
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
-  LOG(DEBUG) << "The archive is a 'raw' archive";
-
-  for (int n = archive_filter_count(a); n > 0;) {
-    if (archive_filter_code(a, --n) != ARCHIVE_FILTER_NONE) {
-      return;
-    }
+  if (g_archive_format == ArchiveFormat::RAW && filter_count == 0) {
+    LOG(ERROR) << "Cannot recognize the archive format";
+    throw ExitCode::INVALID_RAW_ARCHIVE;
   }
-
-  LOG(ERROR) << "Cannot recognize the archive format";
-  throw ExitCode::INVALID_RAW_ARCHIVE;
 }
 
 void BuildTree() {
@@ -1970,6 +1957,7 @@ void BuildTree() {
     throw ExitCode::GENERIC_FAILURE;
   }
 
+  Timer timer;
   g_archive_fd = open(g_archive_path.c_str(), O_RDONLY);
   if (g_archive_fd < 0) {
     PLOG(ERROR) << "Cannot open " << Path(g_archive_path);
@@ -2061,10 +2049,12 @@ void BuildTree() {
     LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
   }
 
-  LOG(INFO) << "The archive contains " << g_nodes_by_path.size() << " items";
-  if (struct stat z; LOG_IS_ON(INFO) && g_cache && fstat(g_cache_fd, &z) == 0) {
-    LOG(INFO) << "The cache takes " << int64_t(z.st_blocks) * block_size
-              << " bytes of disk space";
+  LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
+  LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() << " items";
+  if (struct stat z;
+      LOG_IS_ON(DEBUG) && g_cache && fstat(g_cache_fd, &z) == 0) {
+    LOG(DEBUG) << "The cache takes " << int64_t(z.st_blocks) * block_size
+               << " bytes of disk space";
     assert(z.st_size == g_cache_size);
   }
 
