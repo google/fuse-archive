@@ -763,11 +763,6 @@ uint64_t SideBufferMetadata::next_lru_priority = 0;
 
 SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 
-// The side buffers are also repurposed as source (compressed) and destination
-// (decompressed) buffers during the initial pass over the archive file.
-#define SIDE_BUFFER_INDEX_COMPRESSED 0
-#define SIDE_BUFFER_INDEX_DECOMPRESSED 1
-
 // ---- Libarchive Error Codes
 
 // Converts libarchive errors to fuse-archive exit codes. libarchive doesn't
@@ -1062,12 +1057,14 @@ int my_file_open(Archive*, void* /*data*/) {
   return ARCHIVE_OK;
 }
 
-ssize_t my_file_read(Archive* const a, void*, const void** const out_dst_ptr) {
-  uint8_t* dst_ptr = &g_side_buffer_data[SIDE_BUFFER_INDEX_COMPRESSED][0];
+ssize_t my_file_read(Archive* const a, void*, const void** const out) {
+  // The first side buffers are also repurposed as source (compressed) buffer
+  // during the initial pass over the archive file.
+  uint8_t* const p = g_side_buffer_data[0];
   while (true) {
-    const ssize_t n = read(g_archive_fd, dst_ptr, SIDE_BUFFER_SIZE);
+    const ssize_t n = read(g_archive_fd, p, SIDE_BUFFER_SIZE);
     if (n >= 0) {
-      *out_dst_ptr = dst_ptr;
+      *out = p;
       PrintProgress();
       return n;
     }
