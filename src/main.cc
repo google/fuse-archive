@@ -245,9 +245,6 @@ enum class ArchiveFormat : int { RAW = ARCHIVE_FORMAT_RAW } g_archive_format;
 const uid_t g_uid = getuid();
 const gid_t g_gid = getgid();
 
-// g_displayed_progress is whether we have printed a progress message.
-bool g_displayed_progress = false;
-
 using Clock = std::chrono::system_clock;
 const time_t g_now = Clock::to_time_t(Clock::now());
 
@@ -829,6 +826,10 @@ void SetLogLevel(LogLevel const level) {
 
 #define LOG_IS_ON(level) (LogLevel::level <= g_log_level)
 
+bool g_latest_log_is_ephemeral = false;
+
+enum class ProgressMessage : int;
+
 // Accumulates a log message and logs it.
 class Logger {
  public:
@@ -845,7 +846,13 @@ class Logger {
       oss_ << ": " << strerror(err_);
     }
 
+    if (g_latest_log_is_ephemeral && isatty(STDERR_FILENO)) {
+      const std::string_view s = "\e[F\e[K";
+      write(STDERR_FILENO, s.data(), s.size());
+    }
+
     syslog(static_cast<int>(level_), "%s", std::move(oss_).str().c_str());
+    g_latest_log_is_ephemeral = ephemeral_;
   }
 
   Logger&& operator<<(const auto& a) && {
@@ -853,10 +860,17 @@ class Logger {
     return std::move(*this);
   }
 
+  Logger&& operator<<(ProgressMessage const a) && {
+    oss_ << "Loading " << static_cast<int>(a) << "%";
+    ephemeral_ = true;
+    return std::move(*this);
+  }
+
  private:
   const LogLevel level_;
   const error_t err_;
   std::ostringstream oss_;
+  bool ephemeral_ = false;
 };
 
 #define LOG(level)                    \
@@ -1031,8 +1045,7 @@ void PrintProgress() {
 
   const int percent =
       100 * std::min<int64_t>(pos, g_archive_size) / g_archive_size;
-  LOG(INFO) << "Loading " << percent << "%";
-  g_displayed_progress = true;
+  LOG(INFO) << ProgressMessage(percent);
 }
 
 // The callbacks below are only used during start-up, for the initial pass
@@ -2038,8 +2051,8 @@ void BuildTree() {
     // Resolve hardlinks.
     ResolveHardlinks();
 
-    if (g_displayed_progress) {
-      LOG(INFO) << "Loaded 100%";
+    if (g_latest_log_is_ephemeral) {
+      LOG(INFO) << ProgressMessage(100);
     }
   } catch (ExitCode const error) {
     if (!g_force || g_nodes_by_path.size() <= 1) {
