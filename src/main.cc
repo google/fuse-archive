@@ -1296,8 +1296,7 @@ struct Reader {
     }
 
     assert(index_within_archive < want);
-    LOG(DEBUG) << "Advancing " << *this << " from entry "
-               << index_within_archive << " to entry " << want;
+    const Timer timer;
 
     do {
       const int status = archive_read_next_header(archive.get(), &entry);
@@ -1321,6 +1320,9 @@ struct Reader {
     } while (index_within_archive < want);
 
     assert(index_within_archive == want);
+    LOG(DEBUG) << "Advanced " << *this << " to entry " << want << " in "
+               << timer;
+
     return true;
   }
 
@@ -1330,10 +1332,6 @@ struct Reader {
   //
   // It returns success (true) or failure (false).
   bool AdvanceOffset(int64_t const want) {
-    if (!entry) {
-      return false;
-    }
-
     if (want < offset_within_entry) {
       // We can't walk backwards.
       LOG(DEBUG) << *this << " cannot go backwards from offset "
@@ -1346,9 +1344,7 @@ struct Reader {
       return true;
     }
 
-    LOG(DEBUG) << "Advancing " << *this << " from offset "
-               << offset_within_entry << " to offset " << want << " in entry "
-               << index_within_archive;
+    const Timer timer;
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
@@ -1357,11 +1353,15 @@ struct Reader {
       return false;
     }
 
-    uint8_t* dst_ptr = g_side_buffer_data[sb];
+    uint8_t* const dst_ptr = g_side_buffer_data[sb];
     SideBufferMetadata& meta = g_side_buffer_metadata[sb];
-    while (want > offset_within_entry) {
-      const int64_t original_owe = offset_within_entry;
-      int64_t dst_len = want - original_owe;
+    meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
+    meta.index_within_archive = index_within_archive;
+
+    do {
+      meta.offset_within_entry = offset_within_entry;
+      int64_t dst_len = want - offset_within_entry;
+      assert(dst_len > 0);
       // If the amount we need to advance is greater than the SIDE_BUFFER_SIZE,
       // we need multiple Read calls, but the total advance might not be an
       // exact multiple of SIDE_BUFFER_SIZE. Read that remainder amount first,
@@ -1378,18 +1378,16 @@ struct Reader {
 
       const ssize_t n = Read(dst_ptr, dst_len);
       if (n < 0) {
-        meta.index_within_archive = -1;
-        meta.offset_within_entry = -1;
-        meta.length = -1;
-        meta.lru_priority = 0;
+        meta = SideBufferMetadata{};
         return false;
       }
 
-      meta.index_within_archive = index_within_archive;
-      meta.offset_within_entry = original_owe;
       meta.length = n;
-      meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
-    }
+    } while (want > offset_within_entry);
+
+    assert(offset_within_entry == want);
+    LOG(DEBUG) << "Advanced " << *this << " to offset " << offset_within_entry
+               << " of entry " << index_within_archive << " in " << timer;
 
     return true;
   }
@@ -1446,6 +1444,9 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
   if (best_i >= 0) {
     r = std::move(g_saved_readers[best_i].first);
     g_saved_readers[best_i].second = 0;
+    LOG(DEBUG) << "Reusing " << *r << " currently at offset "
+               << r->offset_within_entry << " of entry "
+               << r->index_within_archive;
   } else {
     r = std::make_unique<Reader>();
   }
@@ -1454,9 +1455,6 @@ std::unique_ptr<Reader> AcquireReader(int64_t const want_index_within_archive) {
     return nullptr;
   }
 
-  LOG(DEBUG) << "Acquiring " << *r << " currently at offset "
-             << r->offset_within_entry << " of entry ["
-             << r->index_within_archive << "]";
   return r;
 }
 
