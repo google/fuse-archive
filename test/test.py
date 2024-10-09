@@ -1318,7 +1318,7 @@ def TestArchiveWithSpecialFiles():
 
 # Tests invalid and absent archives.
 def TestInvalidArchive():
-    CheckArchiveMountingError('', 31)
+    CheckArchiveMountingError('', 11)
     CheckArchiveMountingError('absent.zip', 11)
     CheckArchiveMountingError('romeo.txt', 30)
     if os.getuid() != 0:

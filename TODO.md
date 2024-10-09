@@ -48,4 +48,5 @@
 - [x] Add a `-o nohardlink` option.
 - [x] Optimize the tree structure in order to avoid storing all the full paths in memory.
 - [x] Optimize the `Reader` struct in order to reuse the existing archive file descriptor instead of opening a new one every time.
+- [x] Check the archive file type to avoid reading from a pipe or a directory.
 - [ ] Document the cache system.

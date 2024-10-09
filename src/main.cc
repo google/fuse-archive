@@ -1980,6 +1980,10 @@ void BuildTree() {
   if (struct stat z; fstat(g_archive_fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat " << Path(g_archive_path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
+  } else if (const FileType ft = GetFileType(z.st_mode); ft != FileType::File) {
+    LOG(ERROR) << "Archive " << Path(g_archive_path)
+               << " is not a regular file: It is a " << ft;
+    throw ExitCode::CANNOT_OPEN_ARCHIVE;
   } else {
     g_archive_size = z.st_size;
     LOG(DEBUG) << "Archive file is " << g_archive_size << " bytes big";
