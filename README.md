@@ -3,18 +3,18 @@ title: fuse-archive
 section: 1
 header: User Manual
 footer: fuse-archive 0.1.15
-date: September 2024
+date: October 2024
 ---
 
-# Name
+# NAME
 
 **fuse-archive** - Mount an archive or compressed file as a FUSE file system.
 
-# Synopsis
+# SYNOPSIS
 
 **fuse-archive** [*options*] *archive-file* [*mount-point*]
 
-# Description
+# DESCRIPTION
 
 **fuse-archive** is a program that serves an archive or compressed file (e.g.
 `foo.tar`, `foo.tar.gz`, `foo.xz` or `foo.zip`) as a read-only
@@ -28,7 +28,7 @@ It is similar to [**archivemount**](https://github.com/cybernoid/archivemount)
 but can be much faster (see the Performance section below) although it can only
 mount read-only, not read-write.
 
-# Options
+# OPTIONS
 
 **-\-help** **-h**
 :   Print help
@@ -81,7 +81,21 @@ mount read-only, not read-write.
 **-d**
 :   Foreground mode with debug output
 
-# Performance
+# CACHING
+
+By default, **fuse-archive** decompresses and caches the whole archive before
+serving its contents. This ensures that the served files can be accessed in any
+order without any performance issue.
+
+Decompressed data is cached in an anonymous file created in the `tmp` directory
+(`$TMPDIR` or `/tmp` by default). This cache can use a significant amount of
+disk space, but it is automatically deleted when the archive is unmounted.
+
+If there is not enough temporary space to cache the whole archive,
+**fuse-archive** can be run with the `-o nocache` option. However, this can
+cause **fuse-archive** to be much slower at serving files.
+
+# PERFORMANCE
 
 Create a single `.tar.gz` file that is 256 MiB decompressed and 255 KiB
 compressed (the file just contains repeated 0x00 NUL bytes):
@@ -91,42 +105,37 @@ $ truncate --size=256M zeroes
 $ tar cfz zeroes-256mib.tar.gz zeroes
 ```
 
-**fuse-archive** timings:
+Here are **fuse-archive**'s timings:
 
 ```
 $ time fuse-archive zeroes-256mib.tar.gz mnt
 real    0m0.443s
 
 $ dd if=mnt/zeroes of=/dev/null status=progress
-524288+0 records in
-524288+0 records out
 268435456 bytes (268 MB, 256 MiB) copied, 0.836048 s, 321 MB/s
 
 $ fusermount -u mnt
 ```
 
-**archivemount** timings:
+For comparison, here are **archivemount**'s timings:
 
 ```
 $ time archivemount zeroes-256mib.tar.gz mnt
 real    0m0.581s
 
 $ dd if=mnt/zeroes of=/dev/null status=progress
-268288512 bytes (268 MB, 256 MiB) copied, 569 s, 471 kB/s
-524288+0 records in
-524288+0 records out
 268435456 bytes (268 MB, 256 MiB) copied, 570.146 s, 471 kB/s
 
 $ fusermount -u mnt
 ```
 
-Here, **fuse-archive** takes about the same time to scan the archive, bind the
-mountpoint and daemonize, but it is **~700× faster** (0.83s vs 570s) to copy out
-the decompressed contents. This is because **fuse-archive** does not use
-**archivemount**'s
-[quadratic complexity algorithm](https://github.com/cybernoid/archivemount/issues/21).
+In this case, **fuse-archive** takes about the same time to load the archive as
+**archivemount**, but it is **~700× faster** (0.83s vs 570s) to copy out the
+decompressed contents. This is because **fuse-archive** fully caches the archive
+and does not use **archivemount**'s [quadratic complexity
+algorithm](https://github.com/cybernoid/archivemount/issues/21).
 
-# Return Value
+# RETURN VALUE
 
 **0**
 :   Success.
@@ -168,11 +177,6 @@ the decompressed contents. This is because **fuse-archive** does not use
 **32**
 :   Cannot read and extract the archive.
 
-# Disclaimer
-
-This is not an official Google product. It is just code that happens to be owned
-by Google.
-
-# See Also
+# SEE ALSO
 
 archivemount(1), mount-zip(1), fuse-zip(1), fusermount(1), fuse(8), umount(8)

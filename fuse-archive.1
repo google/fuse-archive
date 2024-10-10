@@ -14,17 +14,17 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "fuse-archive" "1" "September 2024" "fuse-archive 0.1.15" "User Manual"
+.TH "fuse-archive" "1" "October 2024" "fuse-archive 0.1.15" "User Manual"
 .hy
-.SH Name
+.SH NAME
 .PP
 \f[B]fuse-archive\f[R] - Mount an archive or compressed file as a FUSE
 file system.
-.SH Synopsis
+.SH SYNOPSIS
 .PP
 \f[B]fuse-archive\f[R] [\f[I]options\f[R]] \f[I]archive-file\f[R]
 [\f[I]mount-point\f[R]]
-.SH Description
+.SH DESCRIPTION
 .PP
 \f[B]fuse-archive\f[R] is a program that serves an archive or compressed
 file (e.g.
@@ -42,7 +42,7 @@ It is similar to
 \f[B]archivemount\f[R] (https://github.com/cybernoid/archivemount) but
 can be much faster (see the Performance section below) although it can
 only mount read-only, not read-write.
-.SH Options
+.SH OPTIONS
 .TP
 \f[B]--help\f[R] \f[B]-h\f[R]
 Print help
@@ -97,7 +97,24 @@ Foreground mode
 .TP
 \f[B]-d\f[R]
 Foreground mode with debug output
-.SH Performance
+.SH CACHING
+.PP
+By default, \f[B]fuse-archive\f[R] decompresses and caches the whole
+archive before serving its contents.
+This ensures that the served files can be accessed in any order without
+any performance issue.
+.PP
+Decompressed data is cached in an anonymous file created in the
+\f[V]tmp\f[R] directory (\f[V]$TMPDIR\f[R] or \f[V]/tmp\f[R] by
+default).
+This cache can use a significant amount of disk space, but it is
+automatically deleted when the archive is unmounted.
+.PP
+If there is not enough temporary space to cache the whole archive,
+\f[B]fuse-archive\f[R] can be run with the \f[V]-o nocache\f[R] option.
+However, this can cause \f[B]fuse-archive\f[R] to be much slower at
+serving files.
+.SH PERFORMANCE
 .PP
 Create a single \f[V].tar.gz\f[R] file that is 256 MiB decompressed and
 255 KiB compressed (the file just contains repeated 0x00 NUL bytes):
@@ -109,7 +126,7 @@ $ tar cfz zeroes-256mib.tar.gz zeroes
 \f[R]
 .fi
 .PP
-\f[B]fuse-archive\f[R] timings:
+Here are \f[B]fuse-archive\f[R]\[cq]s timings:
 .IP
 .nf
 \f[C]
@@ -117,15 +134,13 @@ $ time fuse-archive zeroes-256mib.tar.gz mnt
 real    0m0.443s
 
 $ dd if=mnt/zeroes of=/dev/null status=progress
-524288+0 records in
-524288+0 records out
 268435456 bytes (268 MB, 256 MiB) copied, 0.836048 s, 321 MB/s
 
 $ fusermount -u mnt
 \f[R]
 .fi
 .PP
-\f[B]archivemount\f[R] timings:
+For comparison, here are \f[B]archivemount\f[R]\[cq]s timings:
 .IP
 .nf
 \f[C]
@@ -133,22 +148,19 @@ $ time archivemount zeroes-256mib.tar.gz mnt
 real    0m0.581s
 
 $ dd if=mnt/zeroes of=/dev/null status=progress
-268288512 bytes (268 MB, 256 MiB) copied, 569 s, 471 kB/s
-524288+0 records in
-524288+0 records out
 268435456 bytes (268 MB, 256 MiB) copied, 570.146 s, 471 kB/s
 
 $ fusermount -u mnt
 \f[R]
 .fi
 .PP
-Here, \f[B]fuse-archive\f[R] takes about the same time to scan the
-archive, bind the mountpoint and daemonize, but it is \f[B]\[ti]700×
+In this case, \f[B]fuse-archive\f[R] takes about the same time to load
+the archive as \f[B]archivemount\f[R], but it is \f[B]\[ti]700×
 faster\f[R] (0.83s vs 570s) to copy out the decompressed contents.
-This is because \f[B]fuse-archive\f[R] does not use
-\f[B]archivemount\f[R]\[cq]s quadratic complexity
+This is because \f[B]fuse-archive\f[R] fully caches the archive and does
+not use \f[B]archivemount\f[R]\[cq]s quadratic complexity
 algorithm (https://github.com/cybernoid/archivemount/issues/21).
-.SH Return Value
+.SH RETURN VALUE
 .TP
 \f[B]0\f[R]
 Success.
@@ -189,11 +201,7 @@ Invalid archive header.
 .TP
 \f[B]32\f[R]
 Cannot read and extract the archive.
-.SH Disclaimer
-.PP
-This is not an official Google product.
-It is just code that happens to be owned by Google.
-.SH See Also
+.SH SEE ALSO
 .PP
 archivemount(1), mount-zip(1), fuse-zip(1), fusermount(1), fuse(8),
 umount(8)
