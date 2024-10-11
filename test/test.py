@@ -724,6 +724,18 @@ def TestArchiveWithOptions(options=[]):
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
         },
+        'romeo.bzip2.zip': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        },
+        'romeo.lzma.zip': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        },
+        'romeo.xz.zip': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        },
         'zeroes-256mib.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'zeroes': {'mode': '-rw-r--r--', 'mtime': 1630037295000000000, 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2'},
