@@ -666,9 +666,6 @@ Buckets buckets(1 << 4);
 
 NodesByPath g_nodes_by_path({buckets.data(), buckets.size()});
 
-using NodesByIndex = std::vector<Node*>;
-NodesByIndex g_nodes_by_index;
-
 // Root node of the tree.
 Node* g_root_node = nullptr;
 
@@ -1150,73 +1147,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Number of Readers created so far.
   static int count;
 
-  struct Buffer {
-    std::int64_t pos = 0;
-    std::byte bytes[16 * 1024];
-
-    static int Close(Archive*, void*) { return ARCHIVE_OK; }
-
-    static int Open(Archive*, void*) { return ARCHIVE_OK; }
-
-    static ssize_t Read(Archive* const a,
-                        void* const p,
-                        const void** const out) {
-      assert(p);
-      Buffer& b = *static_cast<Buffer*>(p);
-      while (true) {
-        const ssize_t n = pread(g_archive_fd, b.bytes, sizeof(b.bytes), b.pos);
-        if (n >= 0) {
-          b.pos += n;
-          *out = b.bytes;
-          return n;
-        }
-
-        if (errno == EINTR) {
-          continue;
-        }
-
-        archive_set_error(a, errno, "Cannot read archive file: %s",
-                          strerror(errno));
-        return ARCHIVE_FATAL;
-      }
-    }
-
-    static int64_t Seek(Archive*,
-                        void* const p,
-                        int64_t const offset,
-                        int const whence) {
-      assert(p);
-      Buffer& b = *static_cast<Buffer*>(p);
-      switch (whence) {
-        case SEEK_SET:
-          b.pos = offset;
-          return b.pos;
-        case SEEK_CUR:
-          b.pos += offset;
-          return b.pos;
-        case SEEK_END:
-          b.pos = g_archive_size + offset;
-          return b.pos;
-      }
-      return ARCHIVE_FATAL;
-    }
-
-    static int64_t Skip(Archive*, void* const p, int64_t const delta) {
-      assert(p);
-      Buffer& b = *static_cast<Buffer*>(p);
-      b.pos += delta;
-      return delta;
-    }
-  };
-
-  std::unique_ptr<Buffer> buffer = std::make_unique<Buffer>();
+  int id = ++count;
   ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
   int64_t index_within_archive = -1;
   int64_t offset_within_entry = 0;
-  int id = ++count;
-
-  ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
+  std::int64_t pos = 0;
+  std::byte bytes[16 * 1024];
 
   Reader() {
     if (!archive) {
@@ -1233,18 +1170,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_all(archive.get()), archive.get());
     Check(archive_read_support_format_raw(archive.get()), archive.get());
 
-    Check(archive_read_set_callback_data(archive.get(), buffer.get()),
-          archive.get());
-    Check(archive_read_set_close_callback(archive.get(), Buffer::Close),
-          archive.get());
-    Check(archive_read_set_open_callback(archive.get(), Buffer::Open),
-          archive.get());
-    Check(archive_read_set_read_callback(archive.get(), Buffer::Read),
-          archive.get());
-    Check(archive_read_set_seek_callback(archive.get(), Buffer::Seek),
-          archive.get());
-    Check(archive_read_set_skip_callback(archive.get(), Buffer::Skip),
-          archive.get());
+    Check(archive_read_set_callback_data(archive.get(), this), archive.get());
+    Check(archive_read_set_close_callback(archive.get(), Close), archive.get());
+    Check(archive_read_set_open_callback(archive.get(), Open), archive.get());
+    Check(archive_read_set_read_callback(archive.get(), Read), archive.get());
+    Check(archive_read_set_seek_callback(archive.get(), Seek), archive.get());
+    Check(archive_read_set_skip_callback(archive.get(), Skip), archive.get());
     Check(archive_read_open1(archive.get()), archive.get());
     LOG(DEBUG) << "Created " << *this;
   }
@@ -1256,11 +1187,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Walks forward until positioned at the want'th index. An index identifies an
   // archive entry. If this Reader wasn't already positioned at that index, it
   // also resets the Reader's offset to zero.
-  //
-  // It returns success (true) or failure (false).
-  bool AdvanceIndex(int64_t const want) {
+  void AdvanceIndex(int64_t const want) {
     if (index_within_archive == want) {
-      return true;
+      return;
     }
 
     assert(index_within_archive < want);
@@ -1273,14 +1202,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
         LOG(ERROR)
             << "Inconsistent archive: Reached EOF while advancing from entry "
             << index_within_archive << " to entry " << want;
-        return false;
+        throw ExitCode::INVALID_ARCHIVE_HEADER;
       }
 
       if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
+        const std::string_view error = archive_error_string(archive.get());
         LOG(ERROR) << "Cannot advance from entry " << index_within_archive
-                   << " to entry " << want << ": "
-                   << archive_error_string(archive.get());
-        return false;
+                   << " to entry " << want << ": " << error;
+        ThrowExitCode(error);
       }
 
       index_within_archive++;
@@ -1290,36 +1219,25 @@ struct Reader : bi::list_base_hook<LinkMode> {
     assert(index_within_archive == want);
     LOG(DEBUG) << "Advanced " << *this << " to entry " << want << " in "
                << timer;
-
-    return true;
   }
 
   // Walks forward until positioned at the want'th offset. An offset identifies
   // a byte position relative to the start of an archive entry's decompressed
   // contents.
-  //
-  // It returns success (true) or failure (false).
-  bool AdvanceOffset(int64_t const want) {
-    if (want < offset_within_entry) {
-      // We can't walk backwards.
-      LOG(DEBUG) << *this << " cannot go backwards from offset "
-                 << offset_within_entry << " to offset " << want;
-      return false;
+  void AdvanceOffset(int64_t const want) {
+    if (offset_within_entry == want) {
+      // We are exactly where we want to be.
+      return;
     }
 
-    if (want == offset_within_entry) {
-      // We are exactly where we want to be.
-      return true;
-    }
+    assert(offset_within_entry < want);
 
     const Timer timer;
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
     const int sb = AcquireSideBuffer();
-    if (sb < 0 || NUM_SIDE_BUFFERS <= sb) {
-      return false;
-    }
+    assert(0 <= sb && sb < NUM_SIDE_BUFFERS);
 
     uint8_t* const dst_ptr = g_side_buffer_data[sb];
     SideBufferMetadata& meta = g_side_buffer_metadata[sb];
@@ -1344,20 +1262,16 @@ struct Reader : bi::list_base_hook<LinkMode> {
         }
       }
 
+      meta.length = 0;
       const ssize_t n = Read(dst_ptr, dst_len);
-      if (n < 0) {
-        meta = SideBufferMetadata{};
-        return false;
-      }
+      assert(n >= 0);
 
       meta.length = n;
-    } while (want > offset_within_entry);
+    } while (offset_within_entry < want);
 
     assert(offset_within_entry == want);
     LOG(DEBUG) << "Advanced " << *this << " to offset " << offset_within_entry
                << " of entry " << index_within_archive << " in " << timer;
-
-    return true;
   }
 
   // Copies from the archive entry's decompressed contents to the destination
@@ -1365,100 +1279,159 @@ struct Reader : bi::list_base_hook<LinkMode> {
   ssize_t Read(void* const dst_ptr, size_t const dst_len) {
     const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
     if (n < 0) {
-      LOG(ERROR) << archive_error_string(archive.get());
-      return -EIO;
+      const std::string_view error = archive_error_string(archive.get());
+      LOG(ERROR) << error;
+      ThrowExitCode(error);
     }
 
     assert(n <= dst_len);
     offset_within_entry += n;
     return n;
   }
-};
 
-int Reader::count = 0;
+  // Puts a Reader into the recycle bin.
+  struct Recycler {
+    void operator()(Reader* const r) const {
+      LOG(DEBUG) << "Putting aside " << *r << " currently at offset "
+                 << r->offset_within_entry << " of entry "
+                 << r->index_within_archive;
+      recycled.push_front(*r);
+      constexpr int max_saved_readers = 8;
+      if (recycled.size() > max_saved_readers) {
+        Reader& to_delete = recycled.back();
+        recycled.pop_back();
+        delete &to_delete;
+      }
+    }
+  };
 
-// Swaps fields of two Readers.
-void swap(Reader& a, Reader& b) {
-  std::swap(a.buffer, b.buffer);
-  std::swap(a.archive, b.archive);
-  std::swap(a.entry, b.entry);
-  std::swap(a.index_within_archive, b.index_within_archive);
-  std::swap(a.offset_within_entry, b.offset_within_entry);
-  std::swap(a.id, b.id);
-}
+  using Ptr = std::unique_ptr<Reader, Recycler>;
 
-// A cache of warm Readers. Libarchive is designed for streaming access, not
-// random access, and does not support seeking backwards. For example, if some
-// other program reads "/foo", "/bar" and then "/baz" sequentially from an
-// archive (via this program) and those correspond to the 60th, 40th and 50th
-// archive entries in that archive, then:
-//
-//  - A naive implementation (calling archive_read_free when each FUSE file is
-//    closed) would have to start iterating from the first archive entry each
-//    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
-//  - Saving readers in an LRU (Least Recently Used) cache (calling
-//    release_reader when each FUSE file is closed) allows just 110 iterations
-//    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for "/baz".
-//
-// Re-use eligibility is based on the archive entries' sequential numerical
-// indexes within the archive, not on their string pathnames.
-//
-// When copying all of the files out of an archive (e.g. "cp -r" from the
-// command line) and the files are accessed in the natural order, caching
-// readers means that the overall time can be linear instead of quadratic.
-//
-// The warmest Reader is at the front of the list, and the coldest Reader is at
-// the back.
-bi::list<Reader> g_saved_readers;
+  // Returns a Reader positioned at the given offset of the given index'th entry
+  // of the archive.
+  static Ptr ReuseOrCreate(int64_t const want_index_within_archive,
+                           int64_t const want_offset_within_entry) {
+    assert(want_index_within_archive >= 0);
+    assert(want_offset_within_entry >= 0);
 
-// Returns a Reader positioned at the given offset of the given index'th entry
-// of the archive.
-std::unique_ptr<Reader> AcquireReader(
-    int64_t const want_index_within_archive,
-    int64_t const want_offset_within_entry = 0) {
-  assert(want_index_within_archive >= 0);
-  assert(want_offset_within_entry >= 0);
+    // Find the closest warm Reader that is below or at the requested position.
+    Reader* best = nullptr;
+    for (Reader& r : recycled) {
+      if (std::pair(r.index_within_archive, r.offset_within_entry) <=
+              std::pair(want_index_within_archive, want_offset_within_entry) &&
+          (!best ||
+           std::pair(best->index_within_archive, best->offset_within_entry) <
+               std::pair(r.index_within_archive, r.offset_within_entry))) {
+        best = &r;
+      }
+    }
 
-  // Find the closest warm Reader that is below or at the requested position.
-  Reader* best = nullptr;
-  for (Reader& r : g_saved_readers) {
-    if (std::pair(r.index_within_archive, r.offset_within_entry) <=
-            std::pair(want_index_within_archive, want_offset_within_entry) &&
-        (!best ||
-         std::pair(best->index_within_archive, best->offset_within_entry) <
-             std::pair(r.index_within_archive, r.offset_within_entry))) {
-      best = &r;
+    Ptr r;
+    if (best) {
+      r.reset(best);
+      recycled.erase(recycled.iterator_to(*best));
+      LOG(DEBUG) << "Reusing " << *r << " currently at offset "
+                 << r->offset_within_entry << " of entry "
+                 << r->index_within_archive;
+    } else {
+      r.reset(new Reader());
+    }
+
+    assert(r);
+    r->AdvanceIndex(want_index_within_archive);
+    r->AdvanceOffset(want_offset_within_entry);
+
+    return r;
+  }
+
+ private:
+  ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
+
+  static int Close(Archive*, void*) { return ARCHIVE_OK; }
+
+  static int Open(Archive*, void*) { return ARCHIVE_OK; }
+
+  static ssize_t Read(Archive* const a, void* const p, const void** const out) {
+    assert(p);
+    Reader& b = *static_cast<Reader*>(p);
+    while (true) {
+      const ssize_t n = pread(g_archive_fd, b.bytes, sizeof(b.bytes), b.pos);
+      if (n >= 0) {
+        b.pos += n;
+        *out = b.bytes;
+        return n;
+      }
+
+      if (errno == EINTR) {
+        continue;
+      }
+
+      archive_set_error(a, errno, "Cannot read archive file: %s",
+                        strerror(errno));
+      return ARCHIVE_FATAL;
     }
   }
 
-  std::unique_ptr<Reader> r;
-  if (best) {
-    r.reset(best);
-    g_saved_readers.erase(g_saved_readers.iterator_to(*best));
-    LOG(DEBUG) << "Reusing " << *r << " currently at offset "
-               << r->offset_within_entry << " of entry "
-               << r->index_within_archive;
-  } else {
-    r = std::make_unique<Reader>();
+  static int64_t Seek(Archive*,
+                      void* const p,
+                      int64_t const offset,
+                      int const whence) {
+    assert(p);
+    Reader& b = *static_cast<Reader*>(p);
+    switch (whence) {
+      case SEEK_SET:
+        b.pos = offset;
+        return b.pos;
+      case SEEK_CUR:
+        b.pos += offset;
+        return b.pos;
+      case SEEK_END:
+        b.pos = g_archive_size + offset;
+        return b.pos;
+    }
+    return ARCHIVE_FATAL;
   }
 
-  if (!r->AdvanceIndex(want_index_within_archive) ||
-      !r->AdvanceOffset(want_offset_within_entry)) {
-    return nullptr;
-  }
+  static int64_t Skip(Archive*, void* const p, int64_t const delta) {
+    assert(p);
+    Reader& b = *static_cast<Reader*>(p);
+    b.pos += delta;
+    return delta;
+  };
 
-  return r;
-}
+  // A cache of warm Readers. Libarchive is designed for streaming access, not
+  // random access, and does not support seeking backwards. For example, if some
+  // other program reads "/foo", "/bar" and then "/baz" sequentially from an
+  // archive (via this program) and those correspond to the 60th, 40th and 50th
+  // archive entries in that archive, then:
+  //
+  //  - A naive implementation (calling archive_read_free when each FUSE file is
+  //    closed) would have to start iterating from the first archive entry each
+  //    time a FUSE file is opened, for 150 iterations (60 + 40 + 50) in total.
+  //  - Saving readers in an LRU (Least Recently Used) cache (calling
+  //    release_reader when each FUSE file is closed) allows just 110 iterations
+  //    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for
+  //    "/baz".
+  //
+  // Re-use eligibility is based on the archive entries' sequential numerical
+  // indexes within the archive, not on their string pathnames.
+  //
+  // When copying all of the files out of an archive (e.g. "cp -r" from the
+  // command line) and the files are accessed in the natural order, caching
+  // readers means that the overall time can be linear instead of quadratic.
+  //
+  // The warmest Reader is at the front of the list, and the coldest Reader is
+  // at the back.
+  static bi::list<Reader> recycled;
+};
 
-// Returns r to the reader cache.
-void ReleaseReader(std::unique_ptr<Reader> r) {
-  LOG(DEBUG) << "Released " << *r;
-  g_saved_readers.push_front(*r.release());
-  constexpr int max_saved_readers = 8;
-  if (g_saved_readers.size() > max_saved_readers) {
-    g_saved_readers.pop_back_and_dispose(std::default_delete<Reader>());
-  }
-}
+int Reader::count = 0;
+bi::list<Reader> Reader::recycled;
+
+struct FileHandle {
+  const Node* const node;
+  Reader::Ptr reader;
+};
 
 // ---- In-Memory Directory Tree
 
@@ -1821,11 +1794,6 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   // Add to g_nodes_by_path.
   RenameIfCollision(node);
 
-  // Add to g_nodes_by_index.
-  assert(g_nodes_by_index.size() <= id);
-  g_nodes_by_index.resize(id);
-  g_nodes_by_index.push_back(node);
-
   // Do some extra processing depending on the file type.
   // Block or Char Device.
   if (ft == FileType::BlockDevice || ft == FileType::CharDevice) {
@@ -2106,32 +2074,14 @@ int my_open(const char* const path, fuse_file_info* const ffi) try {
   assert(!n->IsDir());
   assert(n->index_within_archive >= 0);
 
-  assert(ffi);
-  if ((ffi->flags & O_ACCMODE) != O_RDONLY) {
-    return -EACCES;
-  }
-
-  if (g_cache) {
-    if (n->cache_offset < 0) {
-      LOG(ERROR) << "Cannot open " << *n << ": No cached data for this file";
-      return -EIO;
-    }
-
-    static_assert(sizeof(ffi->fh) >= sizeof(n));
-    ffi->fh = reinterpret_cast<uintptr_t>(n);
-    LOG(DEBUG) << "Opened " << *n;
-    return 0;
-  }
-
-  std::unique_ptr<Reader> ur = AcquireReader(n->index_within_archive);
-  if (!ur) {
+  if (g_cache && n->cache_offset < 0) {
+    LOG(ERROR) << "Cannot open " << *n << ": No cached data";
     return -EIO;
   }
 
-  ffi->keep_cache = 1;
-
-  static_assert(sizeof(ffi->fh) >= sizeof(Reader*));
-  ffi->fh = reinterpret_cast<uintptr_t>(ur.release());
+  assert(ffi);
+  static_assert(sizeof(ffi->fh) >= sizeof(FileHandle*));
+  ffi->fh = reinterpret_cast<uintptr_t>(new FileHandle{.node = n});
   LOG(DEBUG) << "Opened " << *n;
   return 0;
 } catch (...) {
@@ -2148,10 +2098,13 @@ int my_read(const char*,
     return -EINVAL;
   }
 
-  if (g_cache) {
-    const Node* const node = reinterpret_cast<const Node*>(ffi->fh);
-    assert(node);
+  FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
+  assert(h);
 
+  const Node* const node = h->node;
+  assert(node);
+
+  if (g_cache) {
     if (offset >= node->size) {
       // No data past the end of a file.
       return 0;
@@ -2178,20 +2131,8 @@ int my_read(const char*,
     return n;
   }
 
-  Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
-  assert(r);
-
-  const uint64_t i = r->index_within_archive;
-  assert(i < g_nodes_by_index.size());
-
-  const Node* const n = g_nodes_by_index[i];
-  assert(n);
-
-  const int64_t size = n->size;
-  if (size < 0) {
-    return -EIO;
-  }
-
+  const int64_t size = node->size;
+  assert(size >= 0);
   if (size <= offset) {
     return 0;
   }
@@ -2205,57 +2146,51 @@ int my_read(const char*,
     return 0;
   }
 
-  if (ReadFromSideBuffer(r->index_within_archive, dst_ptr, dst_len, offset)) {
+  if (ReadFromSideBuffer(node->index_within_archive, dst_ptr, dst_len,
+                         offset)) {
     return dst_len;
   }
 
   // libarchive is designed for streaming access, not random access. If we
   // need to seek backwards, there's more work to do.
-  if (offset < r->offset_within_entry) {
-    LOG(DEBUG) << *r << " cannot jump backwards from offset "
-               << r->offset_within_entry << " to " << offset;
-    // Acquire a new Reader, swap it with r and release the new Reader. We
-    // swap (modify r in-place) instead of updating ffi->fh to point to the
-    // new Reader, because libfuse ignores any changes to the ffi->fh value
-    // after this function returns (this function is not an 'open' callback).
-    std::unique_ptr<Reader> ur = AcquireReader(r->index_within_archive, offset);
-    if (!ur) {
-      return -EIO;
+  if (Reader* const r = h->reader.get()) {
+    assert(r->index_within_archive == node->index_within_archive);
+    if (offset < r->offset_within_entry) {
+      LOG(DEBUG) << *r << " cannot jump backwards from offset "
+                 << r->offset_within_entry << " to " << offset;
+      h->reader.reset();
+    } else if (offset > r->offset_within_entry + SIDE_BUFFER_SIZE) {
+      LOG(DEBUG) << *r << " has to jump forwards from offset "
+                 << r->offset_within_entry << " to " << offset;
+      h->reader.reset();
     }
-    swap(*r, *ur);
-    ReleaseReader(std::move(ur));
   }
 
-  if (!r->AdvanceOffset(offset)) {
-    return -EIO;
+  if (h->reader) {
+    assert(h->reader->index_within_archive == node->index_within_archive);
+    h->reader->AdvanceOffset(offset);
+  } else {
+    h->reader = Reader::ReuseOrCreate(node->index_within_archive, offset);
   }
 
-  return r->Read(dst_ptr, dst_len);
+  assert(h->reader);
+  assert(h->reader->index_within_archive == node->index_within_archive);
+  assert(h->reader->offset_within_entry == offset);
+  return h->reader->Read(dst_ptr, dst_len);
 } catch (...) {
   LOG(DEBUG) << "Caught exception";
   return -EIO;
 }
 
 int my_release(const char*, fuse_file_info* const ffi) {
-  if (g_cache) {
-    const Node* const n = reinterpret_cast<const Node*>(ffi->fh);
-    assert(n);
-    LOG(DEBUG) << "Closed " << *n;
-    return 0;
-  }
+  FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
+  assert(h);
 
-  Reader* const r = reinterpret_cast<Reader*>(ffi->fh);
-  assert(r);
-
-  const uint64_t i = r->index_within_archive;
-  assert(i < g_nodes_by_index.size());
-
-  const Node* const n = g_nodes_by_index[i];
+  const Node* const n = h->node;
   assert(n);
+  delete h;
 
-  ReleaseReader(std::unique_ptr<Reader>(r));
   LOG(DEBUG) << "Closed " << *n;
-
   return 0;
 }
 
