@@ -982,113 +982,6 @@ const char* ReadPassword(Archive*, void*) {
   return g_password.c_str();
 }
 
-// ---- Libarchive Read Callbacks
-
-void PrintProgress() {
-  if (!LOG_IS_ON(INFO) || g_archive_size <= 0) {
-    return;
-  }
-
-  constexpr auto period = std::chrono::seconds(1);
-  static auto next = std::chrono::steady_clock::now() + period;
-  const auto now = std::chrono::steady_clock::now();
-  if (now < next) {
-    return;
-  }
-
-  next = now + period;
-  const int64_t pos = lseek64(g_archive_fd, 0, SEEK_CUR);
-  if (pos < 0) {
-    PLOG(ERROR) << "Cannot get current position in archive file";
-    return;
-  }
-
-  const int percent =
-      100 * std::min<int64_t>(pos, g_archive_size) / g_archive_size;
-  LOG(INFO) << ProgressMessage(percent);
-}
-
-// The callbacks below are only used during start-up, for the initial pass
-// through the archive to build the node tree, based on the g_archive_fd file
-// descriptor that stays open for the lifetime of the process. They are like
-// libarchive's built-in "read from a file" callbacks but also call
-// PrintProgress(). The data arguments are ignored in favor of global variables.
-
-int my_file_close(Archive*, void* /*data*/) {
-  return ARCHIVE_OK;
-}
-
-int my_file_open(Archive*, void* /*data*/) {
-  return ARCHIVE_OK;
-}
-
-ssize_t my_file_read(Archive* const a, void*, const void** const out) {
-  // The first side buffers are also repurposed as source (compressed) buffer
-  // during the initial pass over the archive file.
-  uint8_t* const p = g_side_buffer_data[0];
-  while (true) {
-    const ssize_t n = read(g_archive_fd, p, SIDE_BUFFER_SIZE);
-    if (n >= 0) {
-      *out = p;
-      PrintProgress();
-      return n;
-    }
-
-    if (errno == EINTR) {
-      continue;
-    }
-
-    archive_set_error(a, errno, "Cannot read archive file: %s",
-                      strerror(errno));
-    return ARCHIVE_FATAL;
-  }
-}
-
-int64_t my_file_seek(Archive* const a,
-                     void*,
-                     int64_t const offset,
-                     int const whence) {
-  const int64_t o = lseek64(g_archive_fd, offset, whence);
-  if (o < 0) {
-    archive_set_error(a, errno, "Cannot seek in archive file: %s",
-                      strerror(errno));
-    return ARCHIVE_FATAL;
-  }
-
-  return o;
-}
-
-int64_t my_file_skip(Archive* const a, void* /*data*/, int64_t const delta) {
-  const int64_t o0 = lseek64(g_archive_fd, 0, SEEK_CUR);
-  if (o0 < 0) {
-    archive_set_error(a, errno,
-                      "Cannot get current position in archive file: %s",
-                      strerror(errno));
-    return ARCHIVE_FATAL;
-  }
-
-  const int64_t o1 = lseek64(g_archive_fd, delta, SEEK_CUR);
-  if (o1 < 0) {
-    archive_set_error(a, errno, "Cannot seek in archive file: %s",
-                      strerror(errno));
-    return ARCHIVE_FATAL;
-  }
-
-  return o1 - o0;
-}
-
-int my_file_switch(Archive*, void* /*data0*/, void* /*data1*/) {
-  return ARCHIVE_OK;
-}
-
-void Check(int const status, Archive* const a) {
-  if (status != ARCHIVE_OK) {
-    const std::string_view error = archive_error_string(a);
-    LOG(ERROR) << error;
-    ThrowExitCode(error);
-  }
-}
-
 // ---- Side Buffer
 
 // Returns the index of the least recently used side buffer. This indexes
@@ -1152,8 +1045,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
   Entry* entry = nullptr;
   int64_t index_within_archive = -1;
   int64_t offset_within_entry = 0;
+  bool progress = false;
   std::int64_t pos = 0;
   std::byte bytes[16 * 1024];
+
+  ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
 
   Reader() {
     if (!archive) {
@@ -1161,27 +1057,52 @@ struct Reader : bi::list_base_hook<LinkMode> {
       throw std::bad_alloc();
     }
 
-    if (!g_password.empty()) {
-      Check(archive_read_add_passphrase(archive.get(), g_password.c_str()),
-            archive.get());
+    if (g_password.empty()) {
+      Check(archive_read_set_passphrase_callback(archive.get(), nullptr,
+                                                 &ReadPassword));
+    } else {
+      Check(archive_read_add_passphrase(archive.get(), g_password.c_str()));
     }
 
-    Check(archive_read_support_filter_all(archive.get()), archive.get());
-    Check(archive_read_support_format_all(archive.get()), archive.get());
-    Check(archive_read_support_format_raw(archive.get()), archive.get());
+    Check(archive_read_support_filter_all(archive.get()));
+    Check(archive_read_support_format_all(archive.get()));
+    Check(archive_read_support_format_raw(archive.get()));
 
-    Check(archive_read_set_callback_data(archive.get(), this), archive.get());
-    Check(archive_read_set_close_callback(archive.get(), Close), archive.get());
-    Check(archive_read_set_open_callback(archive.get(), Open), archive.get());
-    Check(archive_read_set_read_callback(archive.get(), Read), archive.get());
-    Check(archive_read_set_seek_callback(archive.get(), Seek), archive.get());
-    Check(archive_read_set_skip_callback(archive.get(), Skip), archive.get());
-    Check(archive_read_open1(archive.get()), archive.get());
+    Check(archive_read_set_callback_data(archive.get(), this));
+    Check(archive_read_set_close_callback(archive.get(), Close));
+    Check(archive_read_set_open_callback(archive.get(), Open));
+    Check(archive_read_set_read_callback(archive.get(), Read));
+    Check(archive_read_set_seek_callback(archive.get(), Seek));
+    Check(archive_read_set_skip_callback(archive.get(), Skip));
+    Check(archive_read_open1(archive.get()));
     LOG(DEBUG) << "Created " << *this;
   }
 
   friend std::ostream& operator<<(std::ostream& out, const Reader& r) {
     return out << "Reader #" << r.id;
+  }
+
+  Entry* NextEntry() {
+    offset_within_entry = 0;
+    index_within_archive++;
+    const int status = archive_read_next_header(archive.get(), &entry);
+
+    if (status == ARCHIVE_EOF) {
+      entry = nullptr;
+      return nullptr;
+    }
+
+    if (status == ARCHIVE_WARN) {
+      LOG(WARNING) << archive_error_string(archive.get());
+    } else if (status != ARCHIVE_OK) {
+      const std::string_view error = archive_error_string(archive.get());
+      LOG(ERROR) << "Cannot advance to entry " << index_within_archive << ": "
+                 << error;
+      ThrowExitCode(error);
+    }
+
+    assert(entry);
+    return entry;
   }
 
   // Walks forward until positioned at the want'th index. An index identifies an
@@ -1196,24 +1117,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
     const Timer timer;
 
     do {
-      const int status = archive_read_next_header(archive.get(), &entry);
-
-      if (status == ARCHIVE_EOF) {
-        LOG(ERROR)
-            << "Inconsistent archive: Reached EOF while advancing from entry "
-            << index_within_archive << " to entry " << want;
+      if (!NextEntry()) {
+        LOG(ERROR) << "Reached EOF while advancing to entry "
+                   << index_within_archive;
         throw ExitCode::INVALID_ARCHIVE_HEADER;
       }
-
-      if (status != ARCHIVE_OK && status != ARCHIVE_WARN) {
-        const std::string_view error = archive_error_string(archive.get());
-        LOG(ERROR) << "Cannot advance from entry " << index_within_archive
-                   << " to entry " << want << ": " << error;
-        ThrowExitCode(error);
-      }
-
-      index_within_archive++;
-      offset_within_entry = 0;
     } while (index_within_archive < want);
 
     assert(index_within_archive == want);
@@ -1345,7 +1253,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
  private:
-  ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
+  void Check(int const status) const {
+    if (status != ARCHIVE_OK) {
+      const std::string_view error = archive_error_string(archive.get());
+      LOG(ERROR) << error;
+      ThrowExitCode(error);
+    }
+  }
 
   static int Close(Archive*, void*) { return ARCHIVE_OK; }
 
@@ -1358,6 +1272,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       const ssize_t n = pread(g_archive_fd, b.bytes, sizeof(b.bytes), b.pos);
       if (n >= 0) {
         b.pos += n;
+        b.PrintProgress();
         *out = b.bytes;
         return n;
       }
@@ -1398,6 +1313,25 @@ struct Reader : bi::list_base_hook<LinkMode> {
     b.pos += delta;
     return delta;
   };
+
+  void PrintProgress() const {
+    if (!progress || !LOG_IS_ON(INFO) || g_archive_size <= 0) {
+      return;
+    }
+
+    constexpr auto period = std::chrono::seconds(1);
+    static auto next = std::chrono::steady_clock::now() + period;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next) {
+      return;
+    }
+
+    next = now + period;
+
+    const int percent =
+        100 * std::min<int64_t>(pos, g_archive_size) / g_archive_size;
+    LOG(INFO) << ProgressMessage(percent);
+  }
 
   // A cache of warm Readers. Libarchive is designed for streaming access, not
   // random access, and does not support seeking backwards. For example, if some
@@ -1935,32 +1869,12 @@ void BuildTree() {
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   } else {
     g_archive_size = z.st_size;
-    LOG(DEBUG) << "Archive file is " << g_archive_size << " bytes big";
+    LOG(DEBUG) << "Archive file size is " << g_archive_size << " bytes";
   }
 
-  const ArchivePtr a(archive_read_new());
-  if (!a) {
-    LOG(ERROR) << "Out of memory";
-    throw std::bad_alloc();
-  }
-
-  Check(archive_read_set_passphrase_callback(a.get(), nullptr, &ReadPassword),
-        a.get());
-  Check(archive_read_support_filter_all(a.get()), a.get());
-  Check(archive_read_support_format_all(a.get()), a.get());
-  Check(archive_read_support_format_raw(a.get()), a.get());
-
-  Check(archive_read_set_callback_data(a.get(), nullptr), a.get());
-  Check(archive_read_set_close_callback(a.get(), my_file_close), a.get());
-  Check(archive_read_set_open_callback(a.get(), my_file_open), a.get());
-  Check(archive_read_set_read_callback(a.get(), my_file_read), a.get());
-  Check(archive_read_set_seek_callback(a.get(), my_file_seek), a.get());
-  Check(archive_read_set_skip_callback(a.get(), my_file_skip), a.get());
-  Check(archive_read_set_switch_callback(a.get(), my_file_switch), a.get());
-  if (archive_read_open1(a.get()) != ARCHIVE_OK) {
-    LOG(ERROR) << "Cannot open archive: " << archive_error_string(a.get());
-    throw ExitCode::INVALID_ARCHIVE_HEADER;
-  }
+  // Prepare Reader to read the archive.
+  Reader r;
+  r.progress = true;
 
   // Create root node.
   assert(!g_root_node);
@@ -1971,27 +1885,13 @@ void BuildTree() {
 
   // Read and process every entry of the archive.
   try {
-    for (int64_t id = 0;; id++) {
-      Entry* entry;
-      const int status = archive_read_next_header(a.get(), &entry);
-      if (status == ARCHIVE_EOF) {
-        break;
-      }
-
-      if (status == ARCHIVE_WARN) {
-        LOG(WARNING) << archive_error_string(a.get());
-      } else if (status != ARCHIVE_OK) {
-        const std::string_view error = archive_error_string(a.get());
-        LOG(ERROR) << error;
-        ThrowExitCode(error);
-      }
-
-      if (id == 0) {
-        CheckRawArchive(a.get());
+    while (Entry* const entry = r.NextEntry()) {
+      if (r.index_within_archive == 0) {
+        CheckRawArchive(r.archive.get());
       }
 
       try {
-        ProcessEntry(a.get(), entry, id);
+        ProcessEntry(r.archive.get(), entry, r.index_within_archive);
       } catch (ExitCode const error) {
         if (!g_force) {
           throw;

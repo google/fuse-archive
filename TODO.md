@@ -51,5 +51,5 @@
 - [x] Check the archive file type to avoid reading from a pipe or a directory.
 - [x] Document the cache system.
 - [x] Optimize the `Reader` recycling system.
+- [x] Use a `Reader` when building the tree.
 - [ ] Add a rolling buffer of uncompressed data to each `Reader`.
-- [ ] Use a `Reader` when building the tree.
