@@ -1050,7 +1050,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   Entry* entry = nullptr;
   int64_t index_within_archive = 0;
   int64_t offset_within_entry = 0;
-  bool progress = false;
+  bool should_print_progress = false;
   std::int64_t pos = 0;
   std::byte bytes[16 * 1024];
 
@@ -1074,12 +1074,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_raw(archive.get()));
 
     Check(archive_read_set_callback_data(archive.get(), this));
-    Check(archive_read_set_close_callback(archive.get(), Close));
-    Check(archive_read_set_open_callback(archive.get(), Open));
     Check(archive_read_set_read_callback(archive.get(), Read));
     Check(archive_read_set_seek_callback(archive.get(), Seek));
     Check(archive_read_set_skip_callback(archive.get(), Skip));
     Check(archive_read_open1(archive.get()));
+
     LOG(DEBUG) << "Created " << *this;
   }
 
@@ -1187,6 +1186,39 @@ struct Reader : bi::list_base_hook<LinkMode> {
                << " in " << timer;
   }
 
+  // Gets the current entry size. 'Raw' archives don't always explicitly record
+  // the decompressed size. We'll have to decompress it to find out. Some
+  // 'cooked' archives also don't explicitly record this (at the time
+  // archive_read_next_header returns). See
+  // https://github.com/libarchive/libarchive/issues/1764
+  int64_t GetEntrySize() {
+    if (archive_entry_size_is_set(entry)) {
+      return archive_entry_size(entry);
+    }
+
+    // Consume the entry's data.
+    std::byte buffer[16 << 10];
+    while (Read(buffer, sizeof(buffer))) {
+    }
+
+    if (archive_entry_is_encrypted(entry)) {
+      g_password_checked = true;
+    }
+
+    return offset_within_entry;
+  }
+
+  void CheckPassword() {
+    if (g_password_checked || !archive_entry_is_encrypted(entry)) {
+      return;
+    }
+
+    // Reading the first bytes of the first encrypted entry will reveal whether
+    // we also need a passphrase.
+    std::byte buffer[16];
+    g_password_checked = Read(buffer, sizeof(buffer)) > 0;
+  }
+
   // Copies from the archive entry's decompressed contents to the destination
   // buffer. It also advances the Reader's offset_within_entry.
   ssize_t Read(void* const dst_ptr, size_t const dst_len) {
@@ -1266,19 +1298,18 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
   }
 
-  static int Close(Archive*, void*) { return ARCHIVE_OK; }
-
-  static int Open(Archive*, void*) { return ARCHIVE_OK; }
-
+  // The following callbacks are used by libarchive to read the uncompressed
+  // data from the archive file.
   static ssize_t Read(Archive* const a, void* const p, const void** const out) {
     assert(p);
-    Reader& b = *static_cast<Reader*>(p);
+    assert(g_archive_fd >= 0);
+    Reader& r = *static_cast<Reader*>(p);
     while (true) {
-      const ssize_t n = pread(g_archive_fd, b.bytes, sizeof(b.bytes), b.pos);
+      const ssize_t n = pread(g_archive_fd, r.bytes, sizeof(r.bytes), r.pos);
       if (n >= 0) {
-        b.pos += n;
-        b.PrintProgress();
-        *out = b.bytes;
+        r.pos += n;
+        r.PrintProgress();
+        *out = r.bytes;
         return n;
       }
 
@@ -1297,45 +1328,45 @@ struct Reader : bi::list_base_hook<LinkMode> {
                       int64_t const offset,
                       int const whence) {
     assert(p);
-    Reader& b = *static_cast<Reader*>(p);
+    Reader& r = *static_cast<Reader*>(p);
     switch (whence) {
       case SEEK_SET:
-        b.pos = offset;
-        return b.pos;
+        r.pos = offset;
+        return r.pos;
       case SEEK_CUR:
-        b.pos += offset;
-        return b.pos;
+        r.pos += offset;
+        return r.pos;
       case SEEK_END:
-        b.pos = g_archive_size + offset;
-        return b.pos;
+        r.pos = g_archive_size + offset;
+        return r.pos;
     }
     return ARCHIVE_FATAL;
   }
 
   static int64_t Skip(Archive*, void* const p, int64_t const delta) {
     assert(p);
-    Reader& b = *static_cast<Reader*>(p);
-    b.pos += delta;
+    Reader& r = *static_cast<Reader*>(p);
+    r.pos += delta;
     return delta;
   };
 
+  // Print progress if necessary.
   void PrintProgress() const {
-    if (!progress || !LOG_IS_ON(INFO) || g_archive_size <= 0) {
+    if (!should_print_progress) {
       return;
     }
 
     constexpr auto period = std::chrono::seconds(1);
-    static auto next = std::chrono::steady_clock::now() + period;
     const auto now = std::chrono::steady_clock::now();
+    static auto next = now + period;
     if (now < next) {
       return;
     }
 
     next = now + period;
-
-    const int percent =
-        100 * std::min<int64_t>(pos, g_archive_size) / g_archive_size;
-    LOG(INFO) << ProgressMessage(percent);
+    assert(g_archive_size > 0);
+    LOG(INFO) << ProgressMessage(100 * std::min<int64_t>(pos, g_archive_size) /
+                                 g_archive_size);
   }
 
   // A cache of warm Readers. Libarchive is designed for streaming access, not
@@ -1351,9 +1382,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
   //    release_reader when each FUSE file is closed) allows just 110 iterations
   //    (60 + 40 + 10) in total. The Reader for "/bar" can be re-used for
   //    "/baz".
-  //
-  // Re-use eligibility is based on the archive entries' sequential numerical
-  // indexes within the archive, not on their string pathnames.
   //
   // When copying all of the files out of an archive (e.g. "cp -r" from the
   // command line) and the files are accessed in the natural order, caching
@@ -1559,7 +1587,7 @@ bool ShouldSkip(FileType const ft) {
   return true;
 }
 
-void CacheFileData(Archive* const a) {
+void CacheEntryData(Archive* const a) {
   assert(g_cache_size >= 0);
   const int64_t file_start_offset = g_cache_size;
 
@@ -1611,64 +1639,16 @@ void CacheFileData(Archive* const a) {
   }
 }
 
-int64_t GetEntrySize(Archive* const a, Entry* const e) {
-  if (archive_entry_size_is_set(e)) {
-    return archive_entry_size(e);
-  }
-
-  // 'Raw' archives don't always explicitly record the decompressed size.
-  // We'll have to decompress it to find out. Some 'cooked' archives also
-  // don't explicitly record this (at the time archive_read_next_header
-  // returns). See https://github.com/libarchive/libarchive/issues/1764
-
-  int64_t size = 0;
-  std::byte buffer[16 << 10];
-  while (const ssize_t n = archive_read_data(a, buffer, sizeof(buffer))) {
-    if (n < 0) {
-      const std::string_view error = archive_error_string(a);
-      LOG(ERROR) << error;
-      ThrowExitCode(error);
-    }
-
-    assert(n <= sizeof(buffer));
-    size += n;
-  }
-
-  if (archive_entry_is_encrypted(e)) {
-    g_password_checked = true;
-  }
-
-  return size;
-}
-
-void CheckPassword(Archive* const a, Entry* const e) {
-  if (g_password_checked || !archive_entry_is_encrypted(e)) {
-    return;
-  }
-
-  // Reading the first bytes of the first encrypted entry will reveal whether we
-  // also need a passphrase.
-  std::byte buffer[16];
-  const ssize_t n = archive_read_data(a, buffer, sizeof(buffer));
-  if (n < 0) {
-    const std::string_view error = archive_error_string(a);
-    LOG(ERROR) << error;
-    ThrowExitCode(error);
-  }
-
-  g_password_checked = n > 0;
-}
-
-void ProcessEntry(Archive* const a,
-                  Entry* const e,
-                  int64_t const index_within_archive) {
+void ProcessEntry(Reader& r) {
+  Archive* const a = r.archive.get();
+  Entry* const e = r.entry;
+  const int64_t i = r.index_within_archive;
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
 
   std::string path = GetNormalizedPath(e);
   if (path.empty()) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << index_within_archive
-               << "]: Invalid path";
+    LOG(DEBUG) << "Skipped " << ft << " [" << i << "]: Invalid path";
     return;
   }
 
@@ -1681,8 +1661,7 @@ void ProcessEntry(Archive* const a,
   }
 
   if (ShouldSkip(ft)) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << index_within_archive << "] "
-               << Path(path);
+    LOG(DEBUG) << "Skipped " << ft << " [" << i << "] " << Path(path);
     return;
   }
 
@@ -1718,7 +1697,7 @@ void ProcessEntry(Archive* const a,
   Node* const node = new Node{
       .name = std::string(name),
       .mode = static_cast<mode_t>(ft) | (0666 & ~g_options.fmask),
-      .index_within_archive = index_within_archive,
+      .index_within_archive = i,
       .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
 
   if (g_default_permissions) {
@@ -1764,16 +1743,16 @@ void ProcessEntry(Archive* const a,
     // Cache file data.
     node->size = archive_entry_size(e);
     int64_t const offset = g_cache_size;
-    CacheFileData(a);
+    CacheEntryData(a);
     node->cache_offset = offset;
     node->size = g_cache_size - offset;
   } else {
     // Get the entry size without caching the data.
-    node->size = GetEntrySize(a, e);
+    node->size = r.GetEntrySize();
   }
 
   // Check password if necessary.
-  CheckPassword(a, e);
+  r.CheckPassword();
 
   // Adjust the total block count.
   g_block_count += node->GetBlockCount();
@@ -1856,11 +1835,13 @@ void CheckRawArchive(Archive* const a) {
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
   if (g_archive_format == ArchiveFormat::RAW && filter_count == 0) {
-    LOG(ERROR) << "Cannot recognize the archive format";
+    LOG(ERROR) << "Cannot recognize the a format";
     throw ExitCode::INVALID_RAW_ARCHIVE;
   }
 }
 
+// Opens the archive file, scans it and builds the tree representing the files
+// and directories contained in this archive.
 void BuildTree() {
   if (g_archive_path.empty()) {
     LOG(ERROR) << "Missing archive_filename argument";
@@ -1868,12 +1849,15 @@ void BuildTree() {
   }
 
   Timer timer;
+
+  // Open archive file.
   g_archive_fd = open(g_archive_path.c_str(), O_RDONLY);
   if (g_archive_fd < 0) {
     PLOG(ERROR) << "Cannot open " << Path(g_archive_path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
+  // Check archive file size and type.
   if (struct stat z; fstat(g_archive_fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat " << Path(g_archive_path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
@@ -1886,9 +1870,9 @@ void BuildTree() {
     LOG(DEBUG) << "Archive file size is " << g_archive_size << " bytes";
   }
 
-  // Prepare Reader to read the archive.
+  // Prepare a Reader to read the archive.
   Reader r;
-  r.progress = true;
+  r.should_print_progress = LOG_IS_ON(INFO) && g_archive_size > 0;
 
   // Create root node.
   assert(!g_root_node);
@@ -1903,7 +1887,7 @@ void BuildTree() {
       CheckRawArchive(r.archive.get());
 
       try {
-        ProcessEntry(r.archive.get(), entry, r.index_within_archive);
+        ProcessEntry(r);
       } catch (ExitCode const error) {
         if (!g_force) {
           throw;
@@ -1927,20 +1911,20 @@ void BuildTree() {
     LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
   }
 
-  LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
-  LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() << " items";
-  if (struct stat z;
-      LOG_IS_ON(DEBUG) && g_cache && fstat(g_cache_fd, &z) == 0) {
-    LOG(DEBUG) << "The cache takes " << int64_t(z.st_blocks) * block_size
-               << " bytes of disk space";
-    assert(z.st_size == g_cache_size);
+  // Log some debug messages.
+  if (LOG_IS_ON(DEBUG)) {
+    LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
+    LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() << " items";
+    if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
+      LOG(DEBUG) << "The cache takes " << int64_t(z.st_blocks) * block_size
+                 << " bytes of disk space";
+      assert(z.st_size == g_cache_size);
+    }
   }
 
-  if (g_cache) {
-    if (close(g_archive_fd) < 0) {
-      PLOG(ERROR) << "Cannot close archive file";
-    }
-    g_archive_fd = -1;
+  // Close archive file is decompressed data is already cached.
+  if (g_cache && close(std::exchange(g_archive_fd, -1)) < 0) {
+    PLOG(ERROR) << "Cannot close archive file";
   }
 }
 
@@ -2068,12 +2052,15 @@ int my_read(const char*,
   if (Reader* const r = h->reader.get()) {
     assert(r->index_within_archive == node->index_within_archive);
     if (offset < r->offset_within_entry) {
-      LOG(DEBUG) << *r << " cannot jump backwards from offset "
-                 << r->offset_within_entry << " to " << offset;
+      LOG(DEBUG) << *r << " cannot jump " << r->offset_within_entry - offset
+                 << " bytes backwards from offset " << r->offset_within_entry
+                 << " to " << offset;
       h->reader.reset();
     } else if (offset > r->offset_within_entry + SIDE_BUFFER_SIZE) {
-      LOG(DEBUG) << *r << " has to jump forwards from offset "
-                 << r->offset_within_entry << " to " << offset;
+      LOG(DEBUG) << *r << " might have to jump "
+                 << offset - r->offset_within_entry
+                 << " bytes forwards from offset " << r->offset_within_entry
+                 << " to " << offset;
       h->reader.reset();
     }
   }
@@ -2133,7 +2120,8 @@ int my_readdir(const char* path,
     }
   }
 
-  LOG(DEBUG) << "Listed contents of " << Path(path);
+  LOG(DEBUG) << "Read Directory " << Path(path) << " returned "
+             << n->children.size() << " items";
   return 0;
 }
 
