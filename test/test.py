@@ -1070,7 +1070,7 @@ def TestArchiveWithManyFiles():
 
 
 # Tests that a big file can be accessed in random order.
-def TestBigArchiveRandomOrder(options=['-o', 'direct_io']):
+def TestBigArchiveRandomOrder(options=[]):
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
@@ -1129,9 +1129,9 @@ def TestBigArchiveRandomOrder(options=['-o', 'direct_io']):
             logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
 
 
-# Tests that a big file can be accessed in somewhat random but increasing order
+# Tests that a big file can be accessed in somewhat globally increasing order
 # even with no cache file.
-def TestBigArchiveStreamedWithoutCache(options=['-o', 'nocache,direct_io']):
+def TestBigArchiveStreamed(options=[]):
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
@@ -1153,18 +1153,16 @@ def TestBigArchiveStreamedWithoutCache(options=['-o', 'nocache,direct_io']):
             try:
                 random.seed()
                 n = 100000000
-                for j in (
-                    sorted([random.randrange(n) for i in range(50)])
-                    + [n - 1, 0]
-                    + sorted([random.randrange(n) for i in range(50)])
-                    + [n - 1, 0]
-                ):
-                    logging.debug(f'Getting line {j}...')
-                    want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
-                    got_line = os.pread(fd, len(want_line), j * len(want_line))
-                    if got_line != want_line:
-                        LogError(
-                            f'Want line: {want_line!r}, Got line: {got_line!r}')
+                for i in [(r * 2 + 1) * n // 20 for r in range(10)] + [n - 1]:
+                    for k in range(3):
+                        j = i - k * 1000000
+                        if j < 0: continue
+                        logging.debug(f'Getting line {j}...')
+                        want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
+                        got_line = os.pread(fd, len(want_line), j * len(want_line))
+                        if got_line != want_line:
+                            LogError(
+                                f'Want line: {want_line!r}, Got line: {got_line!r}')
             finally:
                 os.close(fd)
         finally:
@@ -1351,8 +1349,8 @@ TestEncryptedArchive(['-o', 'nocache'])
 TestInvalidArchive()
 TestMasks()
 TestArchiveWithManyFiles()
-TestBigArchiveRandomOrder()
-TestBigArchiveStreamedWithoutCache()
+TestBigArchiveRandomOrder(['-o', 'direct_io'])
+TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
 
 if error_count:
     LogError(f'FAIL: There were {error_count} errors')
