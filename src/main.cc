@@ -49,6 +49,7 @@
 #include <limits>
 #include <locale>
 #include <memory>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
