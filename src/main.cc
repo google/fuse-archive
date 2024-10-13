@@ -236,7 +236,12 @@ bool g_password_checked = false;
 // libarchive calls 'raw' files (e.g. foo.gz), which are compressed but not
 // explicitly an archive (a collection of files). libarchive can still present
 // it as an implicit archive containing 1 file.
-enum class ArchiveFormat : int { RAW = ARCHIVE_FORMAT_RAW } g_archive_format;
+enum class ArchiveFormat : int {
+  NONE = 0,
+  RAW = ARCHIVE_FORMAT_RAW,
+};
+
+ArchiveFormat g_archive_format = ArchiveFormat::NONE;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
@@ -539,10 +544,10 @@ struct Node {
   uid_t uid = g_uid;
   gid_t gid = g_gid;
 
-  // Index of the entry represented by this node in the archive, or -1 if it is
+  // Index of the entry represented by this node in the archive, or 0 if it is
   // not directly represented in the archive (like the root directory, or any
   // intermediate directory).
-  int64_t index_within_archive = -1;
+  int64_t index_within_archive = 0;
   int64_t size = 0;
 
   // Where does the cached data start in the cache file?
@@ -1043,7 +1048,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   int id = ++count;
   ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
-  int64_t index_within_archive = -1;
+  int64_t index_within_archive = 0;
   int64_t offset_within_entry = 0;
   bool progress = false;
   std::int64_t pos = 0;
@@ -1179,7 +1184,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     assert(offset_within_entry == want);
     LOG(DEBUG) << "Advanced " << *this << " to offset " << offset_within_entry
-               << " of entry " << index_within_archive << " in " << timer;
+               << " in " << timer;
   }
 
   // Copies from the archive entry's decompressed contents to the destination
@@ -1219,7 +1224,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // of the archive.
   static Ptr ReuseOrCreate(int64_t const want_index_within_archive,
                            int64_t const want_offset_within_entry) {
-    assert(want_index_within_archive >= 0);
+    assert(want_index_within_archive > 0);
     assert(want_offset_within_entry >= 0);
 
     // Find the closest warm Reader that is below or at the requested position.
@@ -1654,13 +1659,16 @@ void CheckPassword(Archive* const a, Entry* const e) {
   g_password_checked = n > 0;
 }
 
-void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
+void ProcessEntry(Archive* const a,
+                  Entry* const e,
+                  int64_t const index_within_archive) {
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
 
   std::string path = GetNormalizedPath(e);
   if (path.empty()) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << id << "]: Invalid path";
+    LOG(DEBUG) << "Skipped " << ft << " [" << index_within_archive
+               << "]: Invalid path";
     return;
   }
 
@@ -1673,7 +1681,8 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   }
 
   if (ShouldSkip(ft)) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << id << "] " << Path(path);
+    LOG(DEBUG) << "Skipped " << ft << " [" << index_within_archive << "] "
+               << Path(path);
     return;
   }
 
@@ -1709,7 +1718,7 @@ void ProcessEntry(Archive* const a, Entry* const e, int64_t const id) {
   Node* const node = new Node{
       .name = std::string(name),
       .mode = static_cast<mode_t>(ft) | (0666 & ~g_options.fmask),
-      .index_within_archive = id,
+      .index_within_archive = index_within_archive,
       .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
 
   if (g_default_permissions) {
@@ -1826,6 +1835,11 @@ void ResolveHardlinks() {
 }
 
 void CheckRawArchive(Archive* const a) {
+  if (g_archive_format != ArchiveFormat::NONE) {
+    // Already checked.
+    return;
+  }
+
   g_archive_format = ArchiveFormat(archive_format(a));
   LOG(DEBUG) << "Archive format is " << archive_format_name(a);
 
@@ -1886,9 +1900,7 @@ void BuildTree() {
   // Read and process every entry of the archive.
   try {
     while (Entry* const entry = r.NextEntry()) {
-      if (r.index_within_archive == 0) {
-        CheckRawArchive(r.archive.get());
-      }
+      CheckRawArchive(r.archive.get());
 
       try {
         ProcessEntry(r.archive.get(), entry, r.index_within_archive);
@@ -1972,7 +1984,7 @@ int my_open(const char* const path, fuse_file_info* const ffi) try {
   }
 
   assert(!n->IsDir());
-  assert(n->index_within_archive >= 0);
+  assert(n->index_within_archive > 0);
 
   if (g_cache && n->cache_offset < 0) {
     LOG(ERROR) << "Cannot open " << *n << ": No cached data";
