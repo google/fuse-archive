@@ -16,6 +16,7 @@ BINDIR = $(PREFIX)/bin
 MAN = $(PROJECT).1
 MANDIR = $(PREFIX)/share/man/man1
 INSTALL = install
+STRIP = strip
 
 
 all: out/$(PROJECT)
@@ -35,6 +36,7 @@ $(MAN): README.md
 install: out/$(PROJECT)
 	$(INSTALL) -D "out/$(PROJECT)" "$(BINDIR)/$(PROJECT)"
 	$(INSTALL) -D -m 644 $(MAN) "$(MANDIR)/$(MAN)"
+	$(STRIP) "$(BINDIR)/$(PROJECT)"
 
 uninstall:
 	rm "$(BINDIR)/$(PROJECT)" "$(MANDIR)/$(MAN)"
