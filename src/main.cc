@@ -74,6 +74,9 @@
 
 namespace {
 
+// Type alias for shorter code.
+using i64 = std::int64_t;
+
 // Timer for debug logs.
 struct Timer {
   using Clock = std::chrono::steady_clock;
@@ -216,13 +219,13 @@ std::string g_mount_point;
 int g_cache_fd = -1;
 
 // Size of the cache file.
-int64_t g_cache_size = 0;
+i64 g_cache_size = 0;
 
 // File descriptor returned by opening g_archive_path.
 int g_archive_fd = -1;
 
 // Size of the archive file.
-int64_t g_archive_size = 0;
+i64 g_archive_size = 0;
 
 // Decryption password.
 std::string g_password;
@@ -548,15 +551,15 @@ struct Node {
   // Index of the entry represented by this node in the archive, or 0 if it is
   // not directly represented in the archive (like the root directory, or any
   // intermediate directory).
-  int64_t index_within_archive = 0;
-  int64_t size = 0;
+  i64 index_within_archive = 0;
+  i64 size = 0;
 
   // Where does the cached data start in the cache file?
-  int64_t cache_offset = std::numeric_limits<int64_t>::min();
+  i64 cache_offset = std::numeric_limits<i64>::min();
 
   time_t mtime = g_now;
   dev_t rdev = 0;
-  int64_t nlink = 1;
+  i64 nlink = 1;
 
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
@@ -604,9 +607,7 @@ struct Node {
     children.push_back(*child);
   }
 
-  int64_t GetBlockCount() const {
-    return (size + (block_size - 1)) / block_size;
-  }
+  i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
 
   struct stat GetStat() const {
     struct stat z = {};
@@ -709,20 +710,20 @@ constexpr ssize_t SIDE_BUFFER_SIZE = 128 << 10;
 uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
 
 struct SideBufferMetadata {
-  int64_t index_within_archive = -1;
-  int64_t offset_within_entry = -1;
-  int64_t length = -1;
-  uint64_t lru_priority = 0;
+  i64 index_within_archive = -1;
+  i64 offset_within_entry = -1;
+  i64 length = -1;
+  i64 lru_priority = 0;
 
-  static uint64_t next_lru_priority;
+  static i64 next_lru_priority;
 
-  bool Contains(int64_t const index_within_archive,
-                int64_t const offset_within_entry,
-                uint64_t const length) const {
+  bool Contains(i64 const index_within_archive,
+                i64 const offset_within_entry,
+                i64 const length) const {
     if (this->index_within_archive >= 0 &&
         this->index_within_archive == index_within_archive &&
         this->offset_within_entry <= offset_within_entry) {
-      const int64_t o = offset_within_entry - this->offset_within_entry;
+      const i64 o = offset_within_entry - this->offset_within_entry;
       return this->length >= o && this->length - o >= length;
     }
 
@@ -730,7 +731,7 @@ struct SideBufferMetadata {
   }
 };
 
-uint64_t SideBufferMetadata::next_lru_priority = 0;
+i64 SideBufferMetadata::next_lru_priority = 0;
 
 SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 
@@ -994,7 +995,7 @@ const char* ReadPassword(Archive*, void*) {
 // g_side_buffer_data and g_side_buffer_metadata.
 int AcquireSideBuffer() {
   int oldest_i = 0;
-  uint64_t oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
+  i64 oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
   for (int i = 1; i < NUM_SIDE_BUFFERS; i++) {
     if (oldest_lru_priority > g_side_buffer_metadata[i].lru_priority) {
       oldest_lru_priority = g_side_buffer_metadata[i].lru_priority;
@@ -1008,14 +1009,14 @@ int AcquireSideBuffer() {
   return oldest_i;
 }
 
-bool ReadFromSideBuffer(int64_t const index_within_archive,
+bool ReadFromSideBuffer(i64 const index_within_archive,
                         char* const dst_ptr,
                         size_t const dst_len,
-                        int64_t const offset_within_entry) {
+                        i64 const offset_within_entry) {
   // Find the longest side buffer that contains (index_within_archive,
   // offset_within_entry, dst_len).
   int best_i = -1;
-  int64_t best_length = -1;
+  i64 best_length = -1;
   for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
     const SideBufferMetadata& meta = g_side_buffer_metadata[i];
     if (meta.length > best_length &&
@@ -1028,7 +1029,7 @@ bool ReadFromSideBuffer(int64_t const index_within_archive,
   if (best_i >= 0) {
     SideBufferMetadata& meta = g_side_buffer_metadata[best_i];
     meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
-    const int64_t o = offset_within_entry - meta.offset_within_entry;
+    const i64 o = offset_within_entry - meta.offset_within_entry;
     memcpy(dst_ptr, g_side_buffer_data[best_i] + o, dst_len);
     return true;
   }
@@ -1049,10 +1050,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
   int id = ++count;
   ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
-  int64_t index_within_archive = 0;
-  int64_t offset_within_entry = 0;
+  i64 index_within_archive = 0;
+  i64 offset_within_entry = 0;
   bool should_print_progress = false;
-  std::int64_t pos = 0;
+  i64 pos = 0;
   std::byte bytes[16 * 1024];
 
   ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
@@ -1113,7 +1114,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Walks forward until positioned at the want'th index. An index identifies an
   // archive entry. If this Reader wasn't already positioned at that index, it
   // also resets the Reader's offset to zero.
-  void AdvanceIndex(int64_t const want) {
+  void AdvanceIndex(i64 const want) {
     if (index_within_archive == want) {
       return;
     }
@@ -1137,7 +1138,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Walks forward until positioned at the want'th offset. An offset identifies
   // a byte position relative to the start of an archive entry's decompressed
   // contents.
-  void AdvanceOffset(int64_t const want) {
+  void AdvanceOffset(i64 const want) {
     if (offset_within_entry == want) {
       // We are exactly where we want to be.
       return;
@@ -1159,7 +1160,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     do {
       meta.offset_within_entry = offset_within_entry;
-      int64_t dst_len = want - offset_within_entry;
+      i64 dst_len = want - offset_within_entry;
       assert(dst_len > 0);
       // If the amount we need to advance is greater than the SIDE_BUFFER_SIZE,
       // we need multiple Read calls, but the total advance might not be an
@@ -1192,7 +1193,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // 'cooked' archives also don't explicitly record this (at the time
   // archive_read_next_header returns). See
   // https://github.com/libarchive/libarchive/issues/1764
-  int64_t GetEntrySize() {
+  i64 GetEntrySize() {
     if (archive_entry_size_is_set(entry)) {
       return archive_entry_size(entry);
     }
@@ -1255,8 +1256,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   // Returns a Reader positioned at the given offset of the given index'th entry
   // of the archive.
-  static Ptr ReuseOrCreate(int64_t const want_index_within_archive,
-                           int64_t const want_offset_within_entry) {
+  static Ptr ReuseOrCreate(i64 const want_index_within_archive,
+                           i64 const want_offset_within_entry) {
     assert(want_index_within_archive > 0);
     assert(want_offset_within_entry >= 0);
 
@@ -1324,10 +1325,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
   }
 
-  static int64_t Seek(Archive*,
-                      void* const p,
-                      int64_t const offset,
-                      int const whence) {
+  static i64 Seek(Archive*, void* const p, i64 const offset, int const whence) {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
     switch (whence) {
@@ -1344,7 +1342,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return ARCHIVE_FATAL;
   }
 
-  static int64_t Skip(Archive*, void* const p, int64_t const delta) {
+  static i64 Skip(Archive*, void* const p, i64 const delta) {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
     r.pos += delta;
@@ -1366,7 +1364,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     next = now + period;
     assert(g_archive_size > 0);
-    LOG(INFO) << ProgressMessage(100 * std::min<int64_t>(pos, g_archive_size) /
+    LOG(INFO) << ProgressMessage(100 * std::min<i64>(pos, g_archive_size) /
                                  g_archive_size);
   }
 
@@ -1590,7 +1588,7 @@ bool ShouldSkip(FileType const ft) {
 
 void CacheEntryData(Archive* const a) {
   assert(g_cache_size >= 0);
-  const int64_t file_start_offset = g_cache_size;
+  const i64 file_start_offset = g_cache_size;
 
   while (true) {
     const void* buff;
@@ -1643,7 +1641,7 @@ void CacheEntryData(Archive* const a) {
 void ProcessEntry(Reader& r) {
   Archive* const a = r.archive.get();
   Entry* const e = r.entry;
-  const int64_t i = r.index_within_archive;
+  const i64 i = r.index_within_archive;
   mode_t mode = archive_entry_mode(e);
   const FileType ft = GetFileType(mode);
 
@@ -1743,7 +1741,7 @@ void ProcessEntry(Reader& r) {
   if (g_cache) {
     // Cache file data.
     node->size = archive_entry_size(e);
-    int64_t const offset = g_cache_size;
+    i64 const offset = g_cache_size;
     CacheEntryData(a);
     node->cache_offset = offset;
     node->size = g_cache_size - offset;
@@ -1917,7 +1915,7 @@ void BuildTree() {
     LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
     LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() << " items";
     if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
-      LOG(DEBUG) << "The cache takes " << int64_t(z.st_blocks) * block_size
+      LOG(DEBUG) << "The cache takes " << i64(z.st_blocks) * block_size
                  << " bytes of disk space";
       assert(z.st_size == g_cache_size);
     }
@@ -2028,13 +2026,13 @@ int my_read(const char*,
     return n;
   }
 
-  const int64_t size = node->size;
+  const i64 size = node->size;
   assert(size >= 0);
   if (size <= offset) {
     return 0;
   }
 
-  const uint64_t remaining = size - offset;
+  const i64 remaining = size - offset;
   if (dst_len > remaining) {
     dst_len = remaining;
   }
