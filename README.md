@@ -2,8 +2,8 @@
 title: fuse-archive
 section: 1
 header: User Manual
-footer: fuse-archive 0.1.15
-date: October 2024
+footer: fuse-archive 1.0
+date: November 2024
 ---
 
 # NAME
