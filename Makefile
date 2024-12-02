@@ -33,6 +33,10 @@ $(MAN): README.md
 	pandoc $< -s -t man -o $@
 
 install: out/$(PROJECT)
+	$(INSTALL) -D "out/$(PROJECT)" "$(BINDIR)/$(PROJECT)"
+	$(INSTALL) -D -m 644 $(MAN) "$(MANDIR)/$(MAN)"
+
+install-strip: out/$(PROJECT)
 	$(INSTALL) -D -s "out/$(PROJECT)" "$(BINDIR)/$(PROJECT)"
 	$(INSTALL) -D -m 644 $(MAN) "$(MANDIR)/$(MAN)"
 
