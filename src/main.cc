@@ -1786,7 +1786,7 @@ void ResolveHardlinks() {
       continue;
     }
 
-    // Check if this link already exists
+    // Check if this link already exists.
     if (const Node* const source = FindNode(entry.source_path)) {
       if (source->GetTarget() == target) {
         LOG(DEBUG) << "Skipped duplicate hardlink " << Path(entry.source_path)
