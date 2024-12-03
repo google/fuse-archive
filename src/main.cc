@@ -819,7 +819,7 @@ class Logger {
 
     if (g_latest_log_is_ephemeral && isatty(STDERR_FILENO)) {
       const std::string_view s = "\e[F\e[K";
-      write(STDERR_FILENO, s.data(), s.size());
+      std::ignore = write(STDERR_FILENO, s.data(), s.size());
     }
 
     syslog(static_cast<int>(level_), "%s", std::move(oss_).str().c_str());
