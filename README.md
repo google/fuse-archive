@@ -2,7 +2,7 @@
 title: fuse-archive
 section: 1
 header: User Manual
-footer: fuse-archive 1.2
+footer: fuse-archive 1.4
 date: December 2024
 ---
 
