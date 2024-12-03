@@ -609,9 +609,11 @@ struct Node {
 
   i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
 
+  const Node* GetTarget() const { return hardlink_target ?: this; }
+
   struct stat GetStat() const {
     struct stat z = {};
-    z.st_nlink = (hardlink_target ?: this)->nlink;
+    z.st_nlink = GetTarget()->nlink;
     assert(z.st_nlink > 0);
     z.st_ino = ino;
     z.st_mode = mode;
@@ -1655,9 +1657,13 @@ void ProcessEntry(Reader& r) {
 
   if (const char* const s =
           archive_entry_hardlink_utf8(e) ?: archive_entry_hardlink(e)) {
-    // Entry is a hard link. Save it for further resolution.
-    std::string target = Path(s).Normalize();
-    g_hardlinks_to_resolve.emplace_back(std::move(path), std::move(target));
+    // Entry is a hard link.
+    if (g_hardlinks) {
+      // Save it for further resolution.
+      g_hardlinks_to_resolve.emplace_back(std::move(path), Path(s).Normalize());
+    } else {
+      LOG(DEBUG) << "Skipped hardlink " << Path(path) << " -> " << Path(s);
+    }
     return;
   }
 
@@ -1778,6 +1784,15 @@ void ResolveHardlinks() {
       LOG(DEBUG) << "Skipped hardlink " << Path(entry.source_path)
                  << ": Target " << Path(entry.target_path) << " is a directory";
       continue;
+    }
+
+    // Check if this link already exists
+    if (const Node* const source = FindNode(entry.source_path)) {
+      if (source->GetTarget() == target) {
+        LOG(DEBUG) << "Skipped duplicate hardlink " << Path(entry.source_path)
+                   << " -> " << *target;
+        continue;
+      }
     }
 
     const auto [parent_path, name] = Path(entry.source_path).Split();

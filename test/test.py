@@ -775,19 +775,11 @@ def TestHardlinks(options=[]):
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
         'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
         'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
-        'Dir1/Dir2/File': {'ino': 7, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'Dir1/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File1': {'ino': 11, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File2': {'ino': 10, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File3': {'ino': 6, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
         'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File5': {'ino': 9, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'Symlink1': {'ino': 13, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
         'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'Symlink3': {'ino': 12, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
     }
 
-    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=15, want_inodes=13, options=options + ['-o', 'nohardlinks'])
+    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=7, want_inodes=5, options=options + ['-o', 'nohardlinks'])
 
 
 # Tests dmask and fmask.
