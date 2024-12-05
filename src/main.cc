@@ -678,13 +678,14 @@ NodesByPath g_nodes_by_path({buckets.data(), buckets.size()});
 // Root node of the tree.
 Node* g_root_node = nullptr;
 
-// Hardlink to resolve.
+// Hard link to resolve.
 struct Hardlink {
+  i64 index_within_archive;
   std::string source_path;
   std::string target_path;
 };
 
-// Hardlinks to resolve.
+// Hard links to resolve.
 std::vector<Hardlink> g_hardlinks_to_resolve;
 
 // g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
@@ -1660,9 +1661,11 @@ void ProcessEntry(Reader& r) {
     // Entry is a hard link.
     if (g_hardlinks) {
       // Save it for further resolution.
-      g_hardlinks_to_resolve.emplace_back(std::move(path), Path(s).Normalize());
+      g_hardlinks_to_resolve.emplace_back(i, std::move(path),
+                                          Path(s).Normalize());
     } else {
-      LOG(DEBUG) << "Skipped hardlink " << Path(path) << " -> " << Path(s);
+      LOG(DEBUG) << "Skipped hard link " << " [" << i << "] " << Path(path)
+                 << " -> " << Path(s);
     }
     return;
   }
@@ -1765,14 +1768,15 @@ void ProcessEntry(Reader& r) {
   g_block_count += node->GetBlockCount();
 }
 
-// Resolve the hardlinks set aside in g_hardlinks_to_resolve.
+// Resolve the hard links set aside in g_hardlinks_to_resolve.
 void ResolveHardlinks() {
   for (const Hardlink& entry : g_hardlinks_to_resolve) {
     // Find its target.
     Node* target = FindNode(entry.target_path);
     if (!target) {
-      LOG(DEBUG) << "Skipped hardlink " << Path(entry.source_path)
-                 << ": Cannot find target " << Path(entry.target_path);
+      LOG(DEBUG) << "Skipped hard link [" << entry.index_within_archive << "] "
+                 << Path(entry.source_path) << ": Cannot find target "
+                 << Path(entry.target_path);
       continue;
     }
 
@@ -1781,16 +1785,18 @@ void ResolveHardlinks() {
     }
 
     if (target->IsDir()) {
-      LOG(DEBUG) << "Skipped hardlink " << Path(entry.source_path)
-                 << ": Target " << Path(entry.target_path) << " is a directory";
+      LOG(DEBUG) << "Skipped hard link [" << entry.index_within_archive << "] "
+                 << Path(entry.source_path) << ": Target "
+                 << Path(entry.target_path) << " is a directory";
       continue;
     }
 
     // Check if this link already exists.
     if (const Node* const source = FindNode(entry.source_path)) {
       if (source->GetTarget() == target) {
-        LOG(DEBUG) << "Skipped duplicate hardlink " << Path(entry.source_path)
-                   << " -> " << *target;
+        LOG(DEBUG) << "Skipped duplicate hard link ["
+                   << entry.index_within_archive << "] "
+                   << Path(entry.source_path) << " -> " << *target;
         continue;
       }
     }
@@ -1822,8 +1828,8 @@ void ResolveHardlinks() {
     parent->AddChild(node);
     RenameIfCollision(node);
 
-    LOG(DEBUG) << "Resolved Hardlink " << Path(node->GetPath()) << " -> "
-               << *target;
+    LOG(DEBUG) << "Resolved hard link [" << entry.index_within_archive << "] "
+               << Path(node->GetPath()) << " -> " << *target;
   }
 
   g_hardlinks_to_resolve.clear();
@@ -1913,7 +1919,7 @@ void BuildTree() {
       }
     }
 
-    // Resolve hardlinks.
+    // Resolve hard links.
     ResolveHardlinks();
 
     if (g_latest_log_is_ephemeral) {
@@ -2315,7 +2321,7 @@ general options:
          -o nocache        no caching of uncompressed data
          -o nospecials     no special files (FIFOs, sockets, devices)
          -o nosymlinks     no symlinks
-         -o nohardlinks    no hardlinks
+         -o nohardlinks    no hard links
          -o dmask=M        directory permission mask in octal (default 0022)
          -o fmask=M        file permission mask in octal (default 0022)
 
