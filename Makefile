@@ -20,7 +20,7 @@ INSTALL = install
 
 all: out/$(PROJECT)
 
-check: out/$(PROJECT) test/data/big.zip
+check: out/$(PROJECT) test/data/big.zip test/data/collisions.zip
 	python3 test/test.py
 
 clean:
@@ -49,5 +49,8 @@ out/$(PROJECT): src/main.cc
 
 test/data/big.zip: test/make_big_zip.py
 	python3 test/make_big_zip.py
+
+test/data/collisions.zip: test/make_collisions.py
+	python3 test/make_collisions.py
 
 .PHONY: all check clean doc install uninstall
