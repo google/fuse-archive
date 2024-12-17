@@ -416,10 +416,27 @@ class Path : public std::string_view {
     *head += tail;
   }
 
+  bool Consume(std::string_view const prefix) {
+    const bool ok = starts_with(prefix);
+    if (ok) {
+      remove_prefix(prefix.size());
+    }
+    return ok;
+  }
+
+  bool Consume(char const prefix) {
+    const bool ok = starts_with(prefix);
+    if (ok) {
+      remove_prefix(1);
+    }
+    return ok;
+  }
+
   // Normalizes path.
   std::string Normalize() const {
-    if (empty())
-      return std::string();
+    if (empty()) {
+      return "/?";
+    }
 
     Path in = *this;
     std::string result = "/";
@@ -428,13 +445,10 @@ class Path : public std::string_view {
       return result;
     }
 
-    while (in.starts_with("./")) {
-      in.remove_prefix(2);
-    }
-
-    while (in.starts_with("../")) {
-      result += "UP";
-      in.remove_prefix(3);
+    while (in.Consume("./") || in.Consume("../")) {
+      while (in.starts_with('/')) {
+        in.remove_prefix(1);
+      }
     }
 
     // Extract part after part
