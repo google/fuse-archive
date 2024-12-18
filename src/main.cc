@@ -434,22 +434,22 @@ class Path : public std::string_view {
 
   // Gets normalized path.
   std::string Normalized() const {
-    if (empty()) {
+    Path in = *this;
+
+    if (in.empty()) {
       return "/?";
     }
 
-    Path in = *this;
     std::string result = "/";
 
     if (in == ".") {
       return result;
     }
 
-    while (in.Consume("./") || in.Consume("../")) {
-      while (in.starts_with('/')) {
-        in.remove_prefix(1);
+    do {
+      while (in.Consume('/')) {
       }
-    }
+    } while (in.Consume("./") || in.Consume("../"));
 
     // Extract part after part
     size_type i;
