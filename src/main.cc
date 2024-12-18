@@ -432,8 +432,8 @@ class Path : public std::string_view {
     return ok;
   }
 
-  // Normalizes path.
-  std::string Normalize() const {
+  // Gets normalized path.
+  std::string Normalized() const {
     if (empty()) {
       return "/?";
     }
@@ -1440,10 +1440,10 @@ std::string GetNormalizedPath(Entry* const e) {
     return Path(g_archive_path)
         .Split()
         .second.WithoutFinalExtension()
-        .Normalize();
+        .Normalized();
   }
 
-  return path.Normalize();
+  return path.Normalized();
 }
 
 // Checks if the given character is an ASCII digit.
@@ -1676,7 +1676,7 @@ void ProcessEntry(Reader& r) {
     if (g_hardlinks) {
       // Save it for further resolution.
       g_hardlinks_to_resolve.emplace_back(i, std::move(path),
-                                          Path(s).Normalize());
+                                          Path(s).Normalized());
     } else {
       LOG(DEBUG) << "Skipped hard link " << " [" << i << "] " << Path(path)
                  << " -> " << Path(s);
