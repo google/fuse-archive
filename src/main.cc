@@ -1871,7 +1871,7 @@ void CheckRawArchive(Archive* const a) {
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
   if (g_archive_format == ArchiveFormat::RAW && filter_count == 0) {
-    LOG(ERROR) << "Cannot recognize the a format";
+    LOG(ERROR) << "Cannot recognize the archive format";
     throw ExitCode::INVALID_RAW_ARCHIVE;
   }
 }
