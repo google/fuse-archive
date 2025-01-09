@@ -174,13 +174,15 @@ struct Options {
 Options g_options;
 
 const fuse_opt g_fuse_opts[] = {
-    FUSE_OPT_KEY("-h", KEY_HELP),
     FUSE_OPT_KEY("--help", KEY_HELP),
-    FUSE_OPT_KEY("-V", KEY_VERSION),
+    FUSE_OPT_KEY("-h", KEY_HELP),
     FUSE_OPT_KEY("--version", KEY_VERSION),
+    FUSE_OPT_KEY("-V", KEY_VERSION),
     FUSE_OPT_KEY("--quiet", KEY_QUIET),
+    FUSE_OPT_KEY("quiet", KEY_QUIET),
     FUSE_OPT_KEY("-q", KEY_QUIET),
     FUSE_OPT_KEY("--verbose", KEY_VERBOSE),
+    FUSE_OPT_KEY("verbose", KEY_VERBOSE),
     FUSE_OPT_KEY("-v", KEY_VERBOSE),
     FUSE_OPT_KEY("--redact", KEY_REDACT),
     FUSE_OPT_KEY("redact", KEY_REDACT),
@@ -2328,9 +2330,9 @@ general options:
     -V   --version         print version
 
 )" PROGRAM_NAME R"( options:
-    -q   --quiet           do not print progress messages
-    -v   --verbose         print more log messages
-         --redact          redact paths from log messages
+    -q   -o quiet          do not print progress messages
+    -v   -o verbose        print more log messages
+         -o redact         redact paths from log messages
          -o force          continue despite errors
          -o nocache        no caching of uncompressed data
          -o nospecials     no special files (FIFOs, sockets, devices)

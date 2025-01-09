@@ -30,19 +30,19 @@ mount read-only, not read-write.
 
 # OPTIONS
 
-**-\-help** **-h**
+**-\-help** or **-h**
 :   Print help
 
-**-\-version**
+**-\-version** or **-V**
 :   Print version
 
-**-\-quiet** **-q**
+**-o quiet** or **-q**
 :   Print fewer log messages
 
-**-\-verbose** **-v**
+**-o verbose** or **-v**
 :   Print more log messages
 
-**-\-redact**
+**-o redact**
 :   Redact file names from log messages
 
 **-o force**
@@ -67,13 +67,16 @@ mount read-only, not read-write.
 :   File permission mask in octal (default 0022)
 
 **-o uid=N**
-:   Set the file owner of all the items in the mounted archive (default is current user)
+:   Set the file owner of all the items in the mounted archive (default is
+    current user)
 
 **-o gid=N**
-:   Set file group of all the items in the mounted archive (default is current group)
+:   Set file group of all the items in the mounted archive (default is current
+    group)
 
 **-o default_permissions**
-:   Use the file owner (UID), group (GID) and permissions stored with each item in the archive. 
+:   Use the file owner (UID), group (GID) and permissions stored with each item
+    in the archive.
 
 **-f**
 :   Foreground mode
@@ -132,8 +135,8 @@ $ fusermount -u mnt
 In this case, **fuse-archive** takes about the same time to load the archive as
 **archivemount**, but it is **~700× faster** (0.83s vs 570s) to copy out the
 decompressed contents. This is because **fuse-archive** fully caches the archive
-and does not use **archivemount**'s [quadratic complexity
-algorithm](https://github.com/cybernoid/archivemount/issues/21).
+and does not use **archivemount**'s
+[quadratic complexity algorithm](https://github.com/cybernoid/archivemount/issues/21).
 
 # RETURN VALUE
 
