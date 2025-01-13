@@ -2332,14 +2332,14 @@ general options:
 )" PROGRAM_NAME R"( options:
     -q   -o quiet          do not print progress messages
     -v   -o verbose        print more log messages
-         -o redact         redact paths from log messages
-         -o force          continue despite errors
-         -o nocache        no caching of uncompressed data
-         -o nospecials     no special files (FIFOs, sockets, devices)
-         -o nosymlinks     no symlinks
-         -o nohardlinks    no hard links
-         -o dmask=M        directory permission mask in octal (default 0022)
-         -o fmask=M        file permission mask in octal (default 0022)
+    -o redact              redact paths from log messages
+    -o force               continue despite errors
+    -o nocache             no caching of uncompressed data
+    -o nospecials          no special files (FIFOs, sockets, devices)
+    -o nosymlinks          no symlinks
+    -o nohardlinks         no hard links
+    -o dmask=M             directory permission mask in octal (default 0022)
+    -o fmask=M             file permission mask in octal (default 0022)
 
 )";
 }
