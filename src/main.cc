@@ -821,7 +821,7 @@ enum class ProgressMessage : int;
 // Accumulates a log message and logs it.
 class Logger {
  public:
-  explicit Logger(LogLevel const level, error_t err = -1)
+  explicit Logger(LogLevel const level, int err = -1)
       : level_(level), err_(err) {}
 
   Logger(const Logger&) = delete;
@@ -856,7 +856,7 @@ class Logger {
 
  private:
   const LogLevel level_;
-  const error_t err_;
+  const int err_;
   std::ostringstream oss_;
   bool ephemeral_ = false;
 };
@@ -2059,7 +2059,7 @@ int my_read(const char*,
     // Read data from the cache file.
     const ssize_t n = pread(g_cache_fd, dst_ptr, dst_len, offset);
     if (n < 0) {
-      const error_t e = errno;
+      const int e = errno;
       PLOG(ERROR) << "Cannot read " << dst_len << " bytes from cache at offset "
                   << offset;
       return -e;
