@@ -1572,9 +1572,10 @@ Node* GetOrCreateDirNode(std::string_view const path) {
   assert(parent);
 
   // Create the Directory node.
-  Node* const node = new Node{.name = std::string(name),
-                              .mode = S_IFDIR | (0777 & ~g_options.dmask),
-                              .nlink = 2};
+  Node* const node =
+      new Node{.name = std::string(name),
+               .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
+               .nlink = 2};
   parent->AddChild(node);
   assert(node->GetPath() == path);
   [[maybe_unused]] const auto [_, ok] = g_nodes_by_path.insert(*node);
@@ -1722,7 +1723,8 @@ void ProcessEntry(Reader& r) {
   // Create the node for this entry.
   Node* const node = new Node{
       .name = std::string(name),
-      .mode = static_cast<mode_t>(ft) | (0666 & ~g_options.fmask),
+      .mode = static_cast<mode_t>(ft) |
+              static_cast<mode_t>(0666 & ~g_options.fmask),
       .index_within_archive = i,
       .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
 
@@ -1914,8 +1916,10 @@ void BuildTree() {
 
   // Create root node.
   assert(!g_root_node);
-  g_root_node = new Node{
-      .name = "/", .mode = S_IFDIR | (0777 & ~g_options.dmask), .nlink = 2};
+  g_root_node =
+      new Node{.name = "/",
+               .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
+               .nlink = 2};
   [[maybe_unused]] const auto [_, ok] = g_nodes_by_path.insert(*g_root_node);
   assert(ok);
 
