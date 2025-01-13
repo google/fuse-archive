@@ -2401,8 +2401,10 @@ int main(int const argc, char** const argv) try {
   std::string mount_point_parent, mount_point_basename;
   const bool mount_point_specified_by_user = !g_mount_point.empty();
   if (!mount_point_specified_by_user) {
-    g_mount_point =
-        Path(g_archive_path).WithoutTrailingSeparator().WithoutExtension();
+    g_mount_point = Path(g_archive_path)
+                        .WithoutTrailingSeparator()
+                        .Split()
+                        .second.WithoutExtension();
   }
 
   std::tie(mount_point_parent, mount_point_basename) =
