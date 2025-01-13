@@ -880,6 +880,7 @@ void CreateCacheFile() {
 
   const std::string cache_dir = GetCacheDir();
 
+#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
   g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
   if (g_cache_fd >= 0) {
     LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
@@ -898,6 +899,7 @@ void CreateCacheFile() {
   assert(errno == ENOTSUP);
   LOG(DEBUG) << "The filesystem of " << Path(cache_dir)
              << " does not support O_TMPFILE";
+#endif
 
   std::string path = cache_dir;
   Path::Append(&path, "XXXXXX");
