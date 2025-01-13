@@ -147,7 +147,13 @@ std::ostream& operator<<(std::ostream& out, ExitCode const e) {
 // ---- Platform specifics
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+
 #define lseek64 lseek
+
+#ifndef error_t
+typedef int error_t;
+#endif
+
 #endif
 
 // ---- Globals
