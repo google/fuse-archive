@@ -1921,7 +1921,7 @@ void BuildTree() {
 
   // Read and process every entry of the archive.
   try {
-    while (Entry* const entry = r.NextEntry()) {
+    while (r.NextEntry()) {
       CheckRawArchive(r.archive.get());
 
       try {
