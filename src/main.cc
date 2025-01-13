@@ -886,6 +886,8 @@ void CreateCacheFile() {
 
   const std::string cache_dir = GetCacheDir();
 
+#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
+
   g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
   if (g_cache_fd >= 0) {
     LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
@@ -901,7 +903,9 @@ void CreateCacheFile() {
   // files with O_TMPFILE. Unfortunately, these filesystems are sometimes used
   // for the /tmp directory. In that case, create a named temp file, and unlink
   // it immediately.
-  assert(errno == ENOTSUP);
+
+#endif
+
   LOG(DEBUG) << "The filesystem of " << Path(cache_dir)
              << " does not support O_TMPFILE";
 
