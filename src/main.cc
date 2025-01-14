@@ -1725,8 +1725,8 @@ void ProcessEntry(Reader& r) {
   // Create the node for this entry.
   Node* const node = new Node{
       .name = std::string(name),
-      .mode = static_cast<mode_t>(ft) |
-              static_cast<mode_t>(0666 & ~g_options.fmask),
+      .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
+                                  (0666 & ~g_options.fmask)),
       .index_within_archive = i,
       .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
 
