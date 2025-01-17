@@ -252,8 +252,8 @@ ArchiveFormat g_archive_format = ArchiveFormat::NONE;
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
 //
-// libfuse will override my_getattr's use of these variables if the "-o uid=N"
-// or "-o gid=N" command line options are set.
+// libfuse will override GetAttr's use of these variables if the "-o uid=N" or
+// "-o gid=N" command line options are set.
 const uid_t g_uid = getuid();
 const gid_t g_gid = getgid();
 
@@ -709,21 +709,21 @@ std::vector<Hardlink> g_hardlinks_to_resolve;
 // when Reader::advance_offset isn't a no-op. These buffers are roughly
 // equivalent to Unix's /dev/null or Go's io.Discard as a first approximation.
 // However, since we are already producing valid decompressed bytes, by saving
-// them (and their metadata), we may be able to serve some subsequent my_read
+// them (and their metadata), we may be able to serve some subsequent read
 // requests cheaply, without having to spin up another libarchive decompressor
 // to walk forward from the start of the archive entry.
 //
 // In particular (https://crbug.com/1245925#c18), even when libfuse is single-
 // threaded, we have seen kernel readahead causing the offset arguments in a
-// sequence of my_read calls to sometimes arrive out-of-order, where
-// conceptually consecutive reads are swapped. With side buffers, we can serve
-// the second-to-arrive request by a cheap memcpy instead of an expensive
-// "re-do decompression from the start". That side-buffer was filled by a
+// sequence of read calls to sometimes arrive out-of-order, where conceptually
+// consecutive reads are swapped. With side buffers, we can serve the
+// second-to-arrive request by a cheap memcpy instead of an expensive "re-do
+// decompression from the start". That side-buffer was filled by a
 // Reader::advance_offset side-effect from serving the first-to-arrive request.
 constexpr int NUM_SIDE_BUFFERS = 8;
 
 // This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
-// Linux, that seems to be the largest buffer size passed to my_read.
+// Linux, that seems to be the largest buffer size passed to Read().
 constexpr ssize_t SIDE_BUFFER_SIZE = 128 << 10;
 
 uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
@@ -1974,7 +1974,7 @@ void BuildTree() {
 
 // ---- FUSE Callbacks
 
-int my_getattr(const char* const path, struct stat* const z) {
+int GetAttr(const char* const path, struct stat* const z) {
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(DEBUG) << "Cannot stat " << Path(path) << ": No such item";
@@ -1986,9 +1986,9 @@ int my_getattr(const char* const path, struct stat* const z) {
   return 0;
 }
 
-int my_readlink(const char* const path,
-                char* const dst_ptr,
-                size_t const dst_len) {
+int ReadLink(const char* const path,
+             char* const dst_ptr,
+             size_t const dst_len) {
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot read link " << Path(path) << ": No such item";
@@ -2004,7 +2004,7 @@ int my_readlink(const char* const path,
   return 0;
 }
 
-int my_open(const char* const path, fuse_file_info* const ffi) try {
+int Open(const char* const path, fuse_file_info* const ffi) try {
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
@@ -2029,11 +2029,11 @@ int my_open(const char* const path, fuse_file_info* const ffi) try {
   return -EIO;
 }
 
-int my_read(const char*,
-            char* const dst_ptr,
-            size_t dst_len,
-            off_t offset,
-            fuse_file_info* const ffi) try {
+int Read(const char*,
+         char* const dst_ptr,
+         size_t dst_len,
+         off_t offset,
+         fuse_file_info* const ffi) try {
   if (offset < 0 || dst_len > std::numeric_limits<int>::max()) {
     return -EINVAL;
   }
@@ -2125,7 +2125,7 @@ int my_read(const char*,
   return -EIO;
 }
 
-int my_release(const char*, fuse_file_info* const ffi) {
+int Release(const char*, fuse_file_info* const ffi) {
   FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
   assert(h);
 
@@ -2137,11 +2137,11 @@ int my_release(const char*, fuse_file_info* const ffi) {
   return 0;
 }
 
-int my_readdir(const char* path,
-               void* const buf,
-               fuse_fill_dir_t const filler,
-               off_t,
-               fuse_file_info*) {
+int ReadDir(const char* const path,
+            void* const buf,
+            fuse_fill_dir_t const filler,
+            off_t,
+            fuse_file_info*) {
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot read dir " << Path(path) << ": No such item";
@@ -2169,7 +2169,7 @@ int my_readdir(const char* path,
   return 0;
 }
 
-int my_statfs(const char*, struct statvfs* const st) {
+int StatFs(const char*, struct statvfs* const st) {
   assert(st);
   st->f_bsize = block_size;
   st->f_frsize = block_size;
@@ -2184,29 +2184,19 @@ int my_statfs(const char*, struct statvfs* const st) {
   return 0;
 }
 
-void* my_init(fuse_conn_info*) {
-  return nullptr;
-}
-
-void my_destroy(void* arg) {
-  assert(!arg);
-}
-
-const struct fuse_operations my_operations = {
-    .getattr = my_getattr,
-    .readlink = my_readlink,
-    .open = my_open,
-    .read = my_read,
-    .statfs = my_statfs,
-    .release = my_release,
-    .readdir = my_readdir,
-    .init = my_init,
-    .destroy = my_destroy,
+const fuse_operations operations = {
+    .getattr = GetAttr,
+    .readlink = ReadLink,
+    .open = Open,
+    .read = Read,
+    .statfs = StatFs,
+    .release = Release,
+    .readdir = ReadDir,
 };
 
 // ---- Main
 
-int my_opt_proc(void*, const char* const arg, int const key, fuse_args*) {
+int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
   constexpr int KEEP = 1;
   constexpr int DISCARD = 0;
   constexpr int ERROR = -1;
@@ -2362,7 +2352,7 @@ int main(int const argc, char** const argv) try {
   EnsureUtf8();
 
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
-  if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &my_opt_proc) < 0) {
+  if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &ProcessArg) < 0) {
     LOG(ERROR) << "Cannot parse command line arguments";
     throw ExitCode::GENERIC_FAILURE;
   }
@@ -2370,7 +2360,7 @@ int main(int const argc, char** const argv) try {
   if (g_help) {
     PrintUsage();
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
-    fuse_main(args.argc, args.argv, &my_operations, nullptr);
+    fuse_main(args.argc, args.argv, &operations, nullptr);
     return EXIT_SUCCESS;
   }
 
@@ -2394,7 +2384,7 @@ int main(int const argc, char** const argv) try {
     }
 
     fuse_opt_add_arg(&args, "--version");
-    fuse_main(args.argc, args.argv, &my_operations, nullptr);
+    fuse_main(args.argc, args.argv, &operations, nullptr);
     return EXIT_SUCCESS;
   }
 
@@ -2496,7 +2486,7 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "ro");
 
   // Start serving the filesystem.
-  const int res = fuse_main(args.argc, args.argv, &my_operations, nullptr);
+  const int res = fuse_main(args.argc, args.argv, &operations, nullptr);
   LOG(DEBUG) << "Returning " << ExitCode(res);
   return res;
 } catch (const ExitCode e) {
