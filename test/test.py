@@ -162,9 +162,9 @@ def MountArchiveAndCheckTree(
         )
 
         want_block_size = 512
-        if st.f_bsize != want_block_size:
+        if st.f_bsize < want_block_size:
             LogError(
-                f'Mismatch for st.f_bsize: got: {st.f_bsize}, want: {want_block_size}'
+                f'Mismatch for st.f_bsize: got: {st.f_bsize}, want at least: {want_block_size}'
             )
         if st.f_frsize != want_block_size:
             LogError(
