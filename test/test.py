@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 
 # Computes the MD5 hash of the given file.
@@ -69,7 +70,14 @@ def GetTree(root, use_md5=True):
             for entry in os.scandir(path):
                 scan(entry.path, entry.stat(follow_symlinks=False))
 
-    scan(root, os.stat(root, follow_symlinks=False))
+    st = os.stat(root, follow_symlinks=False)
+
+    # On some systems, the mount point is not immediately functional.
+    while st.st_ino == 0:
+        time.sleep(0.1)
+        st = os.stat(root, follow_symlinks=False)
+
+    scan(root, st)
     return result
 
 
@@ -1074,6 +1082,7 @@ def TestBigArchiveRandomOrder(options=[]):
         try:
             logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
 
+            GetTree(mount_point, use_md5=False)
             st = os.statvfs(mount_point)
 
             want_blocks = 10546877
@@ -1088,7 +1097,6 @@ def TestBigArchiveRandomOrder(options=[]):
                     f'Mismatch for st.f_files: got: {st.f_files}, want: {want_inodes}'
                 )
 
-            tree = GetTree(mount_point, use_md5=False)
             fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
             try:
                 random.seed()
@@ -1134,7 +1142,7 @@ def TestBigArchiveStreamed(options=[]):
         )
         try:
             logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
-            tree = GetTree(mount_point, use_md5=False)
+            GetTree(mount_point, use_md5=False)
             fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
             try:
                 random.seed()
