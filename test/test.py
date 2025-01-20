@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 
 # Computes the MD5 hash of the given file.
