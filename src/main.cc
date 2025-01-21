@@ -2412,7 +2412,7 @@ int main(int const argc, char** const argv) try {
   }
 
   // Get a file descriptor to the parent directory of the mount point.
-  const int mount_point_parent_fd =
+  int mount_point_parent_fd =
       open(!mount_point_parent.empty() ? mount_point_parent.c_str() : ".",
            O_DIRECTORY | O_PATH);
   if (mount_point_parent_fd < 0) {
@@ -2456,6 +2456,7 @@ int main(int const argc, char** const argv) try {
           }
         };
 
+        mount_point_parent_fd = -1;
         break;
       }
 
@@ -2466,6 +2467,8 @@ int main(int const argc, char** const argv) try {
 
       if (mount_point_specified_by_user) {
         LOG(INFO) << "Using existing mount point " << Path(g_mount_point);
+        close(mount_point_parent_fd);
+        mount_point_parent_fd = -1;
         break;
       }
 
