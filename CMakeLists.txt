@@ -1,0 +1,31 @@
+cmake_minimum_required(VERSION 3.13)
+
+set(FUSE_ARCHIVE_VERSION 0.1.14)
+set(PROJECT_NAME fuse-archive)
+project(${PROJECT_NAME} VERSION ${FUSE_ARCHIVE_VERSION} LANGUAGES CXX)
+include(GNUInstallDirs)
+
+add_executable(${PROJECT_NAME} src/main.cc)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PC_FUSE REQUIRED fuse)
+
+find_package(Threads REQUIRED)
+find_package(LibArchive REQUIRED)
+
+target_compile_definitions(${PROJECT_NAME} PUBLIC ${PC_FUSE_CFLAGS_OTHER})
+target_link_libraries(${PROJECT_NAME} PUBLIC Threads::Threads)
+target_link_libraries(${PROJECT_NAME} PUBLIC ${pkgcfg_lib_PC_FUSE_fuse})
+target_link_libraries(${PROJECT_NAME} PUBLIC ${LibArchive_LIBRARIES})
+install(TARGETS ${PROJECT_NAME} DESTINATION /usr/bin)
+
+export(PACKAGE ${PROJECT_NAME})
+set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
+set(CPACK_PACKAGE_CONTACT "Nigel Tao <nigeltao@golang.org>")
+set(CPACK_PACKAGE_DESCRIPTION "Serves an archive or compressed file as a FUSE file system.")
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_DEBIAN_COMPRESSION_TYPE "gzip")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/google/fuse-archive")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libfuse-dev")
+include(CPack)
