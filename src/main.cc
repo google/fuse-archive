@@ -145,6 +145,7 @@ std::ostream& operator<<(std::ostream& out, ExitCode const e) {
 }
 
 std::string_view GetErrorString(archive* const a) {
+  // Work around bug https://github.com/libarchive/libarchive/issues/2495.
   return archive_error_string(a) ?: "Unspecified error";
 }
 
