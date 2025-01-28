@@ -144,6 +144,10 @@ std::ostream& operator<<(std::ostream& out, ExitCode const e) {
   return out << "Exit Code " << int(e);
 }
 
+std::string_view GetErrorString(archive* const a) {
+  return archive_error_string(a) ?: "Unspecified error";
+}
+
 // ---- Platform specifics
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
@@ -1127,10 +1131,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
       }
 
       if (status == ARCHIVE_WARN) {
-        LOG(WARNING) << archive_error_string(archive.get());
+        LOG(WARNING) << GetErrorString(archive.get());
       } else if (status != ARCHIVE_OK) {
         assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
-        const std::string_view error = archive_error_string(archive.get());
+        const std::string_view error = GetErrorString(archive.get());
         LOG(ERROR) << "Cannot advance to entry " << index_within_archive << ": "
                    << error;
         ThrowExitCode(error);
@@ -1261,7 +1265,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
           continue;
         }
 
-        const std::string_view error = archive_error_string(archive.get());
+        const std::string_view error = GetErrorString(archive.get());
         LOG(ERROR) << error;
         ThrowExitCode(error);
       }
@@ -1330,7 +1334,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
  private:
   void Check(int const status) const {
     if (status != ARCHIVE_OK) {
-      const std::string_view error = archive_error_string(archive.get());
+      const std::string_view error = GetErrorString(archive.get());
       LOG(ERROR) << error;
       ThrowExitCode(error);
     }
@@ -1642,10 +1646,10 @@ void CacheEntryData(Archive* const a) {
     }
 
     if (status == ARCHIVE_WARN) {
-      LOG(WARNING) << archive_error_string(a);
+      LOG(WARNING) << GetErrorString(a);
     } else if (status != ARCHIVE_OK) {
       assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
-      const std::string_view error = archive_error_string(a);
+      const std::string_view error = GetErrorString(a);
       LOG(ERROR) << error;
       ThrowExitCode(error);
     }
