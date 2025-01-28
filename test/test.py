@@ -1325,6 +1325,7 @@ def TestInvalidArchive():
     CheckArchiveMountingError('', 11)
     CheckArchiveMountingError('absent.zip', 11)
     CheckArchiveMountingError('romeo.txt', 30)
+    CheckArchiveMountingError('truncated.7z', 32)
     if os.getuid() != 0:
         with tempfile.NamedTemporaryFile() as f:
             os.chmod(f.name, 0)
