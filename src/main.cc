@@ -1114,24 +1114,31 @@ struct Reader : bi::list_base_hook<LinkMode> {
   Entry* NextEntry() {
     offset_within_entry = 0;
     index_within_archive++;
-    const int status = archive_read_next_header(archive.get(), &entry);
+    while (true) {
+      const int status = archive_read_next_header(archive.get(), &entry);
 
-    if (status == ARCHIVE_EOF) {
-      entry = nullptr;
-      return nullptr;
+      if (status == ARCHIVE_EOF) {
+        entry = nullptr;
+        return nullptr;
+      }
+
+      if (status == ARCHIVE_RETRY) {
+        continue;
+      }
+
+      if (status == ARCHIVE_WARN) {
+        LOG(WARNING) << archive_error_string(archive.get());
+      } else if (status != ARCHIVE_OK) {
+        assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
+        const std::string_view error = archive_error_string(archive.get());
+        LOG(ERROR) << "Cannot advance to entry " << index_within_archive << ": "
+                   << error;
+        ThrowExitCode(error);
+      }
+
+      assert(entry);
+      return entry;
     }
-
-    if (status == ARCHIVE_WARN) {
-      LOG(WARNING) << archive_error_string(archive.get());
-    } else if (status != ARCHIVE_OK) {
-      const std::string_view error = archive_error_string(archive.get());
-      LOG(ERROR) << "Cannot advance to entry " << index_within_archive << ": "
-                 << error;
-      ThrowExitCode(error);
-    }
-
-    assert(entry);
-    return entry;
   }
 
   // Walks forward until positioned at the want'th index. An index identifies an
@@ -1247,16 +1254,22 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Copies from the archive entry's decompressed contents to the destination
   // buffer. It also advances the Reader's offset_within_entry.
   ssize_t Read(void* const dst_ptr, size_t const dst_len) {
-    const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
-    if (n < 0) {
-      const std::string_view error = archive_error_string(archive.get());
-      LOG(ERROR) << error;
-      ThrowExitCode(error);
-    }
+    while (true) {
+      const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
+      if (n < 0) {
+        if (n == ARCHIVE_RETRY) {
+          continue;
+        }
 
-    assert(n <= dst_len);
-    offset_within_entry += n;
-    return n;
+        const std::string_view error = archive_error_string(archive.get());
+        LOG(ERROR) << error;
+        ThrowExitCode(error);
+      }
+
+      assert(n <= dst_len);
+      offset_within_entry += n;
+      return n;
+    }
   }
 
   // Puts a Reader into the recycle bin.
