@@ -1,0 +1,34 @@
+name: Build and Release
+
+# Trigger the workflow whenever a new tag is pushed:
+on:
+  push:
+    pull_request:
+      branches: [ "main" ]
+    tags:
+      - 'v*'  # Example: Tags starting with 'v' (e.g., v1.0.0)
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest  # Use Ubuntu for Debian compatibility
+    steps:
+      # Install dependencies
+      - name: Install Dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive 
+          sudo apt update 
+          sudo apt install -y libarchive-dev libfuse-dev
+      # Checkout the code
+      - uses: actions/checkout@v4
+
+      # Build the project
+      - name: Build
+        run: make 
+      # Create a release and attach the binary
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./out/fuse-archive
+
+
