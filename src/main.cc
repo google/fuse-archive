@@ -1267,7 +1267,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         }
 
         const std::string_view error = GetErrorString(archive.get());
-        LOG(ERROR) << error;
+        LOG(ERROR) << "Cannot read data from archive: " << error;
         ThrowExitCode(error);
       }
 
@@ -1336,7 +1336,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   void Check(int const status) const {
     if (status != ARCHIVE_OK) {
       const std::string_view error = GetErrorString(archive.get());
-      LOG(ERROR) << error;
+      LOG(ERROR) << "Cannot open archive: " << error;
       ThrowExitCode(error);
     }
   }
@@ -1651,7 +1651,7 @@ void CacheEntryData(Archive* const a) {
     } else if (status != ARCHIVE_OK) {
       assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
       const std::string_view error = GetErrorString(a);
-      LOG(ERROR) << error;
+      LOG(ERROR) << "Cannot read data from archive: " << error;
       ThrowExitCode(error);
     }
 
