@@ -1258,9 +1258,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   // Copies from the archive entry's decompressed contents to the destination
   // buffer. It also advances the Reader's offset_within_entry.
-  ssize_t Read(void* const dst_ptr, size_t const dst_len) {
-    while (true) {
+  ssize_t Read(void* dst_ptr, size_t dst_len) {
+    ssize_t total = 0;
+    while (dst_len > 0) {
       const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
+      if (n == 0) {
+        break;
+      }
+
       if (n < 0) {
         if (n == ARCHIVE_RETRY) {
           continue;
@@ -1272,9 +1277,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
       }
 
       assert(n <= dst_len);
+      dst_len -= n;
+      dst_ptr = static_cast<std::byte*>(dst_ptr) + n;
       offset_within_entry += n;
-      return n;
+      total += n;
     }
+
+    return total;
   }
 
   // Puts a Reader into the recycle bin.
@@ -2151,7 +2160,11 @@ int Read(const char*,
   assert(h->reader);
   assert(h->reader->index_within_archive == node->index_within_archive);
   assert(h->reader->offset_within_entry == offset);
-  return h->reader->Read(dst_ptr, dst_len);
+  ssize_t const n = h->reader->Read(dst_ptr, dst_len);
+  if (n < dst_len) {
+    std::fill(dst_ptr + n, dst_ptr + dst_len, '\0');
+  }
+  return dst_len;
 } catch (...) {
   LOG(DEBUG) << "Caught exception";
   return -EIO;
