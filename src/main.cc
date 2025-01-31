@@ -1793,7 +1793,21 @@ void ProcessEntry(Reader& r) {
     i64 const offset = g_cache_size;
     CacheEntryData(a);
     node->cache_offset = offset;
-    node->size = g_cache_size - offset;
+    i64 const extracted_size = g_cache_size - offset;
+    if (node->size > extracted_size) {
+      // The declared file size is greater than the extracted data size. This
+      // can happen with sparse files that contain a hole at the end. Pad the
+      // extracted data in the cache file to reach the declared size.
+      g_cache_size = offset + node->size;
+      while (ftruncate(g_cache_fd, g_cache_size) < 0) {
+        if (errno != EINTR) {
+          PLOG(ERROR) << "Cannot resize cache to " << g_cache_size << " bytes";
+          throw ExitCode::CANNOT_WRITE_CACHE;
+        }
+      }
+    } else {
+      node->size = extracted_size;
+    }
   } else {
     // Get the entry size without caching the data.
     node->size = r.GetEntrySize();
