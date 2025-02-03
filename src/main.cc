@@ -2161,7 +2161,11 @@ int Read(const char*,
   assert(h->reader->index_within_archive == node->index_within_archive);
   assert(h->reader->offset_within_entry == offset);
   ssize_t const n = h->reader->Read(dst_ptr, dst_len);
+  assert(n >= 0);
+  assert(n <= dst_len);
   if (n < dst_len) {
+    // Pad the buffer with NUL bytes. This is a workaround for
+    // https://github.com/libarchive/libarchive/issues/1194.
     std::fill(dst_ptr + n, dst_ptr + dst_len, '\0');
   }
   return dst_len;
