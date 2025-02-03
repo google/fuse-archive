@@ -1666,35 +1666,35 @@ void CacheEntryData(Archive* const a) {
   const i64 file_start_offset = g_cache_size;
 
   while (true) {
-    const void* buff;
-    size_t len;
-    off_t offset;
+    const void* buff = nullptr;
+    size_t len = 0;
+    off_t offset = g_cache_size - file_start_offset;
 
     const int status = archive_read_data_block(a, &buff, &len, &offset);
-    if (status == ARCHIVE_EOF) {
-      return;
-    }
-
     if (status == ARCHIVE_RETRY) {
       continue;
     }
 
-    if (status == ARCHIVE_WARN) {
-      LOG(WARNING) << GetErrorString(a);
-    } else if (status != ARCHIVE_OK) {
-      assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
+    if (status == ARCHIVE_FAILED || status == ARCHIVE_FATAL) {
       const std::string_view error = GetErrorString(a);
       LOG(ERROR) << "Cannot read data from archive: " << error;
       ThrowExitCode(error);
     }
 
-    assert(offset >= g_cache_size - file_start_offset);
-    offset += file_start_offset;
-    assert(offset >= g_cache_size);
-    g_cache_size = offset;
+    if (status == ARCHIVE_WARN) {
+      LOG(WARNING) << GetErrorString(a);
+    }
+
+    assert(offset >= 0);
+    assert(g_cache_size <= file_start_offset + offset);
+    g_cache_size = file_start_offset + offset;
+
+    if (status == ARCHIVE_EOF) {
+      break;
+    }
 
     while (len > 0) {
-      const ssize_t n = pwrite(g_cache_fd, buff, len, offset);
+      const ssize_t n = pwrite(g_cache_fd, buff, len, g_cache_size);
       if (n < 0) {
         if (errno == EINTR) {
           continue;
@@ -1707,8 +1707,14 @@ void CacheEntryData(Archive* const a) {
       assert(n <= len);
       buff = static_cast<const std::byte*>(buff) + n;
       len -= n;
-      offset += n;
-      g_cache_size = offset;
+      g_cache_size += n;
+    }
+  }
+
+  while (ftruncate(g_cache_fd, g_cache_size) < 0) {
+    if (errno != EINTR) {
+      PLOG(ERROR) << "Cannot resize cache to " << g_cache_size << " bytes";
+      throw ExitCode::CANNOT_WRITE_CACHE;
     }
   }
 }
@@ -1826,21 +1832,7 @@ void ProcessEntry(Reader& r) {
     i64 const offset = g_cache_size;
     CacheEntryData(a);
     node->cache_offset = offset;
-    i64 const extracted_size = g_cache_size - offset;
-    if (node->size > extracted_size) {
-      // The declared file size is greater than the extracted data size. This
-      // can happen with sparse files that contain a hole at the end. Pad the
-      // extracted data in the cache file to reach the declared size.
-      g_cache_size = offset + node->size;
-      while (ftruncate(g_cache_fd, g_cache_size) < 0) {
-        if (errno != EINTR) {
-          PLOG(ERROR) << "Cannot resize cache to " << g_cache_size << " bytes";
-          throw ExitCode::CANNOT_WRITE_CACHE;
-        }
-      }
-    } else {
-      node->size = extracted_size;
-    }
+    node->size = g_cache_size - offset;
   } else {
     // Get the entry size without caching the data.
     node->size = r.GetEntrySize();
@@ -2031,7 +2023,7 @@ void BuildTree() {
     }
   }
 
-  // Close archive file is decompressed data is already cached.
+  // Close archive file if decompressed data is already cached.
   if (g_cache && close(std::exchange(g_archive_fd, -1)) < 0) {
     PLOG(ERROR) << "Cannot close archive file";
   }
