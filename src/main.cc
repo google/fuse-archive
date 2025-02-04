@@ -178,7 +178,7 @@ struct Options {
 
 Options g_options;
 
-const fuse_opt g_fuse_opts[] = {
+fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("--help", KEY_HELP),
     FUSE_OPT_KEY("-h", KEY_HELP),
     FUSE_OPT_KEY("--version", KEY_VERSION),
@@ -259,11 +259,11 @@ ArchiveFormat g_archive_format = ArchiveFormat::NONE;
 //
 // libfuse will override GetAttr's use of these variables if the "-o uid=N" or
 // "-o gid=N" command line options are set.
-const uid_t g_uid = getuid();
-const gid_t g_gid = getgid();
+uid_t const g_uid = getuid();
+gid_t const g_gid = getgid();
 
 using Clock = std::chrono::system_clock;
-const time_t g_now = Clock::to_time_t(Clock::now());
+time_t const g_now = Clock::to_time_t(Clock::now());
 
 // Path manipulations.
 class Path : public std::string_view {
@@ -312,12 +312,12 @@ class Path : public std::string_view {
   // * "foo.tool" -> ".tool"
   // * "foo.toolong" -> no extension
   size_type FinalExtensionPosition() const {
-    const size_type last_dot = find_last_of("/. ");
+    size_type const last_dot = find_last_of("/. ");
     if (last_dot == npos || at(last_dot) != '.' || last_dot == 0 ||
         last_dot == size() - 1 || size() - last_dot > 6)
       return size();
 
-    if (const size_type i = find_last_not_of('.', last_dot - 1);
+    if (size_type const i = find_last_not_of('.', last_dot - 1);
         i == npos || at(i) == '/')
       return size();
 
@@ -327,7 +327,7 @@ class Path : public std::string_view {
   // Same as FinalExtensionPosition, but also takes in account some double
   // extensions such as ".tar.gz".
   size_type ExtensionPosition() const {
-    const size_type last_dot = FinalExtensionPosition();
+    size_type const last_dot = FinalExtensionPosition();
     if (last_dot >= size())
       return last_dot;
 
@@ -340,7 +340,7 @@ class Path : public std::string_view {
     }
 
     // Is it a special extension?
-    static const std::unordered_set<std::string_view> special_exts = {
+    static std::unordered_set<std::string_view> const special_exts = {
         "z", "gz", "bz", "bz2", "xz", "zst", "lz", "lzma"};
     if (special_exts.count(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
@@ -372,7 +372,7 @@ class Path : public std::string_view {
       if (i == 0)
         return i;
 
-      const std::string_view zero_width_joiner = "\u200D";
+      std::string_view const zero_width_joiner = "\u200D";
 
       // Avoid truncating at a zero-width joiner.
       if (substr(i).starts_with(zero_width_joiner)) {
@@ -395,7 +395,7 @@ class Path : public std::string_view {
 
   // Splits path between parent path and basename.
   std::pair<Path, Path> Split() const {
-    const std::string_view::size_type i = find_last_of('/') + 1;
+    std::string_view::size_type const i = find_last_of('/') + 1;
     return {Path(substr(0, i)).WithoutTrailingSeparator(), substr(i)};
   }
 
@@ -424,7 +424,7 @@ class Path : public std::string_view {
   }
 
   bool Consume(std::string_view const prefix) {
-    const bool ok = starts_with(prefix);
+    bool const ok = starts_with(prefix);
     if (ok) {
       remove_prefix(prefix.size());
     }
@@ -432,7 +432,7 @@ class Path : public std::string_view {
   }
 
   bool Consume(char const prefix) {
-    const bool ok = starts_with(prefix);
+    bool const ok = starts_with(prefix);
     if (ok) {
       remove_prefix(1);
     }
@@ -486,7 +486,7 @@ std::ostream& operator<<(std::ostream& out, Path const path) {
     return out << "(redacted)";
 
   out.put('\'');
-  for (const char c : path) {
+  for (char const c : path) {
     switch (c) {
       case '\\':
       case '\'':
@@ -494,7 +494,7 @@ std::ostream& operator<<(std::ostream& out, Path const path) {
         out.put(c);
         break;
       default:
-        const int i = static_cast<unsigned char>(c);
+        int const i = static_cast<unsigned char>(c);
         if (std::iscntrl(i)) {
           out << "\\x" << std::hex << std::setw(2) << std::setfill('0') << i
               << std::dec;
@@ -747,7 +747,7 @@ struct SideBufferMetadata {
     if (this->index_within_archive >= 0 &&
         this->index_within_archive == index_within_archive &&
         this->offset_within_entry <= offset_within_entry) {
-      const i64 o = offset_within_entry - this->offset_within_entry;
+      i64 const o = offset_within_entry - this->offset_within_entry;
       return this->length >= o && this->length - o >= length;
     }
 
@@ -776,7 +776,7 @@ SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
     throw ExitCode::PASSPHRASE_REQUIRED;
   }
 
-  const std::string_view not_supported_prefixes[] = {
+  std::string_view const not_supported_prefixes[] = {
       "Crypto codec not supported",
       "Decryption is unsupported",
       "Encrypted file is unsupported",
@@ -787,7 +787,7 @@ SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
       "Unsupported encryption format",
   };
 
-  for (const std::string_view prefix : not_supported_prefixes) {
+  for (std::string_view const prefix : not_supported_prefixes) {
     if (e.starts_with(prefix)) {
       throw ExitCode::PASSPHRASE_NOT_SUPPORTED;
     }
@@ -840,7 +840,7 @@ class Logger {
     }
 
     if (g_latest_log_is_ephemeral && isatty(STDERR_FILENO)) {
-      const std::string_view s = "\e[F\e[K";
+      std::string_view const s = "\e[F\e[K";
       std::ignore = write(STDERR_FILENO, s.data(), s.size());
     }
 
@@ -860,8 +860,8 @@ class Logger {
   }
 
  private:
-  const LogLevel level_;
-  const int err_;
+  LogLevel const level_;
+  int const err_;
   std::ostringstream oss_;
   bool ephemeral_ = false;
 };
@@ -883,7 +883,7 @@ void CreateCacheFile() {
   assert(g_cache_fd < 0);
   assert(g_cache_size == 0);
 
-  const std::string cache_dir = GetCacheDir();
+  std::string const cache_dir = GetCacheDir();
 
 #if !defined(__FreeBSD__) && !defined(__OpenBSD__)
   g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
@@ -986,7 +986,7 @@ const char* ReadPassword(Archive*, void*) {
     return nullptr;
   }
 
-  const SuppressEcho guard;
+  SuppressEcho const guard;
   if (guard) {
     std::cout << "The archive is encrypted.\n"
                  "What is the passphrase that unlocks this archive?\n"
@@ -1057,7 +1057,7 @@ bool ReadFromSideBuffer(i64 const index_within_archive,
   if (best_i >= 0) {
     SideBufferMetadata& meta = g_side_buffer_metadata[best_i];
     meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
-    const i64 o = offset_within_entry - meta.offset_within_entry;
+    i64 const o = offset_within_entry - meta.offset_within_entry;
     memcpy(dst_ptr, g_side_buffer_data[best_i] + o, dst_len);
     return true;
   }
@@ -1155,7 +1155,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     assert(index_within_archive < want);
-    const Timer timer;
+    Timer const timer;
 
     do {
       if (!NextEntry()) {
@@ -1181,11 +1181,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     assert(offset_within_entry < want);
 
-    const Timer timer;
+    Timer const timer;
 
     // We are behind where we want to be. Advance (decompressing from the
     // archive entry into a side buffer) until we get there.
-    const int sb = AcquireSideBuffer();
+    int const sb = AcquireSideBuffer();
     assert(0 <= sb && sb < NUM_SIDE_BUFFERS);
 
     uint8_t* const dst_ptr = g_side_buffer_data[sb];
@@ -1212,7 +1212,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       }
 
       meta.length = 0;
-      const ssize_t n = Read(dst_ptr, dst_len);
+      ssize_t const n = Read(dst_ptr, dst_len);
       assert(n >= 0);
 
       meta.length = n;
@@ -1287,7 +1287,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   ssize_t Read(void* dst_ptr, size_t dst_len) {
     ssize_t total = 0;
     while (dst_len > 0) {
-      const ssize_t n = archive_read_data(archive.get(), dst_ptr, dst_len);
+      ssize_t const n = archive_read_data(archive.get(), dst_ptr, dst_len);
       if (n == 0) {
         break;
       }
@@ -1384,7 +1384,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     assert(g_archive_fd >= 0);
     Reader& r = *static_cast<Reader*>(p);
     while (true) {
-      const ssize_t n = pread(g_archive_fd, r.bytes, sizeof(r.bytes), r.pos);
+      ssize_t const n = pread(g_archive_fd, r.bytes, sizeof(r.bytes), r.pos);
       if (n >= 0) {
         r.pos += n;
         r.PrintProgress();
@@ -1433,7 +1433,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     constexpr auto period = std::chrono::seconds(1);
-    const auto now = std::chrono::steady_clock::now();
+    auto const now = std::chrono::steady_clock::now();
     static auto next = now + period;
     if (now < next) {
       return;
@@ -1488,7 +1488,7 @@ std::string GetNormalizedPath(Entry* const e) {
     return "";
   }
 
-  const Path path = s;
+  Path const path = s;
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
@@ -1505,7 +1505,7 @@ std::string GetNormalizedPath(Entry* const e) {
 }
 
 // Checks if the given character is an ASCII digit.
-bool IsAsciiDigit(const char c) {
+bool IsAsciiDigit(char const c) {
   return c >= '0' && c <= '9';
 }
 
@@ -1542,7 +1542,7 @@ void RemoveNumericSuffix(std::string& s) {
 
 // Finds a node by full path.
 Node* FindNode(std::string_view const path) {
-  const auto it = g_nodes_by_path.find(Path(path).WithoutTrailingSeparator(),
+  auto const it = g_nodes_by_path.find(Path(path).WithoutTrailingSeparator(),
                                        g_nodes_by_path.hash_function(),
                                        g_nodes_by_path.key_eq());
   return it == g_nodes_by_path.end() ? nullptr : &*it;
@@ -1558,7 +1558,7 @@ void RehashIfNecessary() {
 
 void RenameIfCollision(Node* const node) {
   assert(node);
-  const auto [pos, ok] = g_nodes_by_path.insert(*node);
+  auto const [pos, ok] = g_nodes_by_path.insert(*node);
   if (ok) {
     RehashIfNecessary();
     return;
@@ -1569,20 +1569,20 @@ void RenameIfCollision(Node* const node) {
 
   // Extract filename extension
   std::string& f = node->name;
-  const std::string::size_type e = Path(f).ExtensionPosition();
-  const std::string ext(f, e);
+  std::string::size_type const e = Path(f).ExtensionPosition();
+  std::string const ext(f, e);
   f.resize(e);
   RemoveNumericSuffix(f);
-  const std::string base = f;
+  std::string const base = f;
 
   // Add a number before the extension
   for (int* i = nullptr;;) {
-    const std::string suffix =
+    std::string const suffix =
         StrCat(" (", std::to_string(i ? ++*i + 1 : 1), ")", ext);
     f.assign(base, 0, Path(base).TruncationPosition(NAME_MAX - suffix.size()));
     f += suffix;
 
-    const auto [pos, ok] = g_nodes_by_path.insert(*node);
+    auto const [pos, ok] = g_nodes_by_path.insert(*node);
     if (ok) {
       LOG(DEBUG) << "Resolved conflict for " << *node;
       RehashIfNecessary();
@@ -1602,7 +1602,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
     return g_root_node;
   }
 
-  const auto [parent_path, name] = Path(path).Split();
+  auto const [parent_path, name] = Path(path).Split();
   Node* to_rename = nullptr;
   Node* parent = nullptr;
 
@@ -1634,7 +1634,7 @@ Node* GetOrCreateDirNode(std::string_view const path) {
                .nlink = 2};
   parent->AddChild(node);
   assert(node->GetPath() == path);
-  [[maybe_unused]] const auto [_, ok] = g_nodes_by_path.insert(*node);
+  [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
   assert(ok);
   RehashIfNecessary();
 
@@ -1666,7 +1666,7 @@ bool ShouldSkip(FileType const ft) {
 
 void CacheEntryData(Archive* const a) {
   assert(g_cache_size >= 0);
-  const i64 file_start_offset = g_cache_size;
+  i64 const file_start_offset = g_cache_size;
 
   while (true) {
     const void* buff = nullptr;
@@ -1687,7 +1687,7 @@ void CacheEntryData(Archive* const a) {
         g_cache_size = file_start_offset + offset;
 
         while (len > 0) {
-          const ssize_t n = pwrite(g_cache_fd, buff, len, g_cache_size);
+          ssize_t const n = pwrite(g_cache_fd, buff, len, g_cache_size);
           if (n < 0) {
             if (errno == EINTR) {
               continue;
@@ -1733,9 +1733,9 @@ void CacheEntryData(Archive* const a) {
 void ProcessEntry(Reader& r) {
   Archive* const a = r.archive.get();
   Entry* const e = r.entry;
-  const i64 i = r.index_within_archive;
+  i64 const i = r.index_within_archive;
   mode_t mode = archive_entry_mode(e);
-  const FileType ft = GetFileType(mode);
+  FileType const ft = GetFileType(mode);
 
   std::string path = GetNormalizedPath(e);
   if (path.empty()) {
@@ -1774,7 +1774,7 @@ void ProcessEntry(Reader& r) {
     if (g_default_permissions) {
       node->uid = archive_entry_uid(e);
       node->gid = archive_entry_gid(e);
-      const mode_t pbits = 0777;
+      mode_t const pbits = 0777;
       node->mode &= ~pbits;
       node->mode |= mode & pbits;
     }
@@ -1783,7 +1783,7 @@ void ProcessEntry(Reader& r) {
   }
 
   // This entry is not a directory.
-  const auto [parent_path, name] = Path(path).Split();
+  auto const [parent_path, name] = Path(path).Split();
 
   // Get or create the parent node.
   Node* const parent = GetOrCreateDirNode(parent_path);
@@ -1801,10 +1801,10 @@ void ProcessEntry(Reader& r) {
   if (g_default_permissions) {
     node->uid = archive_entry_uid(e);
     node->gid = archive_entry_gid(e);
-    const mode_t pbits = 0777;
+    mode_t const pbits = 0777;
     node->mode &= ~pbits;
     node->mode |= mode & pbits;
-  } else if (const mode_t xbits = 0111; (mode & xbits) != 0) {
+  } else if (mode_t const xbits = 0111; (mode & xbits) != 0) {
     // Adjust the access bits if the file is executable.
     node->mode |= xbits & ~g_options.fmask;
   }
@@ -1889,7 +1889,7 @@ void ResolveHardlinks() {
       }
     }
 
-    const auto [parent_path, name] = Path(entry.source_path).Split();
+    auto const [parent_path, name] = Path(entry.source_path).Split();
 
     // Get or create the parent node.
     Node* const parent = GetOrCreateDirNode(parent_path);
@@ -1971,7 +1971,7 @@ void BuildTree() {
   if (struct stat z; fstat(g_archive_fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat " << Path(g_archive_path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
-  } else if (const FileType ft = GetFileType(z.st_mode); ft != FileType::File) {
+  } else if (FileType const ft = GetFileType(z.st_mode); ft != FileType::File) {
     LOG(ERROR) << "Archive " << Path(g_archive_path)
                << " is not a regular file: It is a " << ft;
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
@@ -1990,7 +1990,7 @@ void BuildTree() {
       new Node{.name = "/",
                .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
                .nlink = 2};
-  [[maybe_unused]] const auto [_, ok] = g_nodes_by_path.insert(*g_root_node);
+  [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*g_root_node);
   assert(ok);
 
   // Read and process every entry of the archive.
@@ -2127,9 +2127,9 @@ int Read(const char*,
     offset += node->cache_offset;
 
     // Read data from the cache file.
-    const ssize_t n = pread(g_cache_fd, dst_ptr, dst_len, offset);
+    ssize_t const n = pread(g_cache_fd, dst_ptr, dst_len, offset);
     if (n < 0) {
-      const int e = errno;
+      int const e = errno;
       PLOG(ERROR) << "Cannot read " << dst_len << " bytes from cache at offset "
                   << offset;
       return -e;
@@ -2139,13 +2139,13 @@ int Read(const char*,
     return n;
   }
 
-  const i64 size = node->size;
+  i64 const size = node->size;
   assert(size >= 0);
   if (size <= offset) {
     return 0;
   }
 
-  const i64 remaining = size - offset;
+  i64 const remaining = size - offset;
   if (dst_len > remaining) {
     dst_len = remaining;
   }
@@ -2234,7 +2234,7 @@ int ReadDir(const char* const path,
   }
 
   for (const Node& child : n->children) {
-    const struct stat z = child.GetStat();
+    struct stat const z = child.GetStat();
     if (filler(buf, child.name.c_str(), &z, 0)) {
       return -ENOMEM;
     }
@@ -2260,7 +2260,7 @@ int StatFs(const char*, struct statvfs* const st) {
   return 0;
 }
 
-const fuse_operations operations = {
+fuse_operations const operations = {
     .getattr = GetAttr,
     .readlink = ReadLink,
     .open = Open,
@@ -2364,7 +2364,7 @@ void EnsureUtf8() {
       "",
   };
 
-  const std::string_view want = "UTF-8";
+  std::string_view const want = "UTF-8";
   for (const char* const locale : locales) {
     if (setlocale(LC_ALL, locale) && want == nl_langinfo(CODESET)) {
       return;
@@ -2471,7 +2471,7 @@ int main(int const argc, char** const argv) try {
 
   // Determine where the mount point should be.
   std::string mount_point_parent, mount_point_basename;
-  const bool mount_point_specified_by_user = !g_mount_point.empty();
+  bool const mount_point_specified_by_user = !g_mount_point.empty();
   if (!mount_point_specified_by_user) {
     g_mount_point = Path(g_archive_path)
                         .WithoutTrailingSeparator()
@@ -2511,7 +2511,7 @@ int main(int const argc, char** const argv) try {
   // Create the mount point if it does not already exist.
   Cleanup cleanup;
   {
-    const auto n = mount_point_basename.size();
+    auto const n = mount_point_basename.size();
     int i = 0;
     for (;;) {
       g_mount_point = mount_point_parent;
@@ -2565,10 +2565,10 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "ro");
 
   // Start serving the filesystem.
-  const int res = fuse_main(args.argc, args.argv, &operations, nullptr);
+  int const res = fuse_main(args.argc, args.argv, &operations, nullptr);
   LOG(DEBUG) << "Returning " << ExitCode(res);
   return res;
-} catch (const ExitCode e) {
+} catch (ExitCode const e) {
   LOG(DEBUG) << "Returning " << e;
   return static_cast<int>(e);
 } catch (const std::exception& e) {
