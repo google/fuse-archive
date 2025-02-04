@@ -402,6 +402,11 @@ def TestArchiveWithOptions(options=[]):
             'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
             'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
         },
+        'data_descriptor.zip.gz': {
+            '.': {'mode': 'drwxr-xr-x'},
+            '-': {'mode': '-rw-r--r--', 'mtime': 1441434748000000000, 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
+            'second.txt': {'mode': '-rw-r--r--', 'mtime': 1441454452000000000, 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'}
+        },
         'mixed-paths.zip': {
             '.': {'mode': 'drwxr-xr-x'},
             "Quote ' (1)": {'md5': '3ca0f2a7d572f3ad256fcd13e39bd8da'},
