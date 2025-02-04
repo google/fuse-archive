@@ -1234,8 +1234,32 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     // Consume the entry's data.
-    std::byte buffer[16 << 10];
-    while (Read(buffer, sizeof(buffer))) {
+    for (off_t offset = offset_within_entry;;) {
+      const void* buff = nullptr;
+      size_t len = 0;
+
+      const int status =
+          archive_read_data_block(archive.get(), &buff, &len, &offset);
+
+      if (status == ARCHIVE_RETRY) {
+        continue;
+      }
+
+      if (status == ARCHIVE_WARN) {
+        LOG(WARNING) << GetErrorString(archive.get());
+      } else if (status == ARCHIVE_FAILED || status == ARCHIVE_FATAL) {
+        const std::string_view error = GetErrorString(archive.get());
+        LOG(ERROR) << "Cannot read data from archive: " << error;
+        ThrowExitCode(error);
+      }
+
+      offset += len;
+      offset_within_entry = offset;
+
+      if (status == ARCHIVE_EOF) {
+        assert(len == 0);
+        break;
+      }
     }
 
     if (archive_entry_is_encrypted(entry)) {
