@@ -1254,6 +1254,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
         case ARCHIVE_EOF:
           assert(len == 0);
+          assert(offset_within_entry <= offset);
           offset_within_entry = offset;
 
           if (archive_entry_is_encrypted(entry)) {
