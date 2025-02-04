@@ -1120,29 +1120,29 @@ struct Reader : bi::list_base_hook<LinkMode> {
     offset_within_entry = 0;
     index_within_archive++;
     while (true) {
-      const int status = archive_read_next_header(archive.get(), &entry);
+      switch (archive_read_next_header(archive.get(), &entry)) {
+        case ARCHIVE_RETRY:
+          continue;
 
-      if (status == ARCHIVE_EOF) {
-        entry = nullptr;
-        return nullptr;
+        case ARCHIVE_WARN:
+          LOG(WARNING) << GetErrorString(archive.get());
+          [[fallthrough]];
+
+        case ARCHIVE_OK:
+          assert(entry);
+          return entry;
+
+        case ARCHIVE_EOF:
+          entry = nullptr;
+          return nullptr;
+
+        case ARCHIVE_FAILED:
+        case ARCHIVE_FATAL:
+          std::string_view const error = GetErrorString(archive.get());
+          LOG(ERROR) << "Cannot advance to entry " << index_within_archive
+                     << ": " << error;
+          ThrowExitCode(error);
       }
-
-      if (status == ARCHIVE_RETRY) {
-        continue;
-      }
-
-      if (status == ARCHIVE_WARN) {
-        LOG(WARNING) << GetErrorString(archive.get());
-      } else if (status != ARCHIVE_OK) {
-        assert(status == ARCHIVE_FAILED || status == ARCHIVE_FATAL);
-        const std::string_view error = GetErrorString(archive.get());
-        LOG(ERROR) << "Cannot advance to entry " << index_within_archive << ": "
-                   << error;
-        ThrowExitCode(error);
-      }
-
-      assert(entry);
-      return entry;
     }
   }
 
@@ -1238,35 +1238,37 @@ struct Reader : bi::list_base_hook<LinkMode> {
       const void* buff = nullptr;
       size_t len = 0;
 
-      const int status =
-          archive_read_data_block(archive.get(), &buff, &len, &offset);
+      switch (archive_read_data_block(archive.get(), &buff, &len, &offset)) {
+        case ARCHIVE_RETRY:
+          continue;
 
-      if (status == ARCHIVE_RETRY) {
-        continue;
-      }
+        case ARCHIVE_WARN:
+          LOG(WARNING) << GetErrorString(archive.get());
+          [[fallthrough]];
 
-      if (status == ARCHIVE_WARN) {
-        LOG(WARNING) << GetErrorString(archive.get());
-      } else if (status == ARCHIVE_FAILED || status == ARCHIVE_FATAL) {
-        const std::string_view error = GetErrorString(archive.get());
-        LOG(ERROR) << "Cannot read data from archive: " << error;
-        ThrowExitCode(error);
-      }
+        case ARCHIVE_OK:
+          assert(len > 0);
+          offset += len;
+          offset_within_entry = offset;
+          continue;
 
-      offset += len;
-      offset_within_entry = offset;
+        case ARCHIVE_EOF:
+          assert(len == 0);
+          offset_within_entry = offset;
 
-      if (status == ARCHIVE_EOF) {
-        assert(len == 0);
-        break;
+          if (archive_entry_is_encrypted(entry)) {
+            g_password_checked = true;
+          }
+
+          return offset_within_entry;
+
+        case ARCHIVE_FAILED:
+        case ARCHIVE_FATAL:
+          std::string_view const error = GetErrorString(archive.get());
+          LOG(ERROR) << "Cannot read data from archive: " << error;
+          ThrowExitCode(error);
       }
     }
-
-    if (archive_entry_is_encrypted(entry)) {
-      g_password_checked = true;
-    }
-
-    return offset_within_entry;
   }
 
   void CheckPassword() {
@@ -1295,11 +1297,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
           continue;
         }
 
-        const std::string_view error = GetErrorString(archive.get());
+        std::string_view const error = GetErrorString(archive.get());
         LOG(ERROR) << "Cannot read data from archive: " << error;
         ThrowExitCode(error);
       }
 
+      assert(n > 0);
       assert(n <= dst_len);
       dst_len -= n;
       dst_ptr = static_cast<std::byte*>(dst_ptr) + n;
@@ -1368,7 +1371,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
  private:
   void Check(int const status) const {
     if (status != ARCHIVE_OK) {
-      const std::string_view error = GetErrorString(archive.get());
+      std::string_view const error = GetErrorString(archive.get());
       LOG(ERROR) << "Cannot open archive: " << error;
       ThrowExitCode(error);
     }
@@ -1670,51 +1673,59 @@ void CacheEntryData(Archive* const a) {
     size_t len = 0;
     off_t offset = g_cache_size - file_start_offset;
 
-    const int status = archive_read_data_block(a, &buff, &len, &offset);
-    if (status == ARCHIVE_RETRY) {
-      continue;
-    }
+    switch (archive_read_data_block(a, &buff, &len, &offset)) {
+      case ARCHIVE_RETRY:
+        continue;
 
-    if (status == ARCHIVE_FAILED || status == ARCHIVE_FATAL) {
-      const std::string_view error = GetErrorString(a);
-      LOG(ERROR) << "Cannot read data from archive: " << error;
-      ThrowExitCode(error);
-    }
+      case ARCHIVE_WARN:
+        LOG(WARNING) << GetErrorString(a);
+        [[fallthrough]];
 
-    if (status == ARCHIVE_WARN) {
-      LOG(WARNING) << GetErrorString(a);
-    }
+      case ARCHIVE_OK:
+        assert(offset >= 0);
+        assert(g_cache_size <= file_start_offset + offset);
+        g_cache_size = file_start_offset + offset;
 
-    assert(offset >= 0);
-    assert(g_cache_size <= file_start_offset + offset);
-    g_cache_size = file_start_offset + offset;
+        while (len > 0) {
+          const ssize_t n = pwrite(g_cache_fd, buff, len, g_cache_size);
+          if (n < 0) {
+            if (errno == EINTR) {
+              continue;
+            }
 
-    if (status == ARCHIVE_EOF) {
-      break;
-    }
+            PLOG(ERROR) << "Cannot write to cache";
+            throw ExitCode::CANNOT_WRITE_CACHE;
+          }
 
-    while (len > 0) {
-      const ssize_t n = pwrite(g_cache_fd, buff, len, g_cache_size);
-      if (n < 0) {
-        if (errno == EINTR) {
-          continue;
+          assert(n <= len);
+          buff = static_cast<const std::byte*>(buff) + n;
+          len -= n;
+          g_cache_size += n;
         }
 
-        PLOG(ERROR) << "Cannot write to cache";
-        throw ExitCode::CANNOT_WRITE_CACHE;
-      }
+        continue;
 
-      assert(n <= len);
-      buff = static_cast<const std::byte*>(buff) + n;
-      len -= n;
-      g_cache_size += n;
-    }
-  }
+      case ARCHIVE_EOF:
+        assert(len == 0);
+        assert(offset >= 0);
+        assert(g_cache_size <= file_start_offset + offset);
+        g_cache_size = file_start_offset + offset;
 
-  while (ftruncate(g_cache_fd, g_cache_size) < 0) {
-    if (errno != EINTR) {
-      PLOG(ERROR) << "Cannot resize cache to " << g_cache_size << " bytes";
-      throw ExitCode::CANNOT_WRITE_CACHE;
+        while (ftruncate(g_cache_fd, g_cache_size) < 0) {
+          if (errno != EINTR) {
+            PLOG(ERROR) << "Cannot resize cache to " << g_cache_size
+                        << " bytes";
+            throw ExitCode::CANNOT_WRITE_CACHE;
+          }
+        }
+
+        return;
+
+      case ARCHIVE_FAILED:
+      case ARCHIVE_FATAL:
+        std::string_view const error = GetErrorString(a);
+        LOG(ERROR) << "Cannot read data from archive: " << error;
+        ThrowExitCode(error);
     }
   }
 }
