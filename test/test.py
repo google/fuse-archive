@@ -766,7 +766,7 @@ def TestArchiveWithOptions(options=[]):
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'foo': {'mode': '-rw-r--r--', 'mtime': 1641016352000000000, 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
         },
-        'sparse.tar': {
+        'sparse.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'sparse': {'mode': '-rw-r--r--', 'mtime': 0, 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
         }
