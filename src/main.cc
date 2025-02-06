@@ -2555,7 +2555,7 @@ int main(int const argc, char** const argv) try {
       }
 
       if (mount_point_specified_by_user) {
-        LOG(INFO) << "Using existing mount point " << Path(g_mount_point);
+        LOG(DEBUG) << "Using existing mount point " << Path(g_mount_point);
         close(mount_point_parent_fd);
         mount_point_parent_fd = -1;
         break;
