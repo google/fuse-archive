@@ -1226,8 +1226,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Gets the current entry size. 'Raw' archives don't always explicitly record
   // the decompressed size. We'll have to decompress it to find out. Some
   // 'cooked' archives also don't explicitly record this (at the time
-  // archive_read_next_header returns). See
-  // https://github.com/libarchive/libarchive/issues/1764
+  // archive_read_next_header returns).
+  // See https://github.com/libarchive/libarchive/issues/1764.
   i64 GetEntrySize() {
     if (archive_entry_size_is_set(entry)) {
       return archive_entry_size(entry);
@@ -1247,15 +1247,18 @@ struct Reader : bi::list_base_hook<LinkMode> {
           [[fallthrough]];
 
         case ARCHIVE_OK:
-          assert(len > 0);
           offset += len;
           offset_within_entry = offset;
           continue;
 
         case ARCHIVE_EOF:
           assert(len == 0);
+          assert(offset >= 0);
           assert(offset_within_entry <= offset);
-          offset_within_entry = offset;
+
+          if (offset_within_entry < offset) {
+            offset_within_entry = offset;
+          }
 
           if (archive_entry_is_encrypted(entry)) {
             g_password_checked = true;
@@ -1710,13 +1713,18 @@ void CacheEntryData(Archive* const a) {
         assert(len == 0);
         assert(offset >= 0);
         assert(g_cache_size <= file_start_offset + offset);
-        g_cache_size = file_start_offset + offset;
 
-        while (ftruncate(g_cache_fd, g_cache_size) < 0) {
-          if (errno != EINTR) {
-            PLOG(ERROR) << "Cannot resize cache to " << g_cache_size
-                        << " bytes";
-            throw ExitCode::CANNOT_WRITE_CACHE;
+        // Adjust the cache size if there is a final "hole".
+        // See https://github.com/google/fuse-archive/issues/40
+        if (i64 const cache_size = file_start_offset + offset;
+            g_cache_size < cache_size) {
+          g_cache_size = cache_size;
+          while (ftruncate(g_cache_fd, g_cache_size) < 0) {
+            if (errno != EINTR) {
+              PLOG(ERROR) << "Cannot resize cache to " << g_cache_size
+                          << " bytes";
+              throw ExitCode::CANNOT_WRITE_CACHE;
+            }
           }
         }
 
@@ -2194,8 +2202,12 @@ int Read(const char*,
   if (n < dst_len) {
     // Pad the buffer with NUL bytes. This is a workaround for
     // https://github.com/libarchive/libarchive/issues/1194.
-    std::fill(dst_ptr + n, dst_ptr + dst_len, '\0');
+    // See https://github.com/google/fuse-archive/issues/40.
+    // std::fill(dst_ptr + n, dst_ptr + dst_len, '\0');
+    assert(std::all_of(dst_ptr + n, dst_ptr + dst_len,
+                       [](char const c) { return c == '\0'; }));
   }
+
   return dst_len;
 } catch (...) {
   LOG(DEBUG) << "Caught exception";
