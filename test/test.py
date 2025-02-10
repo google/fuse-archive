@@ -246,19 +246,8 @@ def TestArchiveWithOptions(options=[]):
             'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
         },
         'archive.zip.gz': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
-            'artificial': {'mode': 'drwxr-xr-x'},
-            'artificial/0.bytes': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
-            'github-tags.json': {'mode': '-rw-r--r--', 'mtime': 1597241062000000000, 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
-            # The executable bit of 'hello.sh' is "lost" in this case
-            # See https://github.com/libarchive/libarchive/issues/1764#issuecomment-2632702884
-            'hello.sh': {'mode': '-rw-r--r--', 'mtime': 1620022795000000000, 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
-            'non-ascii': {'mode': 'drwxr-xr-x'},
-            'non-ascii/αβ.txt': {'mode': '-rw-r--r--', 'mtime': 1620022605000000000, 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
-            'non-ascii/😻.txt': {'mode': '-rw-r--r--', 'mtime': 1620022983000000000, 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
-            'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
-            'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
-            'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1701219888000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
         },
         'archive.rar': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
@@ -402,7 +391,7 @@ def TestArchiveWithOptions(options=[]):
             'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
             'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
         },
-        'data_descriptor.zip.gz': {
+        'data_descriptor.zip': {
             '.': {'mode': 'drwxr-xr-x'},
             '-': {'mode': '-rw-r--r--', 'mtime': 1441434748000000000, 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
             'second.txt': {'mode': '-rw-r--r--', 'mtime': 1441454452000000000, 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'}
@@ -772,6 +761,7 @@ def TestArchiveWithOptions(options=[]):
         },
         'sparse.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            # https://github.com/google/fuse-archive/issues/40
             'sparse': {'mode': '-rw-r--r--', 'mtime': 0, 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
         }
     }

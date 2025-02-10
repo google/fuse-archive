@@ -1100,13 +1100,45 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     Check(archive_read_support_filter_all(archive.get()));
-    Check(archive_read_support_format_all(archive.get()));
+
+    // Prepare the handlers for the recognized archive formats. We don't call
+    // archive_read_support_format_all() because we don't want to handle ZIP
+    // archives in streamable mode. We only handle ZIP archives in seekable
+    // mode.
+    // See https://github.com/libarchive/libarchive/issues/1764.
+    // See https://github.com/libarchive/libarchive/issues/2502.
+    Check(archive_read_support_format_zip_seekable(archive.get()));
+
+    // The following archive formats are supported by libarchive and tested by
+    // fuse-archive's authors.
+    Check(archive_read_support_format_7zip(archive.get()));
+    Check(archive_read_support_format_cab(archive.get()));
+    Check(archive_read_support_format_iso9660(archive.get()));
+    Check(archive_read_support_format_rar(archive.get()));
+    Check(archive_read_support_format_rar5(archive.get()));
+    Check(archive_read_support_format_tar(archive.get()));
+    Check(archive_read_support_format_empty(archive.get()));
+
+    // The following archive formats are supported by libarchive, but they
+    // haven't been tested by fuse-archive's authors.
+    Check(archive_read_support_format_ar(archive.get()));
+    Check(archive_read_support_format_cpio(archive.get()));
+    Check(archive_read_support_format_lha(archive.get()));
+    Check(archive_read_support_format_mtree(archive.get()));
+    Check(archive_read_support_format_xar(archive.get()));
+    Check(archive_read_support_format_warc(archive.get()));
+
+    // We use the "raw" archive format to read simple compressed files such as
+    // "romeo.txt.gz".
     Check(archive_read_support_format_raw(archive.get()));
 
+    // Set callbacks to read the archive file itself.
     Check(archive_read_set_callback_data(archive.get(), this));
     Check(archive_read_set_read_callback(archive.get(), Read));
     Check(archive_read_set_seek_callback(archive.get(), Seek));
     Check(archive_read_set_skip_callback(archive.get(), Skip));
+
+    // Open the archive.
     Check(archive_read_open1(archive.get()));
 
     LOG(DEBUG) << "Created " << *this;
