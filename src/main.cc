@@ -2083,6 +2083,7 @@ void BuildTree() {
 // ---- FUSE Callbacks
 
 int GetAttr(const char* const path, struct stat* const z) {
+  assert(path);
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(DEBUG) << "Cannot stat " << Path(path) << ": No such item";
@@ -2097,6 +2098,7 @@ int GetAttr(const char* const path, struct stat* const z) {
 int ReadLink(const char* const path,
              char* const dst_ptr,
              size_t const dst_len) {
+  assert(path);
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot read link " << Path(path) << ": No such item";
@@ -2113,6 +2115,7 @@ int ReadLink(const char* const path,
 }
 
 int Open(const char* const path, fuse_file_info* const ffi) try {
+  assert(path);
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
@@ -2146,6 +2149,7 @@ int Read(const char*,
     return -EINVAL;
   }
 
+  assert(ffi);
   FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
   assert(h);
 
@@ -2246,6 +2250,7 @@ int Read(const char*,
 }
 
 int Release(const char*, fuse_file_info* const ffi) {
+  assert(ffi);
   FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
   assert(h);
 
@@ -2257,21 +2262,34 @@ int Release(const char*, fuse_file_info* const ffi) {
   return 0;
 }
 
-int ReadDir(const char* const path,
-            void* const buf,
-            fuse_fill_dir_t const filler,
-            off_t,
-            fuse_file_info*) {
+int OpenDir(const char* const path, fuse_file_info* const ffi) {
+  assert(path);
   const Node* const n = FindNode(path);
   if (!n) {
-    LOG(ERROR) << "Cannot read dir " << Path(path) << ": No such item";
+    LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
   if (!n->IsDir()) {
-    LOG(ERROR) << "Cannot read dir " << *n << ": Not a directory";
+    LOG(ERROR) << "Cannot open " << *n << ": Not a directory";
     return -ENOTDIR;
   }
+
+  assert(ffi);
+  static_assert(sizeof(ffi->fh) >= sizeof(Node*));
+  ffi->fh = reinterpret_cast<uintptr_t>(n);
+  return 0;
+}
+
+int ReadDir(const char*,
+            void* const buf,
+            fuse_fill_dir_t const filler,
+            off_t,
+            fuse_file_info* const ffi) {
+  assert(ffi);
+  const Node* const n = reinterpret_cast<const Node*>(ffi->fh);
+  assert(n);
+  assert(n->IsDir());
 
   if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0)) {
     return -ENOMEM;
@@ -2284,8 +2302,7 @@ int ReadDir(const char* const path,
     }
   }
 
-  LOG(DEBUG) << "Read Directory " << Path(path) << " returned "
-             << n->children.size() << " items";
+  LOG(DEBUG) << "Read " << *n << " -> " << n->children.size() << " items";
   return 0;
 }
 
@@ -2311,7 +2328,10 @@ fuse_operations const operations = {
     .read = Read,
     .statfs = StatFs,
     .release = Release,
+    .opendir = OpenDir,
     .readdir = ReadDir,
+    .flag_nullpath_ok = true,
+    .flag_nopath = true,
 };
 
 // ---- Main
