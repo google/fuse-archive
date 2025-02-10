@@ -1117,7 +1117,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_rar(archive.get()));
     Check(archive_read_support_format_rar5(archive.get()));
     Check(archive_read_support_format_tar(archive.get()));
-    Check(archive_read_support_format_empty(archive.get()));
 
     // The following archive formats are supported by libarchive, but they
     // haven't been tested by fuse-archive's authors.
