@@ -924,6 +924,23 @@ std::ostream& operator<<(std::ostream& out, FileType const t) {
   return out << "Unknown";
 }
 
+enum class Whence : int;
+
+std::ostream& operator<<(std::ostream& out, Whence const whence) {
+  switch (static_cast<int>(whence)) {
+#define PRINT(s) \
+  case SEEK_##s: \
+    return out << "SEEK_" << #s;
+    PRINT(SET)
+    PRINT(CUR)
+    PRINT(END)
+    PRINT(DATA)
+    PRINT(HOLE)
+  }
+
+  return out << "SEEK_" << static_cast<int>(whence);
+}
+
 constexpr blksize_t block_size = 512;
 
 // Total number of blocks taken by the tree of nodes.
@@ -1777,6 +1794,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
         r.raw_pos = r.descriptor->size + offset;
         return r.raw_pos;
     }
+
+    LOG(ERROR) << "Unexpected: whence = " << Whence(whence);
     return ARCHIVE_FATAL;
   }
 
@@ -3640,6 +3659,48 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
   LOG(DEBUG) << "Initialized FUSE server";
   return nullptr;
 }
+
+off_t Seek(const char*,
+           off_t const offset,
+           int const whence,
+           fuse_file_info* const fi) {
+  assert(fi);
+  const FileHandle* const h = reinterpret_cast<const FileHandle*>(fi->fh);
+  assert(h);
+  const Node* const n = h->node;
+  assert(n);
+
+  LOG(DEBUG) << "Seeking " << *n << " with whence = " << Whence(whence)
+             << " and offset = " << offset;
+
+  switch (whence) {
+    case SEEK_DATA:
+      if (offset < 0) {
+        return EINVAL;
+      }
+
+      if (offset >= n->size) {
+        return ENXIO;
+      }
+
+      return offset;
+
+    case SEEK_HOLE:
+      if (offset < 0) {
+        return EINVAL;
+      }
+
+      if (offset > n->size) {
+        return ENXIO;
+      }
+
+      return n->size;
+  }
+
+  LOG(ERROR) << "Cannot seek " << *n << " with whence = " << Whence(whence)
+             << " and offset = " << offset;
+  return -EINVAL;
+}
 #endif
 
 fuse_operations const operations = {
@@ -3655,6 +3716,7 @@ fuse_operations const operations = {
     .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30
     .init = Init,
+    .lseek = Seek,
 #else
     .flag_nullpath_ok = true,
     .flag_nopath = true,
