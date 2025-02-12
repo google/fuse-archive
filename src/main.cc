@@ -2625,8 +2625,7 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "-ouse_ino");
 
   // Mount read-only.
-  fuse_opt_add_arg(&args, "-o");
-  fuse_opt_add_arg(&args, "ro");
+  fuse_opt_add_arg(&args, "-r");
 
   // Start serving the filesystem.
   int const res = fuse_main(args.argc, args.argv, &operations, nullptr);
