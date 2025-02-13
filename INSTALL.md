@@ -5,14 +5,22 @@
 To build **fuse-archive**, you need the following libraries:
 
 *   [Boost Intrusive](https://www.boost.org)
-*   [libfuse >= 2.7](https://github.com/libfuse/libfuse)
+*   [libfuse >= 3.1](https://github.com/libfuse/libfuse)
 *   [libarchive >= 3.7](https://libarchive.org)
 
 On Debian systems, you can get these libraries by installing the following
 packages:
 
 ```sh
-$ sudo apt install libboost-container-dev libfuse-dev libarchive-dev
+$ sudo apt install libboost-container-dev libfuse3-dev libarchive-dev
+```
+
+For compatibility reasons, **fuse-archive** can optionally use the old FUSE 2
+library [libfuse >= 2.9](https://github.com/libfuse/libfuse). On Debian systems,
+you can install FUSE 2 by installing the following package:
+
+```sh
+$ sudo apt install libfuse-dev
 ```
 
 To build **fuse-archive**, you also need the following tools:
@@ -49,6 +57,18 @@ $ cd fuse-archive
 
 ```sh
 $ make
+```
+
+### With debugging assertions
+
+```sh
+$ DEBUG=1 make
+```
+
+### With FUSE 2
+
+```sh
+$ FUSE_MAJOR_VERSION=2 make
 ```
 
 ## Test **fuse-archive**

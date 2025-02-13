@@ -1,6 +1,18 @@
 PROJECT = fuse-archive
 PKG_CONFIG ?= pkg-config
-DEPS = fuse libarchive
+
+FUSE_MAJOR_VERSION ?= 3
+
+DEPS = libarchive
+
+ifeq ($(FUSE_MAJOR_VERSION), 3)
+DEPS += fuse3
+CXXFLAGS += -DFUSE_USE_VERSION=30
+else ifeq ($(FUSE_MAJOR_VERSION), 2)
+DEPS += fuse
+CXXFLAGS += -DFUSE_USE_VERSION=26
+endif
+
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter

@@ -16,8 +16,6 @@
 // foo.xz, foo.zip) as a read-only FUSE file system
 // (https://en.wikipedia.org/wiki/Filesystem_in_Userspace).
 
-#define FUSE_USE_VERSION 26
-
 #include <archive.h>
 #include <archive_entry.h>
 #include <fcntl.h>
@@ -169,6 +167,9 @@ enum {
   KEY_NO_SYMLINKS,
   KEY_NO_HARDLINKS,
   KEY_DEFAULT_PERMISSIONS,
+#if FUSE_USE_VERSION >= 30
+  KEY_DIRECT_IO,
+#endif
 };
 
 struct Options {
@@ -197,6 +198,9 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
     FUSE_OPT_KEY("nohardlinks", KEY_NO_HARDLINKS),
     FUSE_OPT_KEY("default_permissions", KEY_DEFAULT_PERMISSIONS),
+#if FUSE_USE_VERSION >= 30
+    FUSE_OPT_KEY("direct_io", KEY_DIRECT_IO),
+#endif
     {"dmask=%o", offsetof(Options, dmask)},
     {"fmask=%o", offsetof(Options, fmask)},
     FUSE_OPT_END,
@@ -212,6 +216,9 @@ bool g_specials = true;
 bool g_symlinks = true;
 bool g_hardlinks = true;
 bool g_default_permissions = false;
+#if FUSE_USE_VERSION >= 30
+bool g_direct_io = false;
+#endif
 
 // Number of command line arguments seen so far.
 int g_arg_count = 0;
@@ -2082,12 +2089,29 @@ void BuildTree() {
 
 // ---- FUSE Callbacks
 
-int GetAttr(const char* const path, struct stat* const z) {
-  assert(path);
-  const Node* const n = FindNode(path);
-  if (!n) {
-    LOG(DEBUG) << "Cannot stat " << Path(path) << ": No such item";
-    return -ENOENT;
+int GetAttr(const char* const path,
+#if FUSE_USE_VERSION >= 30
+            struct stat* const z,
+            fuse_file_info* const fi) {
+#else
+            struct stat* const z) {
+  fuse_file_info* const fi = nullptr;
+#endif
+
+  const Node* n;
+
+  if (fi) {
+    FileHandle* const h = reinterpret_cast<FileHandle*>(fi->fh);
+    assert(h);
+    n = h->node;
+    assert(n);
+  } else {
+    assert(path);
+    n = FindNode(path);
+    if (!n) {
+      LOG(DEBUG) << "Cannot stat " << Path(path) << ": No such item";
+      return -ENOENT;
+    }
   }
 
   assert(z);
@@ -2278,6 +2302,9 @@ int OpenDir(const char* const path, fuse_file_info* const fi) {
   assert(fi);
   static_assert(sizeof(fi->fh) >= sizeof(Node*));
   fi->fh = reinterpret_cast<uintptr_t>(n);
+#if FUSE_USE_VERSION >= 30
+  fi->cache_readdir = true;
+#endif
   return 0;
 }
 
@@ -2285,7 +2312,12 @@ int ReadDir(const char*,
             void* const buf,
             fuse_fill_dir_t const filler,
             off_t,
+#if FUSE_USE_VERSION >= 30
+            fuse_file_info* const fi,
+            fuse_readdir_flags) try {
+#else
             fuse_file_info* const fi) try {
+#endif
   assert(fi);
   const Node* const n = reinterpret_cast<const Node*>(fi->fh);
   assert(n);
@@ -2293,7 +2325,11 @@ int ReadDir(const char*,
 
   const auto add = [buf, filler](const char* const name,
                                  const struct stat* const z) {
+#if FUSE_USE_VERSION >= 30
+    if (filler(buf, name, z, 0, FUSE_FILL_DIR_PLUS)) {
+#else
     if (filler(buf, name, z, 0)) {
+#endif
       throw std::bad_alloc();
     }
   };
@@ -2334,6 +2370,17 @@ int StatFs(const char*, struct statvfs* const st) {
   return 0;
 }
 
+#if FUSE_USE_VERSION >= 30
+void* Init(fuse_conn_info*, fuse_config* const cfg) {
+  assert(cfg);
+  // Respect inode numbers.
+  cfg->use_ino = true;
+  cfg->nullpath_ok = true;
+  cfg->direct_io = g_direct_io;
+  return nullptr;
+}
+#endif
+
 fuse_operations const operations = {
     .getattr = GetAttr,
     .readlink = ReadLink,
@@ -2343,8 +2390,12 @@ fuse_operations const operations = {
     .release = Release,
     .opendir = OpenDir,
     .readdir = ReadDir,
+#if FUSE_USE_VERSION >= 30
+    .init = Init,
+#else
     .flag_nullpath_ok = true,
     .flag_nopath = true,
+#endif
 };
 
 // ---- Main
@@ -2413,6 +2464,12 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
     case KEY_DEFAULT_PERMISSIONS:
       g_default_permissions = true;
       return KEEP;
+
+#if FUSE_USE_VERSION >= 30
+    case KEY_DIRECT_IO:
+      g_direct_io = true;
+      return DISCARD;
+#endif
   }
 
   return KEEP;
@@ -2488,9 +2545,12 @@ general options:
     -o nosymlinks          no symlinks
     -o nohardlinks         no hard links
     -o dmask=M             directory permission mask in octal (default 0022)
-    -o fmask=M             file permission mask in octal (default 0022)
-
-)";
+    -o fmask=M             file permission mask in octal (default 0022))"
+#if FUSE_USE_VERSION >= 30
+               R"(
+    -o direct_io           use direct I/O)"
+#endif
+               "\n\n";
 }
 
 }  // namespace
@@ -2512,7 +2572,13 @@ int main(int const argc, char** const argv) try {
 
   if (g_help) {
     PrintUsage();
+#if FUSE_USE_VERSION >= 30
+    fuse_opt_add_arg(&args, "--help");
+    char empty[] = "";
+    args.argv[0] = empty;
+#else
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
+#endif
     fuse_main(args.argc, args.argv, &operations, nullptr);
     return EXIT_SUCCESS;
   }
@@ -2634,8 +2700,10 @@ int main(int const argc, char** const argv) try {
   // The mount point is in place.
   fuse_opt_add_arg(&args, g_mount_point.c_str());
 
+#if FUSE_USE_VERSION < 30
   // Respect inode numbers.
   fuse_opt_add_arg(&args, "-ouse_ino");
+#endif
 
   // Mount read-only.
   fuse_opt_add_arg(&args, "-r");
