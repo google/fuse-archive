@@ -2285,25 +2285,38 @@ int ReadDir(const char*,
             void* const buf,
             fuse_fill_dir_t const filler,
             off_t,
-            fuse_file_info* const fi) {
+            fuse_file_info* const fi) try {
   assert(fi);
   const Node* const n = reinterpret_cast<const Node*>(fi->fh);
   assert(n);
   assert(n->IsDir());
 
-  if (filler(buf, ".", nullptr, 0) || filler(buf, "..", nullptr, 0)) {
-    return -ENOMEM;
+  const auto add = [buf, filler](const char* const name,
+                                 const struct stat* const z) {
+    if (filler(buf, name, z, 0)) {
+      throw std::bad_alloc();
+    }
+  };
+
+  struct stat z = n->GetStat();
+  add(".", &z);
+
+  if (const Node* const parent = n->parent) {
+    z = parent->GetStat();
+    add("..", &z);
+  } else {
+    add("..", nullptr);
   }
 
   for (const Node& child : n->children) {
     struct stat const z = child.GetStat();
-    if (filler(buf, child.name.c_str(), &z, 0)) {
-      return -ENOMEM;
-    }
+    add(child.name.c_str(), &z);
   }
 
   LOG(DEBUG) << "Read " << *n << " -> " << n->children.size() << " items";
   return 0;
+} catch (const std::bad_alloc&) {
+  return -ENOMEM;
 }
 
 int StatFs(const char*, struct statvfs* const st) {
