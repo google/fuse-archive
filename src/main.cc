@@ -2114,7 +2114,7 @@ int ReadLink(const char* const path,
   return 0;
 }
 
-int Open(const char* const path, fuse_file_info* const ffi) try {
+int Open(const char* const path, fuse_file_info* const fi) try {
   assert(path);
   const Node* const n = FindNode(path);
   if (!n) {
@@ -2130,9 +2130,9 @@ int Open(const char* const path, fuse_file_info* const ffi) try {
     return -EIO;
   }
 
-  assert(ffi);
-  static_assert(sizeof(ffi->fh) >= sizeof(FileHandle*));
-  ffi->fh = reinterpret_cast<uintptr_t>(new FileHandle{.node = n});
+  assert(fi);
+  static_assert(sizeof(fi->fh) >= sizeof(FileHandle*));
+  fi->fh = reinterpret_cast<uintptr_t>(new FileHandle{.node = n});
   LOG(DEBUG) << "Opened " << *n;
   return 0;
 } catch (...) {
@@ -2144,13 +2144,13 @@ int Read(const char*,
          char* const dst_ptr,
          size_t dst_len,
          off_t offset,
-         fuse_file_info* const ffi) try {
+         fuse_file_info* const fi) try {
   if (offset < 0 || dst_len > std::numeric_limits<int>::max()) {
     return -EINVAL;
   }
 
-  assert(ffi);
-  FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
+  assert(fi);
+  FileHandle* const h = reinterpret_cast<FileHandle*>(fi->fh);
   assert(h);
 
   const Node* const node = h->node;
@@ -2249,9 +2249,9 @@ int Read(const char*,
   return -EIO;
 }
 
-int Release(const char*, fuse_file_info* const ffi) {
-  assert(ffi);
-  FileHandle* const h = reinterpret_cast<FileHandle*>(ffi->fh);
+int Release(const char*, fuse_file_info* const fi) {
+  assert(fi);
+  FileHandle* const h = reinterpret_cast<FileHandle*>(fi->fh);
   assert(h);
 
   const Node* const n = h->node;
@@ -2262,7 +2262,7 @@ int Release(const char*, fuse_file_info* const ffi) {
   return 0;
 }
 
-int OpenDir(const char* const path, fuse_file_info* const ffi) {
+int OpenDir(const char* const path, fuse_file_info* const fi) {
   assert(path);
   const Node* const n = FindNode(path);
   if (!n) {
@@ -2275,9 +2275,9 @@ int OpenDir(const char* const path, fuse_file_info* const ffi) {
     return -ENOTDIR;
   }
 
-  assert(ffi);
-  static_assert(sizeof(ffi->fh) >= sizeof(Node*));
-  ffi->fh = reinterpret_cast<uintptr_t>(n);
+  assert(fi);
+  static_assert(sizeof(fi->fh) >= sizeof(Node*));
+  fi->fh = reinterpret_cast<uintptr_t>(n);
   return 0;
 }
 
@@ -2285,9 +2285,9 @@ int ReadDir(const char*,
             void* const buf,
             fuse_fill_dir_t const filler,
             off_t,
-            fuse_file_info* const ffi) {
-  assert(ffi);
-  const Node* const n = reinterpret_cast<const Node*>(ffi->fh);
+            fuse_file_info* const fi) {
+  assert(fi);
+  const Node* const n = reinterpret_cast<const Node*>(fi->fh);
   assert(n);
   assert(n->IsDir());
 
