@@ -2563,7 +2563,12 @@ int main(int const argc, char** const argv) try {
 
   EnsureUtf8();
 
+  struct FuseArgsDeleter {
+      void operator()(fuse_args* args) { fuse_opt_free_args(args); }
+  };
+
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
+  std::unique_ptr<fuse_args, FuseArgsDeleter> args_ptr(&args);
   if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &ProcessArg) < 0) {
     LOG(ERROR) << "Cannot parse command line arguments";
     throw ExitCode::GENERIC_FAILURE;
