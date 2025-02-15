@@ -1108,21 +1108,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     Check(archive_read_support_filter_all(archive.get()));
 
-    // Prepare the handlers for the recognized archive formats. We don't call
-    // archive_read_support_format_all() because we don't want to handle ZIP
-    // archives in streamable mode. We only handle ZIP archives in seekable
-    // mode.
-    // See https://github.com/libarchive/libarchive/issues/1764.
-    // See https://github.com/libarchive/libarchive/issues/2502.
-    Check(archive_read_support_format_zip_seekable(archive.get()));
+    // Prepare the handlers for the recognized archive formats.
+    // We first install handlers whose heuristic format identification
+    // tests are the fastest and least invasive. If one of them emits
+    // a high enough score, then the subsequent testers will do nothing.
 
-    // The following archive formats are supported by libarchive and tested by
+    // The following archive format is supported by libarchive and tested by
     // fuse-archive's authors.
-    Check(archive_read_support_format_7zip(archive.get()));
-    Check(archive_read_support_format_cab(archive.get()));
-    Check(archive_read_support_format_iso9660(archive.get()));
-    Check(archive_read_support_format_rar(archive.get()));
-    Check(archive_read_support_format_rar5(archive.get()));
     Check(archive_read_support_format_tar(archive.get()));
 
     // The following archive formats are supported by libarchive, but they
@@ -1133,6 +1125,20 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_mtree(archive.get()));
     Check(archive_read_support_format_xar(archive.get()));
     Check(archive_read_support_format_warc(archive.get()));
+
+    // More expensive bidders, all supported by libarchive and tested
+    // by fuse-archive's authors.
+    Check(archive_read_support_format_7zip(archive.get()));
+    Check(archive_read_support_format_cab(archive.get()));
+    Check(archive_read_support_format_rar(archive.get()));
+    Check(archive_read_support_format_rar5(archive.get()));
+    Check(archive_read_support_format_iso9660(archive.get()));
+
+    // We don't want to handle ZIP archives in streamable mode.
+    // We only handle ZIP archives in seekable mode.
+    // See https://github.com/libarchive/libarchive/issues/1764.
+    // See https://github.com/libarchive/libarchive/issues/2502.
+    Check(archive_read_support_format_zip_seekable(archive.get()));
 
     // We use the "raw" archive format to read simple compressed files such as
     // "romeo.txt.gz".
