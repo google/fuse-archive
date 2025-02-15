@@ -1130,7 +1130,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_ar(archive.get()));
     Check(archive_read_support_format_cpio(archive.get()));
     Check(archive_read_support_format_lha(archive.get()));
-    Check(archive_read_support_format_mtree(archive.get()));
     Check(archive_read_support_format_xar(archive.get()));
     Check(archive_read_support_format_warc(archive.get()));
 
