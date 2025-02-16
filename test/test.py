@@ -393,8 +393,8 @@ def TestArchiveWithOptions(options=[]):
         },
         'data_descriptor.zip': {
             '.': {'mode': 'drwxr-xr-x'},
-            '-': {'mode': '-rw-r--r--', 'mtime': 1441434748000000000, 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
-            'second.txt': {'mode': '-rw-r--r--', 'mtime': 1441454452000000000, 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'}
+            '-': {'mode': '-rw-r--r--', 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
+            'second.txt': {'mode': '-rw-r--r--', 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'}
         },
         'mixed-paths.zip': {
             '.': {'mode': 'drwxr-xr-x'},
