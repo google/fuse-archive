@@ -2316,18 +2316,20 @@ int ReadDir(const char*,
 #else
             fuse_file_info* const fi) try {
 #endif
+  assert(filler);
   assert(fi);
   const Node* const n = reinterpret_cast<const Node*>(fi->fh);
   assert(n);
   assert(n->IsDir());
 
-  const auto add = [buf, filler](const char* const name,
-                                 const struct stat* const z) {
+  const auto add = [buf, filler, n](const char* const name,
+                                    const struct stat* const z) {
 #if FUSE_USE_VERSION >= 30
     if (filler(buf, name, z, 0, FUSE_FILL_DIR_PLUS)) {
 #else
     if (filler(buf, name, z, 0)) {
 #endif
+      LOG(ERROR) << "Cannot list items in " << *n << ": Cannot allocate memory";
       throw std::bad_alloc();
     }
   };
@@ -2347,7 +2349,7 @@ int ReadDir(const char*,
     add(child.name.c_str(), &z);
   }
 
-  LOG(DEBUG) << "Read " << *n << " -> " << n->children.size() << " items";
+  LOG(DEBUG) << "List " << *n << " -> " << n->children.size() << " items";
   return 0;
 } catch (const std::bad_alloc&) {
   return -ENOMEM;
