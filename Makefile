@@ -16,7 +16,6 @@ endif
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
-CXXFLAGS += -D_FILE_OFFSET_BITS=64 
 
 ifeq ($(DEBUG), 1)
 CXXFLAGS += -O0 -g
