@@ -2355,18 +2355,18 @@ int ReadDir(const char*,
   return -ENOMEM;
 }
 
-int StatFs(const char*, struct statvfs* const st) {
-  assert(st);
-  st->f_bsize = block_size;
-  st->f_frsize = block_size;
-  st->f_blocks = g_block_count;
-  st->f_bfree = 0;
-  st->f_bavail = 0;
-  st->f_files = Node::count;
-  st->f_ffree = 0;
-  st->f_favail = 0;
-  st->f_flag = ST_RDONLY;
-  st->f_namemax = NAME_MAX;
+int StatFs(const char*, struct statvfs* const z) {
+  assert(z);
+  z->f_bsize = block_size;
+  z->f_frsize = block_size;
+  z->f_blocks = g_block_count;
+  z->f_bfree = 0;
+  z->f_bavail = 0;
+  z->f_files = Node::count;
+  z->f_ffree = 0;
+  z->f_favail = 0;
+  z->f_flag = ST_RDONLY;
+  z->f_namemax = NAME_MAX;
   return 0;
 }
 
