@@ -3,15 +3,15 @@ PKG_CONFIG ?= pkg-config
 
 FUSE_MAJOR_VERSION ?= 3
 
-DEPS = libarchive
-
 ifeq ($(FUSE_MAJOR_VERSION), 3)
-DEPS += fuse3
+DEPS = fuse3
 CXXFLAGS += -DFUSE_USE_VERSION=30
 else ifeq ($(FUSE_MAJOR_VERSION), 2)
-DEPS += fuse
+DEPS = fuse
 CXXFLAGS += -DFUSE_USE_VERSION=26
 endif
+
+DEPS += libarchive
 
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
