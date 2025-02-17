@@ -2117,22 +2117,23 @@ int GetAttr(const char* const path,
   return 0;
 }
 
-int ReadLink(const char* const path,
-             char* const dst_ptr,
-             size_t const dst_len) {
+int ReadLink(const char* const path, char* const buf, size_t const size) {
   assert(path);
+  assert(buf);
+  assert(size > 1);
+
   const Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot read link " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
-  assert(n->GetType() == FileType::Symlink);
-  if (n->symlink.empty() || dst_len == 0) {
+  if (n->GetType() != FileType::Symlink) {
+    LOG(ERROR) << "Cannot read link " << *n << ": Not a symlink";
     return -ENOLINK;
   }
 
-  snprintf(dst_ptr, dst_len, "%s", n->symlink.c_str());
+  snprintf(buf, size, "%s", n->symlink.c_str());
   return 0;
 }
 
@@ -2144,7 +2145,11 @@ int Open(const char* const path, fuse_file_info* const fi) try {
     return -ENOENT;
   }
 
-  assert(!n->IsDir());
+  if (n->IsDir()) {
+    LOG(ERROR) << "Cannot open " << *n << ": It is a directory";
+    return -EISDIR;
+  }
+
   assert(n->index_within_archive > 0);
 
   if (g_cache && n->cache_offset < 0) {
