@@ -272,6 +272,17 @@ gid_t const g_gid = getgid();
 using Clock = std::chrono::system_clock;
 time_t const g_now = Clock::to_time_t(Clock::now());
 
+// Converts a string to ASCII lower case.
+std::string ToLower(std::string_view const s) {
+  std::string r(s);
+  for (char& c : r) {
+    if ('A' <= c && c <= 'Z')
+      c += 'a' - 'A';
+  }
+
+  return r;
+}
+
 // Path manipulations.
 class Path : public std::string_view {
  public:
@@ -340,15 +351,12 @@ class Path : public std::string_view {
 
     // Extract extension without dot and in ASCII lowercase.
     assert(at(last_dot) == '.');
-    std::string ext(substr(last_dot + 1));
-    for (char& c : ext) {
-      if ('A' <= c && c <= 'Z')
-        c += 'a' - 'A';
-    }
+    const std::string ext = ToLower(substr(last_dot + 1));
 
     // Is it a special extension?
     static std::unordered_set<std::string_view> const special_exts = {
-        "z", "gz", "bz", "bz2", "xz", "zst", "lz", "lzma"};
+        "z",    "gz", "bz",   "bz2", "xz",  "zst",
+        "ztsd", "lz", "lzma", "lzo", "lzop"};
     if (special_exts.count(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
     }
@@ -1802,8 +1810,8 @@ void ProcessEntry(Reader& r) {
       g_hardlinks_to_resolve.emplace_back(i, std::move(path),
                                           Path(s).Normalized());
     } else {
-      LOG(DEBUG) << "Skipped hard link " << " [" << i << "] " << Path(path)
-                 << " -> " << Path(s);
+      LOG(DEBUG) << "Skipped hard link "
+                 << " [" << i << "] " << Path(path) << " -> " << Path(s);
     }
     return;
   }
@@ -2393,19 +2401,19 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
 #endif
 
 fuse_operations const operations = {
-    .getattr = GetAttr,
-    .readlink = ReadLink,
-    .open = Open,
-    .read = Read,
-    .statfs = StatFs,
-    .release = Release,
-    .opendir = OpenDir,
-    .readdir = ReadDir,
+  .getattr = GetAttr,
+  .readlink = ReadLink,
+  .open = Open,
+  .read = Read,
+  .statfs = StatFs,
+  .release = Release,
+  .opendir = OpenDir,
+  .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30
-    .init = Init,
+  .init = Init,
 #else
-    .flag_nullpath_ok = true,
-    .flag_nopath = true,
+  .flag_nullpath_ok = true,
+  .flag_nopath = true,
 #endif
 };
 
