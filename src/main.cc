@@ -286,8 +286,8 @@ std::string ToLower(std::string_view const s) {
 // Path manipulations.
 class Path : public std::string_view {
  public:
-  Path(const char* path) : std::string_view(path) {}
-  Path(std::string_view path) : std::string_view(path) {}
+  Path(const char* const path) : std::string_view(path) {}
+  Path(std::string_view const path) : std::string_view(path) {}
 
   // Removes trailing separators.
   Path WithoutTrailingSeparator() const {
@@ -355,8 +355,9 @@ class Path : public std::string_view {
 
     // Is it a special extension?
     static std::unordered_set<std::string_view> const special_exts = {
-        "z",    "gz", "bz",   "bz2", "xz",  "zst",
-        "ztsd", "lz", "lzma", "lzo", "lzop"};
+        "bz",  "bz2",  "grz", "gz", "lrz", "lz",
+        "lz4", "lzma", "lzo", "xz", "z",   "zst"};
+
     if (special_exts.count(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
     }
@@ -1114,41 +1115,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       Check(archive_read_add_passphrase(archive.get(), g_password.c_str()));
     }
 
-    Check(archive_read_support_filter_all(archive.get()));
-
-    // Prepare the handlers for the recognized archive formats.
-    // We first install handlers whose heuristic format identification
-    // tests are the fastest and least invasive. If one of them emits
-    // a high enough score, then the subsequent testers will do nothing.
-
-    // The following archive format is supported by libarchive and tested by
-    // fuse-archive's authors.
-    Check(archive_read_support_format_tar(archive.get()));
-
-    // The following archive formats are supported by libarchive, but they
-    // haven't been tested by fuse-archive's authors.
-    Check(archive_read_support_format_cpio(archive.get()));
-    Check(archive_read_support_format_lha(archive.get()));
-    Check(archive_read_support_format_xar(archive.get()));
-    Check(archive_read_support_format_warc(archive.get()));
-
-    // More expensive bidders, all supported by libarchive and tested
-    // by fuse-archive's authors.
-    Check(archive_read_support_format_7zip(archive.get()));
-    Check(archive_read_support_format_cab(archive.get()));
-    Check(archive_read_support_format_rar(archive.get()));
-    Check(archive_read_support_format_rar5(archive.get()));
-    Check(archive_read_support_format_iso9660(archive.get()));
-
-    // We don't want to handle ZIP archives in streamable mode.
-    // We only handle ZIP archives in seekable mode.
-    // See https://github.com/libarchive/libarchive/issues/1764.
-    // See https://github.com/libarchive/libarchive/issues/2502.
-    Check(archive_read_support_format_zip_seekable(archive.get()));
-
-    // We use the "raw" archive format to read simple compressed files such as
-    // "romeo.txt.gz".
-    Check(archive_read_support_format_raw(archive.get()));
+    SetFormat();
 
     // Set callbacks to read the archive file itself.
     Check(archive_read_set_callback_data(archive.get(), this));
@@ -1424,11 +1391,190 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
  private:
   void Check(int const status) const {
-    if (status != ARCHIVE_OK) {
-      std::string_view const error = GetErrorString(archive.get());
-      LOG(ERROR) << "Cannot open archive: " << error;
-      ThrowExitCode(error);
+    switch (status) {
+      case ARCHIVE_OK:
+        return;
+      case ARCHIVE_WARN:
+        LOG(WARNING) << GetErrorString(archive.get());
+        return;
+      default:
+        std::string_view const error = GetErrorString(archive.get());
+        LOG(ERROR) << "Cannot open archive: " << error;
+        ThrowExitCode(error);
     }
+  }
+
+  // Special case for .tar files because they can be of two different formats:
+  // TAR or EMPTY.
+  static int SetTarFormat(Archive* const a) {
+    if (archive_read_support_format_empty(a) == ARCHIVE_FATAL) {
+      return ARCHIVE_FATAL;
+    }
+    return archive_read_support_format_tar(a);
+  }
+
+  // Special case for .rar files because they can be of two different formats:
+  // RAR or RAR5.
+  static int SetRarFormat(Archive* const a) {
+    if (archive_read_support_format_rar(a) == ARCHIVE_FATAL) {
+      return ARCHIVE_FATAL;
+    }
+    return archive_read_support_format_rar5(a);
+  }
+
+  bool SetCompressionFilter(std::string_view const ext) {
+    static std::unordered_map<
+        std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
+        {"bz", archive_read_support_filter_bzip2},
+        {"bz2", archive_read_support_filter_bzip2},
+        {"grz", archive_read_support_filter_grzip},
+        {"gz", archive_read_support_filter_gzip},
+        {"lrz", archive_read_support_filter_lrzip},
+        {"lz", archive_read_support_filter_lzip},
+        {"lz4", archive_read_support_filter_lz4},
+        {"lzma", archive_read_support_filter_lzma},
+        {"lzo", archive_read_support_filter_lzop},
+        {"xz", archive_read_support_filter_xz},
+        {"z", archive_read_support_filter_compress},
+        {"zst", archive_read_support_filter_zstd},
+    };
+
+    const auto it = ext_to_filter.find(ext);
+    if (it == ext_to_filter.end()) {
+      return false;
+    }
+
+    Check(it->second(archive.get()));
+    return true;
+  }
+
+  bool SetCompressedTarFormat(std::string_view const ext) {
+    static std::unordered_map<
+        std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
+        {"taz", archive_read_support_filter_compress},
+        {"tb2", archive_read_support_filter_bzip2},
+        {"tbz", archive_read_support_filter_bzip2},
+        {"tbz2", archive_read_support_filter_bzip2},
+        {"tgz", archive_read_support_filter_gzip},
+        {"tlz", archive_read_support_filter_lzip},
+        {"tlz4", archive_read_support_filter_lz4},
+        {"tlzma", archive_read_support_filter_lzma},
+        {"txz", archive_read_support_filter_xz},
+        {"tz", archive_read_support_filter_compress},
+        {"tz2", archive_read_support_filter_bzip2},
+        {"tzst", archive_read_support_filter_zstd},
+    };
+
+    const auto it = ext_to_filter.find(ext);
+    if (it == ext_to_filter.end()) {
+      return false;
+    }
+
+    Check(it->second(archive.get()));
+    Check(SetTarFormat(archive.get()));
+    return true;
+  }
+
+  bool SetNakedArchiveFormat(std::string_view const ext) {
+    static std::unordered_map<
+        std::string_view, std::function<int(Archive*)>> const ext_to_format = {
+        {"7z", archive_read_support_format_7zip},
+        {"a", archive_read_support_format_ar},
+        {"cab", archive_read_support_format_cab},
+        {"cpio", archive_read_support_format_cpio},
+        {"crx", archive_read_support_format_zip_seekable},
+        {"iso", archive_read_support_format_iso9660},
+        {"jar", archive_read_support_format_zip_seekable},
+        {"lha", archive_read_support_format_lha},
+        {"mtree", archive_read_support_format_mtree},
+        {"rar", SetRarFormat},
+        {"tar", SetTarFormat},
+        {"warc", archive_read_support_format_warc},
+        {"xar", archive_read_support_format_xar},
+        {"zip", archive_read_support_format_zip_seekable},
+    };
+
+    const auto it = ext_to_format.find(ext);
+    if (it == ext_to_format.end()) {
+      return false;
+    }
+
+    Check(it->second(archive.get()));
+    return true;
+  }
+
+  // Determines the archive format from the filename extension.
+  void SetFormat() {
+    Path p(g_archive_path);
+
+    // Get the final filename extension in lower case and without the dot.
+    // Eg "gz", "tar"...
+    size_t i = p.FinalExtensionPosition();
+    std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
+
+    // Does this extension signal a compression filter?
+    if (SetCompressionFilter(ext)) {
+      // There is a compression filter. The only two formats that are recognized
+      // after a compression filter are TAR and RAW. Check if there is a .tar
+      // extension before the compression extension.
+      p.remove_suffix(p.size() - i);
+      i = p.FinalExtensionPosition();
+      ext = ToLower(p.substr(std::min(i + 1, p.size())));
+      if (ext == "tar") {
+        Check(SetTarFormat(archive.get()));
+      } else {
+        Check(archive_read_support_format_raw(archive.get()));
+      }
+
+      return;
+    }
+
+    // Does this extension signal a compressed TAR?
+    if (SetCompressedTarFormat(ext)) {
+      return;
+    }
+
+    // Does this extension signal a "naked" archive format?
+    if (SetNakedArchiveFormat(ext)) {
+      return;
+    }
+
+    // Not a recognized extension. So we'll activate most of the possible
+    // formats, and let libarchive's bidding system do its job.
+    Check(archive_read_support_filter_all(archive.get()));
+
+    // Prepare the handlers for the recognized archive formats. We first install
+    // handlers whose heuristic format identification tests are the fastest and
+    // least invasive. If one of them emits a high enough score, then the
+    // subsequent testers will do nothing.
+    Check(archive_read_support_format_tar(archive.get()));
+
+    // The following archive formats are supported by libarchive, but they
+    // haven't been tested by fuse-archive's authors.
+    Check(archive_read_support_format_ar(archive.get()));
+    Check(archive_read_support_format_cpio(archive.get()));
+    Check(archive_read_support_format_lha(archive.get()));
+    Check(archive_read_support_format_mtree(archive.get()));
+    Check(archive_read_support_format_xar(archive.get()));
+    Check(archive_read_support_format_warc(archive.get()));
+
+    // More expensive bidders, all supported by libarchive and tested by
+    // fuse-archive's authors.
+    Check(archive_read_support_format_7zip(archive.get()));
+    Check(archive_read_support_format_cab(archive.get()));
+    Check(archive_read_support_format_rar(archive.get()));
+    Check(archive_read_support_format_rar5(archive.get()));
+    Check(archive_read_support_format_iso9660(archive.get()));
+
+    // We don't want to handle ZIP archives in streamable mode.
+    // We only handle ZIP archives in seekable mode.
+    // See https://github.com/libarchive/libarchive/issues/1764.
+    // See https://github.com/libarchive/libarchive/issues/2502.
+    Check(archive_read_support_format_zip_seekable(archive.get()));
+
+    // We use the "raw" archive format to read simple compressed files such as
+    // "romeo.txt.gz".
+    Check(archive_read_support_format_raw(archive.get()));
   }
 
   // The following callbacks are used by libarchive to read the uncompressed
