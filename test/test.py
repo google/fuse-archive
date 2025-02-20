@@ -1567,8 +1567,8 @@ def TestInvalidArchive():
     CheckArchiveMountingError('romeo.txt', 30)
 
     # https://github.com/google/fuse-archive/issues/38
-    CheckArchiveMountingError('empty', 32)
-    CheckArchiveMountingError('empty.gz', 32)
+    CheckArchiveMountingError('empty', 30)
+    CheckArchiveMountingError('empty.gz', 30)
 
     # https://github.com/google/fuse-archive/issues/36
     CheckArchiveMountingError('truncated.7z', 32)

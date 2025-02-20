@@ -786,7 +786,7 @@ SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 // archive_read_has_encrypted_entries returning
 // ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
 // comparison on the various possible error messages.
-[[noreturn]] void ThrowExitCode(std::string_view const e) {
+void ThrowExitCode(std::string_view const e) {
   if (e.starts_with("Incorrect passphrase")) {
     throw ExitCode::PASSPHRASE_INCORRECT;
   }
@@ -811,8 +811,6 @@ SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
       throw ExitCode::PASSPHRASE_NOT_SUPPORTED;
     }
   }
-
-  throw ExitCode::INVALID_ARCHIVE_CONTENTS;
 }
 
 template <typename... Args>
@@ -1162,6 +1160,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
           LOG(ERROR) << "Cannot advance to entry " << index_within_archive
                      << ": " << error;
           ThrowExitCode(error);
+          throw ExitCode::INVALID_ARCHIVE_CONTENTS;
       }
     }
   }
@@ -1291,6 +1290,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
           std::string_view const error = GetErrorString(archive.get());
           LOG(ERROR) << "Cannot read data from archive: " << error;
           ThrowExitCode(error);
+          throw ExitCode::INVALID_ARCHIVE_CONTENTS;
       }
     }
   }
@@ -1324,6 +1324,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         std::string_view const error = GetErrorString(archive.get());
         LOG(ERROR) << "Cannot read data from archive: " << error;
         ThrowExitCode(error);
+        throw ExitCode::INVALID_ARCHIVE_CONTENTS;
       }
 
       assert(n > 0);
@@ -1404,6 +1405,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         std::string_view const error = GetErrorString(archive.get());
         LOG(ERROR) << "Cannot open archive: " << error;
         ThrowExitCode(error);
+        throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
     }
   }
 
