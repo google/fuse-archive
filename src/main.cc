@@ -1431,22 +1431,31 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return archive_read_append_filter_program(a, "brotli -d");
   }
 
+#define SET_FILTER(s)                                      \
+  [](Archive* const a) {                                      \
+    return archive_read_append_filter(a, ARCHIVE_FILTER_##s); \
+  }
+
   bool SetCompressionFilter(std::string_view const ext) {
     static std::unordered_map<
         std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
         {"br", SetBrotliFilter},
-        {"bz", archive_read_support_filter_bzip2},
-        {"bz2", archive_read_support_filter_bzip2},
-        {"grz", archive_read_support_filter_grzip},
-        {"gz", archive_read_support_filter_gzip},
-        {"lrz", archive_read_support_filter_lrzip},
-        {"lz", archive_read_support_filter_lzip},
-        {"lz4", archive_read_support_filter_lz4},
-        {"lzma", archive_read_support_filter_lzma},
+        {"bz", SET_FILTER(BZIP2)},
+        {"bz2", SET_FILTER(BZIP2)},
+        {"grz", SET_FILTER(GRZIP)},
+        {"gz", SET_FILTER(GZIP)},
+        {"lrz", SET_FILTER(LRZIP)},
+        {"lz", SET_FILTER(LZIP)},
+        {"lz4", SET_FILTER(LZ4)},
+        {"lzma", SET_FILTER(LZMA)},
+        // Work around https://github.com/libarchive/libarchive/issues/2513
+        // {"lzo", SET_FILTER(LZOP)},
         {"lzo", archive_read_support_filter_lzop},
-        {"xz", archive_read_support_filter_xz},
+        {"xz", SET_FILTER(XZ)},
+        // Work around https://github.com/libarchive/libarchive/issues/2514
+        // {"z", SET_FILTER(COMPRESS)},
         {"z", archive_read_support_filter_compress},
-        {"zst", archive_read_support_filter_zstd},
+        {"zst", SET_FILTER(ZSTD)},
     };
 
     const auto it = ext_to_filter.find(ext);
@@ -1461,18 +1470,22 @@ struct Reader : bi::list_base_hook<LinkMode> {
   bool SetCompressedTarFormat(std::string_view const ext) {
     static std::unordered_map<
         std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
+        // Work around https://github.com/libarchive/libarchive/issues/2514
+        // {"taz", SET_FILTER(COMPRESS)},
         {"taz", archive_read_support_filter_compress},
-        {"tb2", archive_read_support_filter_bzip2},
-        {"tbz", archive_read_support_filter_bzip2},
-        {"tbz2", archive_read_support_filter_bzip2},
-        {"tgz", archive_read_support_filter_gzip},
-        {"tlz", archive_read_support_filter_lzma},
-        {"tlz4", archive_read_support_filter_lz4},
-        {"tlzma", archive_read_support_filter_lzma},
-        {"txz", archive_read_support_filter_xz},
+        {"tb2", SET_FILTER(BZIP2)},
+        {"tbz", SET_FILTER(BZIP2)},
+        {"tbz2", SET_FILTER(BZIP2)},
+        {"tgz", SET_FILTER(GZIP)},
+        {"tlz", SET_FILTER(LZMA)},
+        {"tlz4", SET_FILTER(LZ4)},
+        {"tlzma", SET_FILTER(LZMA)},
+        {"txz", SET_FILTER(XZ)},
+        // Work around https://github.com/libarchive/libarchive/issues/2514
+        // {"tz", SET_FILTER(COMPRESS)},
         {"tz", archive_read_support_filter_compress},
-        {"tz2", archive_read_support_filter_bzip2},
-        {"tzst", archive_read_support_filter_zstd},
+        {"tz2", SET_FILTER(BZIP2)},
+        {"tzst", SET_FILTER(ZSTD)},
     };
 
     const auto it = ext_to_filter.find(ext);
@@ -1484,6 +1497,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(SetTarFormat(archive.get()));
     return true;
   }
+
+#undef SET_FILTER
 
   bool SetNakedArchiveFormat(std::string_view const ext) {
     static std::unordered_map<
