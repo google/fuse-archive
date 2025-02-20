@@ -355,8 +355,8 @@ class Path : public std::string_view {
 
     // Is it a special extension?
     static std::unordered_set<std::string_view> const special_exts = {
-        "bz",  "bz2",  "grz", "gz", "lrz", "lz",
-        "lz4", "lzma", "lzo", "xz", "z",   "zst"};
+        "br",  "bz",   "bz2", "grz", "gz", "lrz", "lz",
+        "lz4", "lzma", "lzo", "xz",  "z",  "zst"};
 
     if (special_exts.count(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
@@ -1427,9 +1427,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return archive_read_support_format_rar5(a);
   }
 
+  static int SetBrotliFilter(Archive* const a) {
+    return archive_read_append_filter_program(a, "brotli -d");
+  }
+
   bool SetCompressionFilter(std::string_view const ext) {
     static std::unordered_map<
         std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
+        {"br", SetBrotliFilter},
         {"bz", archive_read_support_filter_bzip2},
         {"bz2", archive_read_support_filter_bzip2},
         {"grz", archive_read_support_filter_grzip},
@@ -2025,12 +2030,12 @@ void ProcessEntry(Reader& r) {
   assert(parent->IsDir());
 
   // Create the node for this entry.
-  Node* const node = new Node{
-      .name = std::string(name),
-      .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
-                                  (0666 & ~g_options.fmask)),
-      .index_within_archive = i,
-      .mtime = archive_entry_mtime(e)};
+  Node* const node =
+      new Node{.name = std::string(name),
+               .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
+                                           (0666 & ~g_options.fmask)),
+               .index_within_archive = i,
+               .mtime = archive_entry_mtime(e)};
 
   if (g_default_permissions) {
     node->uid = archive_entry_uid(e);
@@ -2576,19 +2581,19 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
 #endif
 
 fuse_operations const operations = {
-  .getattr = GetAttr,
-  .readlink = ReadLink,
-  .open = Open,
-  .read = Read,
-  .statfs = StatFs,
-  .release = Release,
-  .opendir = OpenDir,
-  .readdir = ReadDir,
+    .getattr = GetAttr,
+    .readlink = ReadLink,
+    .open = Open,
+    .read = Read,
+    .statfs = StatFs,
+    .release = Release,
+    .opendir = OpenDir,
+    .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30
-  .init = Init,
+    .init = Init,
 #else
-  .flag_nullpath_ok = true,
-  .flag_nopath = true,
+    .flag_nullpath_ok = true,
+    .flag_nopath = true,
 #endif
 };
 
