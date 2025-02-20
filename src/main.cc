@@ -535,7 +535,10 @@ enum class FileType : mode_t {
 };
 
 FileType GetFileType(mode_t const mode) {
-  return FileType(mode & S_IFMT);
+  // Consider an unknown file type as a regular file.
+  // https://github.com/google/fuse-archive/issues/47
+  const mode_t ft = mode & S_IFMT;
+  return ft ? FileType(ft) : FileType::File;
 }
 
 std::ostream& operator<<(std::ostream& out, FileType const t) {
