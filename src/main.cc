@@ -597,7 +597,7 @@ struct Node {
   // Where does the cached data start in the cache file?
   i64 cache_offset = std::numeric_limits<i64>::min();
 
-  time_t mtime = g_now;
+  time_t mtime = 0;
   dev_t rdev = 0;
   i64 nlink = 1;
 
@@ -662,7 +662,7 @@ struct Node {
     z.st_size = size;
     z.st_atime = g_now;
     z.st_ctime = g_now;
-    z.st_mtime = mtime;
+    z.st_mtime = mtime ?: g_now;
     z.st_blksize = block_size;
     z.st_blocks = GetBlockCount();
     z.st_rdev = rdev;
@@ -1980,9 +1980,7 @@ void ProcessEntry(Reader& r) {
     Node* const node = GetOrCreateDirNode(path);
     assert(node);
 
-    if (archive_entry_mtime_is_set(e)) {
-      node->mtime = archive_entry_mtime(e);
-    }
+    node->mtime = archive_entry_mtime(e);
 
     if (g_default_permissions) {
       node->uid = archive_entry_uid(e);
@@ -2009,7 +2007,7 @@ void ProcessEntry(Reader& r) {
       .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
                                   (0666 & ~g_options.fmask)),
       .index_within_archive = i,
-      .mtime = archive_entry_mtime_is_set(e) ? archive_entry_mtime(e) : g_now};
+      .mtime = archive_entry_mtime(e)};
 
   if (g_default_permissions) {
     node->uid = archive_entry_uid(e);

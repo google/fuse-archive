@@ -951,7 +951,7 @@ def TestArchiveWithOptions(options=[]):
         'sparse.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             # https://github.com/google/fuse-archive/issues/40
-            'sparse': {'mode': '-rw-r--r--', 'mtime': 0, 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
+            'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
         }
     }
 
