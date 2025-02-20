@@ -115,7 +115,7 @@ enum class ExitCode {
   PASSPHRASE_REQUIRED = 20,
   PASSPHRASE_INCORRECT = 21,
   PASSPHRASE_NOT_SUPPORTED = 22,
-  INVALID_RAW_ARCHIVE = 30,
+  UNKNOWN_ARCHIVE_FORMAT = 30,
   INVALID_ARCHIVE_HEADER = 31,
   INVALID_ARCHIVE_CONTENTS = 32,
 };
@@ -133,7 +133,7 @@ std::ostream& operator<<(std::ostream& out, ExitCode const e) {
     PRINT(PASSPHRASE_REQUIRED)
     PRINT(PASSPHRASE_INCORRECT)
     PRINT(PASSPHRASE_NOT_SUPPORTED)
-    PRINT(INVALID_RAW_ARCHIVE)
+    PRINT(UNKNOWN_ARCHIVE_FORMAT)
     PRINT(INVALID_ARCHIVE_HEADER)
     PRINT(INVALID_ARCHIVE_CONTENTS)
 #undef PRINT
@@ -1542,6 +1542,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return;
     }
 
+#ifdef NO_ARCHIVE_FORMAT_BIDDING
+    LOG(ERROR) << "Unrecognized filename extension '" << ext << "'";
+    throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
+#else
     // Not a recognized extension. So we'll activate most of the possible
     // formats, and let libarchive's bidding system do its job.
     Check(archive_read_support_filter_all(archive.get()));
@@ -1578,6 +1582,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // We use the "raw" archive format to read simple compressed files such as
     // "romeo.txt.gz".
     Check(archive_read_support_format_raw(archive.get()));
+#endif
   }
 
   // The following callbacks are used by libarchive to read the uncompressed
@@ -2154,7 +2159,7 @@ void CheckRawArchive(Archive* const a) {
   // data (e.g. foo.jpeg).
   if (g_archive_format == ArchiveFormat::RAW && filter_count == 0) {
     LOG(ERROR) << "Cannot recognize the archive format";
-    throw ExitCode::INVALID_RAW_ARCHIVE;
+    throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
   }
 }
 
