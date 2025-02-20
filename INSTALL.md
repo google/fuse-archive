@@ -38,12 +38,14 @@ $ sudo apt install g++ pkg-config make pandoc
 
 To test **fuse-archive**, you also need the following tools:
 
-*   [Python >= 3.8](https://www.python.org)
+*   [Python 3](https://www.python.org)
+*   [lrzip](https://github.com/ckolivas/lrzip)
+*   [lzop](https://www.lzop.org/)
 
 On Debian systems, you can get these tools by installing the following packages:
 
 ```sh
-$ sudo apt install python3
+$ sudo apt install python3 lrzip lzop
 ```
 
 ## Get the Source Code
