@@ -1513,7 +1513,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
     size_t i = p.FinalExtensionPosition();
-    std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
+    const std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
 
     // Does this extension signal a compression filter?
     if (SetCompressionFilter(ext)) {
@@ -1522,10 +1522,16 @@ struct Reader : bi::list_base_hook<LinkMode> {
       // extension before the compression extension.
       p.remove_suffix(p.size() - i);
       i = p.FinalExtensionPosition();
-      ext = ToLower(p.substr(std::min(i + 1, p.size())));
-      if (ext == "tar") {
+      if (ToLower(p.substr(std::min(i + 1, p.size()))) == "tar") {
+        if (id == 1) {
+          LOG(DEBUG) << "Recognized compressed TAR extension 'tar." << ext
+                     << "'";
+        }
         Check(SetTarFormat(archive.get()));
       } else {
+        if (id == 1) {
+          LOG(DEBUG) << "Recognized compressed file extension '" << ext << "'";
+        }
         Check(archive_read_support_format_raw(archive.get()));
       }
 
@@ -1534,18 +1540,33 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Does this extension signal a compressed TAR?
     if (SetCompressedTarFormat(ext)) {
+      if (id == 1) {
+        LOG(DEBUG) << "Recognized compressed TAR extension '" << ext << "'";
+      }
       return;
     }
 
     // Does this extension signal a "naked" archive format?
     if (SetNakedArchiveFormat(ext)) {
+      if (id == 1) {
+        LOG(DEBUG) << "Recognized archive extension '" << ext << "'";
+      }
       return;
     }
 
 #ifdef NO_ARCHIVE_FORMAT_BIDDING
-    LOG(ERROR) << "Unrecognized filename extension '" << ext << "'";
+    LOG(ERROR)
+        << "Cannot determine the archive format from its filename extension '"
+        << ext << "'";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
 #else
+    if (id == 1) {
+      LOG(WARNING)
+          << "Cannot determine the archive format from its filename extension '"
+          << ext << "'";
+      LOG(WARNING) << "Trying to guess the format using the file contents...";
+    }
+
     // Not a recognized extension. So we'll activate most of the possible
     // formats, and let libarchive's bidding system do its job.
     Check(archive_read_support_filter_all(archive.get()));
