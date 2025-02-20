@@ -232,6 +232,9 @@ def GenerateReferenceData():
 # Tests most of the archive files in data_dir using default mounting options.
 def TestArchiveWithOptions(options=[]):
     want_trees = {
+        'empty.tar': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        },
         'empty.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
         },
@@ -1534,6 +1537,7 @@ def TestInvalidArchive():
     CheckArchiveMountingError('romeo.txt', 30)
 
     # https://github.com/google/fuse-archive/issues/38
+    CheckArchiveMountingError('empty', 32)
     CheckArchiveMountingError('empty.gz', 32)
 
     # https://github.com/google/fuse-archive/issues/36
