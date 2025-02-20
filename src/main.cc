@@ -1466,7 +1466,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"tbz", archive_read_support_filter_bzip2},
         {"tbz2", archive_read_support_filter_bzip2},
         {"tgz", archive_read_support_filter_gzip},
-        {"tlz", archive_read_support_filter_lzip},
+        {"tlz", archive_read_support_filter_lzma},
         {"tlz4", archive_read_support_filter_lz4},
         {"tlzma", archive_read_support_filter_lzma},
         {"txz", archive_read_support_filter_xz},
