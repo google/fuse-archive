@@ -285,6 +285,12 @@ def TestArchiveWithOptions(options=[]):
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1701219888000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
         },
+        # This should be handled as a RAR, and not as a ZIP.
+        # https://github.com/libarchive/libarchive/issues/2249
+        'archive.zip.rar': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1739230765000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
+        },
         'archive.cab': {
             # Don't check mtime for this archive.
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
