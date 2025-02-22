@@ -1458,6 +1458,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
         // {"lzo", SET_FILTER(LZOP)},
         {"lzo", SET_FILTER_COMMAND(lzop)},
         {"lzop", SET_FILTER_COMMAND(lzop)},
+        {"rpm", SET_FILTER(RPM)},
+        {"uu", SET_FILTER(UU)},
         {"xz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"z", SET_FILTER(COMPRESS)},
