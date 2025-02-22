@@ -1394,28 +1394,29 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
  private:
-  void Check(int const status) const {
+  static void Check(int const status, Archive* const a) {
     switch (status) {
       case ARCHIVE_OK:
         return;
       case ARCHIVE_WARN:
-        LOG(WARNING) << GetErrorString(archive.get());
+        LOG(WARNING) << GetErrorString(a);
         return;
       default:
-        std::string_view const error = GetErrorString(archive.get());
+        std::string_view const error = GetErrorString(a);
         LOG(ERROR) << "Cannot open archive: " << error;
         ThrowExitCode(error);
         throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
     }
   }
 
+  void Check(int const status) const { Check(status, archive.get()); }
+
   // Special case for .tar files because they can be of two different formats:
   // TAR or EMPTY.
   static int SetTarFormat(Archive* const a) {
-    if (archive_read_support_format_empty(a) == ARCHIVE_FATAL) {
-      return ARCHIVE_FATAL;
-    }
-    return archive_read_support_format_tar(a);
+    Check(archive_read_support_format_empty(a), a);
+    Check(archive_read_support_format_tar(a), a);
+    return ARCHIVE_OK;
   }
 
   // Special case for .rar files because they can be of two different formats:
@@ -1427,19 +1428,20 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return archive_read_support_format_rar5(a);
   }
 
-  static int SetBrotliFilter(Archive* const a) {
-    return archive_read_append_filter_program(a, "brotli -d");
+#define SET_FILTER(s)                                            \
+  [](Archive* const a) {                                         \
+    Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s), a); \
   }
 
-#define SET_FILTER(s)                                      \
-  [](Archive* const a) {                                      \
-    return archive_read_append_filter(a, ARCHIVE_FILTER_##s); \
+#define SET_FILTER_COMMAND(s)                                  \
+  [](Archive* const a) {                                       \
+    Check(archive_read_append_filter_program(a, #s " -d"), a); \
   }
 
   bool SetCompressionFilter(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
-        {"br", SetBrotliFilter},
+        std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
+        {"br", SET_FILTER_COMMAND(brotli)},
         {"bz", SET_FILTER(BZIP2)},
         {"bz2", SET_FILTER(BZIP2)},
         {"grz", SET_FILTER(GRZIP)},
@@ -1450,11 +1452,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"lzma", SET_FILTER(LZMA)},
         // Work around https://github.com/libarchive/libarchive/issues/2513
         // {"lzo", SET_FILTER(LZOP)},
-        {"lzo", archive_read_support_filter_lzop},
+        {"lzo", SET_FILTER_COMMAND(lzop)},
         {"xz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"z", SET_FILTER(COMPRESS)},
-        {"z", archive_read_support_filter_compress},
+        {"z", SET_FILTER_COMMAND(compress)},
         {"zst", SET_FILTER(ZSTD)},
     };
 
@@ -1463,16 +1465,16 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
-    Check(it->second(archive.get()));
+    it->second(archive.get());
     return true;
   }
 
   bool SetCompressedTarFormat(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<int(Archive*)>> const ext_to_filter = {
+        std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"taz", SET_FILTER(COMPRESS)},
-        {"taz", archive_read_support_filter_compress},
+        {"taz", SET_FILTER_COMMAND(compress)},
         {"tb2", SET_FILTER(BZIP2)},
         {"tbz", SET_FILTER(BZIP2)},
         {"tbz2", SET_FILTER(BZIP2)},
@@ -1483,7 +1485,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"txz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"tz", SET_FILTER(COMPRESS)},
-        {"tz", archive_read_support_filter_compress},
+        {"tz", SET_FILTER_COMMAND(compress)},
         {"tz2", SET_FILTER(BZIP2)},
         {"tzst", SET_FILTER(ZSTD)},
     };
@@ -1493,7 +1495,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
-    Check(it->second(archive.get()));
+    it->second(archive.get());
     Check(SetTarFormat(archive.get()));
     return true;
   }
