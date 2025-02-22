@@ -1413,19 +1413,16 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   // Special case for .tar files because they can be of two different formats:
   // TAR or EMPTY.
-  static int SetTarFormat(Archive* const a) {
+  static void SetTarFormat(Archive* const a) {
     Check(archive_read_support_format_empty(a), a);
     Check(archive_read_support_format_tar(a), a);
-    return ARCHIVE_OK;
   }
 
   // Special case for .rar files because they can be of two different formats:
   // RAR or RAR5.
-  static int SetRarFormat(Archive* const a) {
-    if (archive_read_support_format_rar(a) == ARCHIVE_FATAL) {
-      return ARCHIVE_FATAL;
-    }
-    return archive_read_support_format_rar5(a);
+  static void SetRarFormat(Archive* const a) {
+    Check(archive_read_support_format_rar(a), a);
+    Check(archive_read_support_format_rar5(a), a);
   }
 
 #define SET_FILTER(s)                                            \
@@ -1442,22 +1439,29 @@ struct Reader : bi::list_base_hook<LinkMode> {
     static std::unordered_map<
         std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
         {"br", SET_FILTER_COMMAND(brotli)},
-        {"bz", SET_FILTER(BZIP2)},
+        {"brotli", SET_FILTER_COMMAND(brotli)},
         {"bz2", SET_FILTER(BZIP2)},
+        {"bzip2", SET_FILTER(BZIP2)},
         {"grz", SET_FILTER(GRZIP)},
+        {"grzip", SET_FILTER(GRZIP)},
         {"gz", SET_FILTER(GZIP)},
+        {"gzip", SET_FILTER(GZIP)},
         {"lrz", SET_FILTER(LRZIP)},
+        {"lrzip", SET_FILTER(LRZIP)},
         {"lz", SET_FILTER(LZIP)},
+        {"lzip", SET_FILTER(LZIP)},
         {"lz4", SET_FILTER(LZ4)},
         {"lzma", SET_FILTER(LZMA)},
         // Work around https://github.com/libarchive/libarchive/issues/2513
         // {"lzo", SET_FILTER(LZOP)},
         {"lzo", SET_FILTER_COMMAND(lzop)},
+        {"lzop", SET_FILTER_COMMAND(lzop)},
         {"xz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"z", SET_FILTER(COMPRESS)},
         {"z", SET_FILTER_COMMAND(compress)},
         {"zst", SET_FILTER(ZSTD)},
+        {"zstd", SET_FILTER(ZSTD)},
     };
 
     const auto it = ext_to_filter.find(ext);
@@ -1496,46 +1500,55 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     it->second(archive.get());
-    Check(SetTarFormat(archive.get()));
+    SetTarFormat(archive.get());
     return true;
   }
 
 #undef SET_FILTER
 
   bool SetNakedArchiveFormat(std::string_view const ext) {
+#define SET_FORMAT(s) \
+  [](Archive* const a) { Check(archive_read_support_format_##s(a), a); }
+
     static std::unordered_map<
-        std::string_view, std::function<int(Archive*)>> const ext_to_format = {
-        {"7z", archive_read_support_format_7zip},
-        {"a", archive_read_support_format_ar},
-        {"cab", archive_read_support_format_cab},
-        {"cpio", archive_read_support_format_cpio},
-        {"crx", archive_read_support_format_zip_seekable},
-        {"docx", archive_read_support_format_zip_seekable},
-        {"iso", archive_read_support_format_iso9660},
-        {"jar", archive_read_support_format_zip_seekable},
-        {"lha", archive_read_support_format_lha},
-        {"mtree", archive_read_support_format_mtree},
-        {"odf", archive_read_support_format_zip_seekable},
-        {"odg", archive_read_support_format_zip_seekable},
-        {"odp", archive_read_support_format_zip_seekable},
-        {"ods", archive_read_support_format_zip_seekable},
-        {"odt", archive_read_support_format_zip_seekable},
-        {"ppsx", archive_read_support_format_zip_seekable},
-        {"pptx", archive_read_support_format_zip_seekable},
+        std::string_view, std::function<void(Archive*)>> const ext_to_format = {
+        {"7z", SET_FORMAT(7zip)},
+        {"7zip", SET_FORMAT(7zip)},
+        {"a", SET_FORMAT(ar)},
+        {"ar", SET_FORMAT(ar)},
+        {"cab", SET_FORMAT(cab)},
+        {"cpio", SET_FORMAT(cpio)},
+        {"crx", SET_FORMAT(zip_seekable)},
+        {"docx", SET_FORMAT(zip_seekable)},
+        {"iso", SET_FORMAT(iso9660)},
+        {"iso9660", SET_FORMAT(iso9660)},
+        {"jar", SET_FORMAT(zip_seekable)},
+        {"lha", SET_FORMAT(lha)},
+        {"mtree", SET_FORMAT(mtree)},
+        {"odf", SET_FORMAT(zip_seekable)},
+        {"odg", SET_FORMAT(zip_seekable)},
+        {"odp", SET_FORMAT(zip_seekable)},
+        {"ods", SET_FORMAT(zip_seekable)},
+        {"odt", SET_FORMAT(zip_seekable)},
+        {"ppsx", SET_FORMAT(zip_seekable)},
+        {"pptx", SET_FORMAT(zip_seekable)},
         {"rar", SetRarFormat},
+        {"rar5", SetRarFormat},
         {"tar", SetTarFormat},
-        {"warc", archive_read_support_format_warc},
-        {"xar", archive_read_support_format_xar},
-        {"xlsx", archive_read_support_format_zip_seekable},
-        {"zip", archive_read_support_format_zip_seekable},
+        {"warc", SET_FORMAT(warc)},
+        {"xar", SET_FORMAT(xar)},
+        {"xlsx", SET_FORMAT(zip_seekable)},
+        {"zip", SET_FORMAT(zip_seekable)},
     };
+
+#undef SET_FORMAT
 
     const auto it = ext_to_format.find(ext);
     if (it == ext_to_format.end()) {
       return false;
     }
 
-    Check(it->second(archive.get()));
+    it->second(archive.get());
     return true;
   }
 
@@ -1560,7 +1573,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
           LOG(DEBUG) << "Recognized compressed TAR extension 'tar." << ext
                      << "'";
         }
-        Check(SetTarFormat(archive.get()));
+        SetTarFormat(archive.get());
       } else {
         if (id == 1) {
           LOG(DEBUG) << "Recognized compressed file extension '" << ext << "'";
