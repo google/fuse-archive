@@ -232,7 +232,7 @@ def GenerateReferenceData():
 def TestArchiveWithOptions(options=[]):
     want_tree = {'.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2}}
 
-    for zip_name in ["empty.tar", "empty.tar.gz", "empty.tgz"]:
+    for zip_name in ['empty.tar', 'empty.tar.gz', 'empty.tgz']:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     want_tree = {
@@ -250,14 +250,15 @@ def TestArchiveWithOptions(options=[]):
     }
 
     for zip_name in [
-            "archive.7z", "archive.rar", "archive.tar", "archive.tar.b64", "archive.tar.br",
-            "archive.tar.bz2", "archive.tar.gz", "archive.tar.lrz",
-            "archive.tar.lz", "archive.tar.lz4", "archive.tar.lzma",
-            "archive.tar.lzo", "archive.tar.xz", "archive.tar.Z",
-            "archive.tar.zst", "archive.taz", "archive.tb2", "archive.tbz",
-            "archive.tbz2", "archive.tgz", "archive.tlz", "archive.tlz4",
-            "archive.tlzma", "archive.txz", "archive.tz", "archive.tz2",
-            "archive.tzst", "archive.zip"
+            'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.b64',
+            'archive.tar.br', 'archive.tar.bz2', 'archive.tar.gz',
+            'archive.tar.gz.uu', 'archive.tar.lrz', 'archive.tar.lz',
+            'archive.tar.lz4', 'archive.tar.lzma', 'archive.tar.lzo',
+            'archive.tar.xz', 'archive.tar.Z', 'archive.tar.zst',
+            'archive.taz', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
+            'archive.tgz', 'archive.tlz', 'archive.tlz4', 'archive.tlzma',
+            'archive.txz', 'archive.tz', 'archive.tz2', 'archive.tzst',
+            'archive.zip'
     ]:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
@@ -267,9 +268,10 @@ def TestArchiveWithOptions(options=[]):
     }
 
     for zip_name in [
-            "romeo.txt.b64", "romeo.txt.br", "romeo.txt.bz2", "romeo.txt.gz", "romeo.txt.lrz",
-            "romeo.txt.lz", "romeo.txt.lz4", "romeo.txt.lzma", "romeo.txt.lzo",
-            "romeo.txt.xz", "romeo.txt.Z", "romeo.txt.zst", 'romeo.bzip2.zip',
+            'romeo.txt.b64', 'romeo.txt.br', 'romeo.txt.bz2', 'romeo.txt.gz',
+            'romeo.txt.gz.uu', 'romeo.txt.lrz', 'romeo.txt.lz',
+            'romeo.txt.lz4', 'romeo.txt.lzma', 'romeo.txt.lzo', 'romeo.txt.xz',
+            'romeo.txt.Z', 'romeo.txt.zst', 'romeo.bzip2.zip',
             'romeo.lzma.zip', 'romeo.xz.zip'
     ]:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
