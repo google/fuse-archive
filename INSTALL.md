@@ -39,6 +39,7 @@ $ sudo apt install g++ pkg-config make pandoc
 To test **fuse-archive**, you also need the following tools:
 
 *   [Python 3](https://www.python.org)
+*   base64
 *   [brotli](https://github.com/google/brotli)
 *   [compress](https://en.wikipedia.org/wiki/Compress_(software))
 *   [lrzip](https://github.com/ckolivas/lrzip)
@@ -47,7 +48,7 @@ To test **fuse-archive**, you also need the following tools:
 On Debian systems, you can get these tools by installing the following packages:
 
 ```sh
-$ sudo apt install python3 brotli lrzip lzop ncompress
+$ sudo apt install python3 brotli coreutils lrzip lzop ncompress
 ```
 
 ## Get the Source Code

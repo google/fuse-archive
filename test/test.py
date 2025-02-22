@@ -250,7 +250,7 @@ def TestArchiveWithOptions(options=[]):
     }
 
     for zip_name in [
-            "archive.7z", "archive.rar", "archive.tar", "archive.tar.br",
+            "archive.7z", "archive.rar", "archive.tar", "archive.tar.b64", "archive.tar.br",
             "archive.tar.bz2", "archive.tar.gz", "archive.tar.lrz",
             "archive.tar.lz", "archive.tar.lz4", "archive.tar.lzma",
             "archive.tar.lzo", "archive.tar.xz", "archive.tar.Z",
@@ -267,7 +267,7 @@ def TestArchiveWithOptions(options=[]):
     }
 
     for zip_name in [
-            "romeo.txt.br", "romeo.txt.bz2", "romeo.txt.gz", "romeo.txt.lrz",
+            "romeo.txt.b64", "romeo.txt.br", "romeo.txt.bz2", "romeo.txt.gz", "romeo.txt.lrz",
             "romeo.txt.lz", "romeo.txt.lz4", "romeo.txt.lzma", "romeo.txt.lzo",
             "romeo.txt.xz", "romeo.txt.Z", "romeo.txt.zst", 'romeo.bzip2.zip',
             'romeo.lzma.zip', 'romeo.xz.zip'

@@ -1438,6 +1438,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
   bool SetCompressionFilter(std::string_view const ext) {
     static std::unordered_map<
         std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
+        {"b64", SET_FILTER_COMMAND(base64)},
+        {"base64", SET_FILTER_COMMAND(base64)},
         {"br", SET_FILTER_COMMAND(brotli)},
         {"brotli", SET_FILTER_COMMAND(brotli)},
         {"bz2", SET_FILTER(BZIP2)},
