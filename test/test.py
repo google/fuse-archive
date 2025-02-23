@@ -232,7 +232,7 @@ def GenerateReferenceData():
 def TestArchiveWithOptions(options=[]):
     want_tree = {'.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2}}
 
-    for zip_name in ["empty.tar", "empty.tar.gz", "empty.tgz"]:
+    for zip_name in ['empty.tar', 'empty.tar.gz', 'empty.tgz']:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     want_tree = {
@@ -250,14 +250,15 @@ def TestArchiveWithOptions(options=[]):
     }
 
     for zip_name in [
-            "archive.7z", "archive.rar", "archive.tar", "archive.tar.b64", "archive.tar.br",
-            "archive.tar.bz2", "archive.tar.gz", "archive.tar.lrz",
-            "archive.tar.lz", "archive.tar.lz4", "archive.tar.lzma",
-            "archive.tar.lzo", "archive.tar.xz", "archive.tar.Z",
-            "archive.tar.zst", "archive.taz", "archive.tb2", "archive.tbz",
-            "archive.tbz2", "archive.tgz", "archive.tlz", "archive.tlz4",
-            "archive.tlzma", "archive.txz", "archive.tz", "archive.tz2",
-            "archive.tzst", "archive.zip"
+            'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.b64',
+            'archive.tar.br', 'archive.tar.bz2', 'archive.tar.gz',
+            'archive.tar.lrz', 'archive.tar.lz', 'archive.tar.lz4',
+            'archive.tar.lzma', 'archive.tar.lzo', 'archive.tar.uu',
+            'archive.tar.xz', 'archive.tar.Z', 'archive.tar.zst',
+            'archive.taz', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
+            'archive.tgz', 'archive.tlz', 'archive.tlz4', 'archive.tlzma',
+            'archive.txz', 'archive.tz', 'archive.tz2', 'archive.tzst',
+            'archive.zip'
     ]:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
@@ -267,10 +268,11 @@ def TestArchiveWithOptions(options=[]):
     }
 
     for zip_name in [
-            "romeo.txt.b64", "romeo.txt.br", "romeo.txt.bz2", "romeo.txt.gz", "romeo.txt.lrz",
-            "romeo.txt.lz", "romeo.txt.lz4", "romeo.txt.lzma", "romeo.txt.lzo",
-            "romeo.txt.xz", "romeo.txt.Z", "romeo.txt.zst", 'romeo.bzip2.zip',
-            'romeo.lzma.zip', 'romeo.xz.zip'
+            'romeo.txt.b64', 'romeo.txt.br', 'romeo.txt.bz2', 'romeo.txt.gz',
+            'romeo.txt.lrz', 'romeo.txt.lz', 'romeo.txt.lz4', 'romeo.txt.lzma',
+            'romeo.txt.lzo', 'romeo.txt.uu', 'romeo.txt.xz', 'romeo.txt.Z',
+            'romeo.txt.zst', 'romeo.bzip2.zip', 'romeo.lzma.zip',
+            'romeo.xz.zip'
     ]:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
@@ -318,6 +320,10 @@ def TestArchiveWithOptions(options=[]):
             'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
             'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
             'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+        },
+        'archive.tar.gz.uu': {
+            '.': {'mode': 'drwxr-xr-x', 'nlink': 2},
+            'archive.tar.gz': {'mode': '-rw-r--r--', 'size': 2672, 'md5': '76e1a227c44858cb0e05969b89f03987'},
         },
         'data_descriptor.zip': {
             '.': {'mode': 'drwxr-xr-x'},
@@ -638,6 +644,10 @@ def TestArchiveWithOptions(options=[]):
             '🙂' * 62 + ' (1)': {'md5': '0ca3c0471e4176f8e223d69ffb67e847'},
             '🙂' * 62 + ' (2)': {'md5': '6c191a9c421da46230b4367e4b8e08d9'},
             '🙂' * 63: {'md5': '9ba840cf76707d55db222c1b90cedbfb'},
+        },
+        'romeo.txt.gz.uu': {
+            '.': {'mode': 'drwxr-xr-x'},
+            'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'}
         },
         'zeroes-256mib.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},

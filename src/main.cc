@@ -1425,17 +1425,16 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_rar5(a), a);
   }
 
+  bool SetFilter(std::string_view const ext) {
 #define SET_FILTER(s)                                            \
   [](Archive* const a) {                                         \
     Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s), a); \
   }
-
 #define SET_FILTER_COMMAND(s)                                  \
   [](Archive* const a) {                                       \
     Check(archive_read_append_filter_program(a, #s " -d"), a); \
   }
 
-  bool SetCompressionFilter(std::string_view const ext) {
     static std::unordered_map<
         std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
         {"b64", SET_FILTER_COMMAND(base64)},
@@ -1468,54 +1467,54 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"zstd", SET_FILTER(ZSTD)},
     };
 
-    const auto it = ext_to_filter.find(ext);
-    if (it == ext_to_filter.end()) {
-      return false;
-    }
-
-    it->second(archive.get());
-    return true;
-  }
-
-  bool SetCompressedTarFormat(std::string_view const ext) {
-    static std::unordered_map<
-        std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
-        // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"taz", SET_FILTER(COMPRESS)},
-        {"taz", SET_FILTER_COMMAND(compress)},
-        {"tb2", SET_FILTER(BZIP2)},
-        {"tbz", SET_FILTER(BZIP2)},
-        {"tbz2", SET_FILTER(BZIP2)},
-        {"tgz", SET_FILTER(GZIP)},
-        {"tlz", SET_FILTER(LZMA)},
-        {"tlz4", SET_FILTER(LZ4)},
-        {"tlzma", SET_FILTER(LZMA)},
-        {"txz", SET_FILTER(XZ)},
-        // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"tz", SET_FILTER(COMPRESS)},
-        {"tz", SET_FILTER_COMMAND(compress)},
-        {"tz2", SET_FILTER(BZIP2)},
-        {"tzst", SET_FILTER(ZSTD)},
-    };
-
-    const auto it = ext_to_filter.find(ext);
-    if (it == ext_to_filter.end()) {
-      return false;
-    }
-
-    it->second(archive.get());
-    SetTarFormat(archive.get());
-    return true;
-  }
-
 #undef SET_FILTER
+#undef SET_FILTER_COMMAND
 
-  bool SetNakedArchiveFormat(std::string_view const ext) {
+    const auto it = ext_to_filter.find(ext);
+    if (it == ext_to_filter.end()) {
+      return false;
+    }
+
+    if (id == 1) {
+      LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
+    }
+
+    it->second(archive.get());
+    return true;
+  }
+
+  bool SetFormat(std::string_view const ext) {
+#define SET_COMPRESSED_TAR(s)                                    \
+  [](Archive* const a) {                                         \
+    Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s), a); \
+    SetTarFormat(a);                                             \
+  }
+#define SET_COMPRESSED_TAR_COMMAND(s)                          \
+  [](Archive* const a) {                                       \
+    Check(archive_read_append_filter_program(a, #s " -d"), a); \
+    SetTarFormat(a);                                           \
+  }
 #define SET_FORMAT(s) \
   [](Archive* const a) { Check(archive_read_support_format_##s(a), a); }
 
     static std::unordered_map<
         std::string_view, std::function<void(Archive*)>> const ext_to_format = {
+        // Work around https://github.com/libarchive/libarchive/issues/2514
+        // {"taz", SET_COMPRESSED_TAR(COMPRESS)},
+        {"taz", SET_COMPRESSED_TAR_COMMAND(compress)},
+        {"tb2", SET_COMPRESSED_TAR(BZIP2)},
+        {"tbz", SET_COMPRESSED_TAR(BZIP2)},
+        {"tbz2", SET_COMPRESSED_TAR(BZIP2)},
+        {"tgz", SET_COMPRESSED_TAR(GZIP)},
+        {"tlz", SET_COMPRESSED_TAR(LZMA)},
+        {"tlz4", SET_COMPRESSED_TAR(LZ4)},
+        {"tlzma", SET_COMPRESSED_TAR(LZMA)},
+        {"txz", SET_COMPRESSED_TAR(XZ)},
+        // Work around https://github.com/libarchive/libarchive/issues/2514
+        // {"tz", SET_COMPRESSED_TAR(COMPRESS)},
+        {"tz", SET_COMPRESSED_TAR_COMMAND(compress)},
+        {"tz2", SET_COMPRESSED_TAR(BZIP2)},
+        {"tzst", SET_COMPRESSED_TAR(ZSTD)},
         {"7z", SET_FORMAT(7zip)},
         {"7zip", SET_FORMAT(7zip)},
         {"a", SET_FORMAT(ar)},
@@ -1537,7 +1536,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"ppsx", SET_FORMAT(zip_seekable)},
         {"pptx", SET_FORMAT(zip_seekable)},
         {"rar", SetRarFormat},
-        {"rar5", SetRarFormat},
         {"tar", SetTarFormat},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
@@ -1545,6 +1543,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"zip", SET_FORMAT(zip_seekable)},
     };
 
+#undef SET_COMPRESSED_TAR
+#undef SET_COMPRESSED_TAR_COMMAND
 #undef SET_FORMAT
 
     const auto it = ext_to_format.find(ext);
@@ -1552,7 +1552,28 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
+    if (id == 1) {
+      LOG(DEBUG) << "Recognized format extension '" << ext << "'";
+    }
+
     it->second(archive.get());
+    return true;
+  }
+
+  bool SetZipFormat(std::string_view const ext) {
+    static std::unordered_set<std::string_view> const exts = {
+        "crx", "docx", "jar",  "odf",  "odg",  "odp",
+        "ods", "odt",  "ppsx", "pptx", "xlsx", "zip"};
+
+    if (!exts.contains(ext)) {
+      return false;
+    }
+
+    if (id == 1) {
+      LOG(DEBUG) << "Recognized ZIP extension '" << ext << "'";
+    }
+
+    Check(archive_read_support_format_zip_seekable(archive.get()));
     return true;
   }
 
@@ -1562,21 +1583,28 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
-    size_t i = p.FinalExtensionPosition();
+    const size_t i = p.FinalExtensionPosition();
     const std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
 
-    // Does this extension signal a compression filter?
-    if (SetCompressionFilter(ext)) {
+    // Does this extension signal a recognized archive format?
+    if (SetFormat(ext)) {
+      p = p.substr(0, i);
+      return;
+    }
+
+    // Does this extension signal a filter?
+    if (SetFilter(ext)) {
       // There is a compression filter. The only two formats that are recognized
       // after a compression filter are TAR and RAW. Check if there is a .tar
       // extension before the compression extension.
-      p.remove_suffix(p.size() - i);
-      i = p.FinalExtensionPosition();
+      p = p.substr(0, i);
+      const size_t i = p.FinalExtensionPosition();
       if (ToLower(p.substr(std::min(i + 1, p.size()))) == "tar") {
         if (id == 1) {
           LOG(DEBUG) << "Recognized compressed TAR extension 'tar." << ext
                      << "'";
         }
+        p = p.substr(0, i);
         SetTarFormat(archive.get());
       } else {
         if (id == 1) {
@@ -1585,22 +1613,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
         Check(archive_read_support_format_raw(archive.get()));
       }
 
-      return;
-    }
-
-    // Does this extension signal a compressed TAR?
-    if (SetCompressedTarFormat(ext)) {
-      if (id == 1) {
-        LOG(DEBUG) << "Recognized compressed TAR extension '" << ext << "'";
-      }
-      return;
-    }
-
-    // Does this extension signal a "naked" archive format?
-    if (SetNakedArchiveFormat(ext)) {
-      if (id == 1) {
-        LOG(DEBUG) << "Recognized archive extension '" << ext << "'";
-      }
       return;
     }
 
@@ -2624,19 +2636,19 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
 #endif
 
 fuse_operations const operations = {
-    .getattr = GetAttr,
-    .readlink = ReadLink,
-    .open = Open,
-    .read = Read,
-    .statfs = StatFs,
-    .release = Release,
-    .opendir = OpenDir,
-    .readdir = ReadDir,
+  .getattr = GetAttr,
+  .readlink = ReadLink,
+  .open = Open,
+  .read = Read,
+  .statfs = StatFs,
+  .release = Release,
+  .opendir = OpenDir,
+  .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30
-    .init = Init,
+  .init = Init,
 #else
-    .flag_nullpath_ok = true,
-    .flag_nopath = true,
+  .flag_nullpath_ok = true,
+  .flag_nopath = true,
 #endif
 };
 
