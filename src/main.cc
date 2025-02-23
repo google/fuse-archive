@@ -1541,6 +1541,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"xar", SET_FORMAT(xar)},
         {"xlsx", SET_FORMAT(zip_seekable)},
         {"zip", SET_FORMAT(zip_seekable)},
+        {"zipx", SET_FORMAT(zip_seekable)},
     };
 
 #undef SET_COMPRESSED_TAR
@@ -1557,23 +1558,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     it->second(archive.get());
-    return true;
-  }
-
-  bool SetZipFormat(std::string_view const ext) {
-    static std::unordered_set<std::string_view> const exts = {
-        "crx", "docx", "jar",  "odf",  "odg",  "odp",
-        "ods", "odt",  "ppsx", "pptx", "xlsx", "zip"};
-
-    if (!exts.contains(ext)) {
-      return false;
-    }
-
-    if (id == 1) {
-      LOG(DEBUG) << "Recognized ZIP extension '" << ext << "'";
-    }
-
-    Check(archive_read_support_format_zip_seekable(archive.get()));
     return true;
   }
 
