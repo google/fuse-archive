@@ -355,10 +355,11 @@ class Path : public std::string_view {
 
     // Is it a special extension?
     static std::unordered_set<std::string_view> const special_exts = {
-        "br",  "bz",   "bz2", "grz", "gz", "lrz", "lz",
-        "lz4", "lzma", "lzo", "xz",  "z",  "zst"};
+        "b64", "base64", "br",  "brotli", "bz2", "bzip2", "grz", "grzip",
+        "gz",  "gzip",   "lrz", "lrzip",  "lz",  "lzip",  "lz4", "lzma",
+        "lzo", "lzop",   "rpm", "uu",     "xz",  "z",     "zst", "zstd"};
 
-    if (special_exts.count(ext)) {
+    if (special_exts.contains(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
     }
 
