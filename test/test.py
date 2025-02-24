@@ -293,6 +293,20 @@ def TestArchiveWithOptions(options=[]):
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1739230765000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
         },
+        'archive.ar': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            # Mysterious extra file
+            # https://github.com/libarchive/libarchive/issues/2524
+            'data': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+            '0.bytes': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+            'github-tags.json': {'mode': '-rw-r--r--', 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
+            'hello.sh': {'mode': '-rw-r--r--', 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
+            'αβ.txt': {'mode': '-rw-r--r--', 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
+            '😻.txt': {'mode': '-rw-r--r--', 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
+            'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
+            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+            'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+        },
         'archive.cab': {
             # Don't check mtime for this archive.
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
@@ -338,9 +352,9 @@ def TestArchiveWithOptions(options=[]):
             '  (1)': {'md5': 'fc520ede1760d4e64770b48ba8f859fb'},
             '  (2)': {'md5': '9d0c61de9c0cdc3aec1221d3b00f6af1'},
             ' ': {'md5': '4ecf69a9cb2cce4469fbea4cab35277d'},
-            ' (1)': {'md5': 'd4afca8308970d15340aa4f83fcd1503'},
-            ' (2)': {'md5': 'ce7bda717aef111cace3a9687b474b15'},
-            ' (3)': {'md5': 'dbb5fe07c92222392511fc3ce4ca0240'},
+            'data': {'md5': 'd4afca8308970d15340aa4f83fcd1503'},
+            'data (1)': {'md5': 'ce7bda717aef111cace3a9687b474b15'},
+            'data (2)': {'md5': 'dbb5fe07c92222392511fc3ce4ca0240'},
             ' ←Space (1)': {'md5': '42f00634c4115c5f67d9be6a1cfa414c'},
             ' ←Space (2)': {'md5': 'a4506a1c46eaab6a62de9d5ddb80666b'},
             ' ←Space': {'md5': '9f407c9493c1ccc2458ab776b0e3efcf'},

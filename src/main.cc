@@ -1758,12 +1758,7 @@ struct FileHandle {
 std::string GetNormalizedPath(Entry* const e) {
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
-  if (!s || !*s) {
-    LOG(ERROR) << "Entry has an empty path";
-    return "";
-  }
-
-  Path const path = s;
+  Path const path = s && *s ? s : "data";
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
@@ -2070,7 +2065,7 @@ void ProcessEntry(Reader& r) {
 
   // Create the node for this entry.
   Node* const node =
-      new Node{.name = std::string(name),
+      new Node{.name = std::string(name.empty() ? "data" : name),
                .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
                                            (0666 & ~g_options.fmask)),
                .index_within_archive = i,
@@ -2176,7 +2171,7 @@ void ResolveHardlinks() {
 
     // Create the node for this entry.
     Node* const node = new Node{
-        .name = std::string(name),
+        .name = std::string(name.empty() ? "data" : name),
         .symlink = target->symlink,
         .mode = target->mode,
         .ino = g_hardlinks ? target->ino : ++Node::count,
