@@ -259,6 +259,50 @@ enum class ArchiveFormat : int {
   RAW = ARCHIVE_FORMAT_RAW,
 };
 
+std::ostream& operator<<(std::ostream& out, ArchiveFormat const f) {
+  switch (static_cast<int>(f)) {
+    case 0:
+      return out << "NONE";
+#define PRINT(s)           \
+  case ARCHIVE_FORMAT_##s: \
+    return out << #s;
+      PRINT(CPIO)
+      PRINT(CPIO_POSIX)
+      PRINT(CPIO_BIN_LE)
+      PRINT(CPIO_BIN_BE)
+      PRINT(CPIO_SVR4_NOCRC)
+      PRINT(CPIO_SVR4_CRC)
+      PRINT(CPIO_AFIO_LARGE)
+      PRINT(CPIO_PWB)
+      PRINT(SHAR)
+      PRINT(SHAR_BASE)
+      PRINT(SHAR_DUMP)
+      PRINT(TAR)
+      PRINT(TAR_USTAR)
+      PRINT(TAR_PAX_INTERCHANGE)
+      PRINT(TAR_PAX_RESTRICTED)
+      PRINT(TAR_GNUTAR)
+      PRINT(ISO9660)
+      PRINT(ISO9660_ROCKRIDGE)
+      PRINT(ZIP)
+      PRINT(EMPTY)
+      PRINT(AR)
+      PRINT(AR_GNU)
+      PRINT(AR_BSD)
+      PRINT(MTREE)
+      PRINT(RAW)
+      PRINT(XAR)
+      PRINT(LHA)
+      PRINT(CAB)
+      PRINT(RAR)
+      PRINT(7ZIP)
+      PRINT(WARC)
+      PRINT(RAR_V5)
+#undef PRINT
+  }
+  return out << static_cast<int>(f);
+}
+
 ArchiveFormat g_archive_format = ArchiveFormat::NONE;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
@@ -2204,7 +2248,8 @@ void CheckRawArchive(Archive* const a) {
   }
 
   g_archive_format = ArchiveFormat(archive_format(a));
-  LOG(DEBUG) << "Archive format is " << archive_format_name(a);
+  LOG(DEBUG) << "Archive format is " << archive_format_name(a) << " ("
+             << g_archive_format << ")";
 
   int filter_count = 0;
   for (int i = archive_filter_count(a); i > 0;) {
