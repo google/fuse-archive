@@ -56,7 +56,7 @@ install-strip: out/$(PROJECT)
 uninstall:
 	rm "$(BINDIR)/$(PROJECT)" "$(MANDIR)/$(MAN)"
 
-out/$(PROJECT): src/main.cc
+out/$(PROJECT): $(PROJECT).cc
 	mkdir -p out
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(LDFLAGS) -o $@
 
