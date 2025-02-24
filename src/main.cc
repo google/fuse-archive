@@ -326,13 +326,13 @@ class Path : public std::string_view {
   // * "foo.a b" -> no extension
   // * "foo. (1)" -> no extension
   //
-  // An extension cannot be longer than 6 bytes, including the leading dot:
+  // An extension cannot be longer than 8 bytes, including the leading dot:
   // * "foo.tool" -> ".tool"
   // * "foo.toolong" -> no extension
   size_type FinalExtensionPosition() const {
     size_type const last_dot = find_last_of("/. ");
     if (last_dot == npos || at(last_dot) != '.' || last_dot == 0 ||
-        last_dot == size() - 1 || size() - last_dot > 6)
+        last_dot == size() - 1 || size() - last_dot > 8)
       return size();
 
     if (size_type const i = find_last_not_of('.', last_dot - 1);
