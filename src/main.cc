@@ -330,6 +330,7 @@ std::string ToLower(std::string_view const s) {
 // Path manipulations.
 class Path : public std::string_view {
  public:
+  Path() = default;
   Path(const char* const path) : std::string_view(path) {}
   Path(std::string_view const path) : std::string_view(path) {}
 
@@ -568,6 +569,9 @@ std::ostream& operator<<(std::ostream& out, Path const path) {
   out.put('\'');
   return out;
 }
+
+// Archive name without its extension.
+Path g_archive_name_without_extension;
 
 enum class FileType : mode_t {
   BlockDevice = S_IFBLK,  // Block-oriented device
@@ -1520,10 +1524,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
-    if (id == 1) {
-      LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
-    }
-
     it->second(archive.get());
     return true;
   }
@@ -1598,17 +1598,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
-    if (id == 1) {
-      LOG(DEBUG) << "Recognized format extension '" << ext << "'";
-    }
-
     it->second(archive.get());
     return true;
   }
 
   // Determines the archive format from the filename extension.
   void SetFormat() {
-    Path p(g_archive_path);
+    Path p = Path(g_archive_path).Split().second;
 
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
@@ -1618,6 +1614,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // Does this extension signal a recognized archive format?
     if (SetFormat(ext)) {
       p = p.substr(0, i);
+      if (id == 1) {
+        LOG(DEBUG) << "Recognized format extension '" << ext << "'";
+        g_archive_name_without_extension = p;
+      }
+
       return;
     }
 
@@ -1627,18 +1628,20 @@ struct Reader : bi::list_base_hook<LinkMode> {
       // after a compression filter are TAR and RAW. Check if there is a .tar
       // extension before the compression extension.
       p = p.substr(0, i);
+      if (id == 1) {
+        LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
+        g_archive_name_without_extension = p;
+      }
+
       const size_t i = p.FinalExtensionPosition();
       if (ToLower(p.substr(std::min(i + 1, p.size()))) == "tar") {
-        if (id == 1) {
-          LOG(DEBUG) << "Recognized compressed TAR extension 'tar." << ext
-                     << "'";
-        }
         p = p.substr(0, i);
+        if (id == 1) {
+          LOG(DEBUG) << "Recognized format extension '" << ext << "'";
+          g_archive_name_without_extension = p;
+        }
         SetTarFormat(archive.get());
       } else {
-        if (id == 1) {
-          LOG(DEBUG) << "Recognized compressed file extension '" << ext << "'";
-        }
         Check(archive_read_support_format_raw(archive.get()));
       }
 
@@ -1651,11 +1654,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
         << ext << "'";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
 #else
+    p = p.substr(0, i);
     if (id == 1) {
       LOG(WARNING)
           << "Cannot determine the archive format from its filename extension '"
           << ext << "'";
       LOG(WARNING) << "Trying to guess the format using the file contents...";
+      g_archive_name_without_extension = p;
     }
 
     // Not a recognized extension. So we'll activate most of the possible
@@ -1810,10 +1815,7 @@ std::string GetNormalizedPath(Entry* const e) {
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
   if (g_archive_format == ArchiveFormat::RAW && path == "data") {
-    return Path(g_archive_path)
-        .Split()
-        .second.WithoutFinalExtension()
-        .Normalized();
+    return g_archive_name_without_extension.Normalized();
   }
 
   return path.Normalized();
