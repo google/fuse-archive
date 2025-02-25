@@ -97,6 +97,39 @@ Foreground mode
 .TP
 \f[B]-d\f[R]
 Foreground mode with debug output
+.SH ARCHIVE FORMATS
+.PP
+\f[B]fuse-archive\f[R] determines the archive format from its filename
+extension.
+It recognizes the following extensions:
+.IP \[bu] 2
+Archive formats \f[V]7z\f[R], \f[V]7zip\f[R], \f[V]a\f[R], \f[V]ar\f[R],
+\f[V]cab\f[R], \f[V]cpio\f[R], \f[V]iso\f[R], \f[V]iso9660\f[R],
+\f[V]mtree\f[R], \f[V]rar\f[R], \f[V]rpm\f[R], \f[V]tar\f[R],
+\f[V]warc\f[R], \f[V]xar\f[R], \f[V]zip\f[R], \f[V]zipx\f[R] and
+ZIP-based file formats \f[V]crx\f[R], \f[V]jar\f[R], \f[V]odf\f[R],
+\f[V]odg\f[R], \f[V]odp\f[R], \f[V]ods\f[R], \f[V]odt\f[R],
+\f[V]docx\f[R], \f[V]ppsx\f[R], \f[V]pptx\f[R], \f[V]xlsx\f[R]
+.IP \[bu] 2
+Compressed TAR \f[V]tb2\f[R], \f[V]tbz\f[R], \f[V]tbz2\f[R],
+\f[V]tz2\f[R], \f[V]tgz\f[R], \f[V]tlz4\f[R], \f[V]tlz\f[R],
+\f[V]tlzma\f[R], \f[V]txz\f[R], \f[V]tz\f[R], \f[V]taz\f[R],
+\f[V]tzst\f[R], \f[V]tar.gz\f[R], \f[V]tar.bz2\f[R],
+\f[V]tar.xz\f[R]\&...
+.IP \[bu] 2
+Compression filters \f[V]br\f[R], \f[V]brotli\f[R], \f[V]bz2\f[R],
+\f[V]bzip2\f[R], \f[V]grz\f[R], \f[V]grzip\f[R], \f[V]gz\f[R],
+\f[V]gzip\f[R], \f[V]lha\f[R], \f[V]lrz\f[R], \f[V]lrzip\f[R],
+\f[V]lz4\f[R], \f[V]lz\f[R], \f[V]lzip\f[R], \f[V]lzma\f[R],
+\f[V]lzo\f[R], \f[V]lzop\f[R], \f[V]xz\f[R], \f[V]z\f[R], \f[V]zst\f[R],
+\f[V]zstd\f[R]
+.IP \[bu] 2
+ASCII encoding filters \f[V]b64\f[R], \f[V]base64\f[R], \f[V]uu\f[R]
+.PP
+If the filename extension is not recognized, then \f[B]fuse-archive\f[R]
+determines the archive format by looking at its byte contents.
+This heuristic works all right most of the time, but there are corner
+cases for which it might get confused.
 .SH CACHING
 .PP
 By default, \f[B]fuse-archive\f[R] decompresses and caches the whole

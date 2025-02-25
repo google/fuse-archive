@@ -84,6 +84,27 @@ mount read-only, not read-write.
 **-d**
 :   Foreground mode with debug output
 
+# ARCHIVE FORMATS
+
+**fuse-archive** determines the archive format from its filename extension. It
+recognizes the following extensions:
+
+*   Archive formats `7z`, `7zip`, `a`, `ar`, `cab`, `cpio`, `iso`, `iso9660`,
+    `mtree`, `rar`, `rpm`, `tar`, `warc`, `xar`, `zip`, `zipx` and ZIP-based
+    file formats `crx`, `jar`, `odf`, `odg`, `odp`, `ods`, `odt`, `docx`,
+    `ppsx`, `pptx`, `xlsx`
+*   Compressed TAR `tb2`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz4`, `tlz`, `tlzma`,
+    `txz`, `tz`, `taz`, `tzst`, `tar.gz`, `tar.bz2`, `tar.xz`...
+*   Compression filters `br`, `brotli`, `bz2`, `bzip2`, `grz`, `grzip`, `gz`,
+    `gzip`, `lha`, `lrz`, `lrzip`, `lz4`, `lz`, `lzip`, `lzma`, `lzo`, `lzop`,
+    `xz`, `z`, `zst`, `zstd`
+*   ASCII encoding filters `b64`, `base64`, `uu`
+
+If the filename extension is not recognized, then **fuse-archive** determines
+the archive format by looking at its byte contents. This heuristic works all
+right most of the time, but there are corner cases for which it might get
+confused.
+
 # CACHING
 
 By default, **fuse-archive** decompresses and caches the whole archive before
