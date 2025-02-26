@@ -1637,7 +1637,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       if (ToLower(p.substr(std::min(i + 1, p.size()))) == "tar") {
         p = p.substr(0, i);
         if (id == 1) {
-          LOG(DEBUG) << "Recognized format extension '" << ext << "'";
+          LOG(DEBUG) << "Recognized format extension 'tar'";
           g_archive_name_without_extension = p;
         }
         SetTarFormat(archive.get());
