@@ -2049,6 +2049,7 @@ void CacheEntryData(Archive* const a) {
         std::string_view const error = GetErrorString(a);
         LOG(ERROR) << "Cannot read data from archive: " << error;
         ThrowExitCode(error);
+        throw ExitCode::INVALID_ARCHIVE_CONTENTS;
     }
   }
 }
