@@ -1147,8 +1147,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
   i64 index_within_archive = 0;
   i64 offset_within_entry = 0;
   bool should_print_progress = false;
-  i64 pos = 0;
-  std::byte bytes[16 * 1024];
+  i64 raw_pos = 0;
+  std::byte raw_bytes[16 * 1024];
 
   ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
 
@@ -1709,11 +1709,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
     assert(g_archive_fd >= 0);
     Reader& r = *static_cast<Reader*>(p);
     while (true) {
-      ssize_t const n = pread(g_archive_fd, r.bytes, sizeof(r.bytes), r.pos);
+      ssize_t const n =
+          pread(g_archive_fd, r.raw_bytes, sizeof(r.raw_bytes), r.raw_pos);
       if (n >= 0) {
-        r.pos += n;
+        r.raw_pos += n;
         r.PrintProgress();
-        *out = r.bytes;
+        *out = r.raw_bytes;
         return n;
       }
 
@@ -1732,14 +1733,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Reader& r = *static_cast<Reader*>(p);
     switch (whence) {
       case SEEK_SET:
-        r.pos = offset;
-        return r.pos;
+        r.raw_pos = offset;
+        return r.raw_pos;
       case SEEK_CUR:
-        r.pos += offset;
-        return r.pos;
+        r.raw_pos += offset;
+        return r.raw_pos;
       case SEEK_END:
-        r.pos = g_archive_size + offset;
-        return r.pos;
+        r.raw_pos = g_archive_size + offset;
+        return r.raw_pos;
     }
     return ARCHIVE_FATAL;
   }
@@ -1747,7 +1748,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   static i64 Skip(Archive*, void* const p, i64 const delta) {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
-    r.pos += delta;
+    r.raw_pos += delta;
     return delta;
   };
 
@@ -1766,7 +1767,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     next = now + period;
     assert(g_archive_size > 0);
-    LOG(INFO) << ProgressMessage(100 * std::min<i64>(pos, g_archive_size) /
+    LOG(INFO) << ProgressMessage(100 * std::min<i64>(raw_pos, g_archive_size) /
                                  g_archive_size);
   }
 
