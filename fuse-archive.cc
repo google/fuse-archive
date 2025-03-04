@@ -1169,9 +1169,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Set callbacks to read the archive file itself.
     Check(archive_read_set_callback_data(archive.get(), this));
-    Check(archive_read_set_read_callback(archive.get(), Read));
-    Check(archive_read_set_seek_callback(archive.get(), Seek));
-    Check(archive_read_set_skip_callback(archive.get(), Skip));
+    Check(archive_read_set_read_callback(archive.get(), ReadRaw));
+    Check(archive_read_set_seek_callback(archive.get(), SeekRaw));
+    Check(archive_read_set_skip_callback(archive.get(), SkipRaw));
 
     // Open the archive.
     Check(archive_read_open1(archive.get()));
@@ -1704,7 +1704,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   // The following callbacks are used by libarchive to read the uncompressed
   // data from the archive file.
-  static ssize_t Read(Archive* const a, void* const p, const void** const out) {
+  static ssize_t ReadRaw(Archive* const a,
+                         void* const p,
+                         const void** const out) {
     assert(p);
     assert(g_archive_fd >= 0);
     Reader& r = *static_cast<Reader*>(p);
@@ -1728,7 +1730,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
   }
 
-  static i64 Seek(Archive*, void* const p, i64 const offset, int const whence) {
+  static i64 SeekRaw(Archive*,
+                     void* const p,
+                     i64 const offset,
+                     int const whence) {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
     switch (whence) {
@@ -1745,7 +1750,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return ARCHIVE_FATAL;
   }
 
-  static i64 Skip(Archive*, void* const p, i64 const delta) {
+  static i64 SkipRaw(Archive*, void* const p, i64 const delta) {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
     r.raw_pos += delta;
