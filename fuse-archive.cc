@@ -2642,6 +2642,7 @@ int StatFs(const char*, struct statvfs* const z) {
   z->f_favail = 0;
   z->f_flag = ST_RDONLY;
   z->f_namemax = NAME_MAX;
+  LOG(DEBUG) << "Got filesystem stats";
   return 0;
 }
 
@@ -2652,6 +2653,7 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
   cfg->use_ino = true;
   cfg->nullpath_ok = true;
   cfg->direct_io = g_direct_io;
+  LOG(DEBUG) << "Initialized FUSE server";
   return nullptr;
 }
 #endif
@@ -2830,6 +2832,17 @@ general options:
 
 }  // namespace
 
+std::ostream& operator<<(std::ostream& out, const fuse_args& args) {
+  std::string_view sep;
+  for (int i = 0; i < args.argc; ++i) {
+    out << sep << std::quoted(args.argv[i]);
+    sep = " ";
+  }
+
+  assert(!args.argv[args.argc]);
+  return out;
+}
+
 int main(int const argc, char** const argv) try {
   // Ensure that numbers in debug messages have thousands separators.
   // It makes big numbers much easier to read (eg sizes expressed in bytes).
@@ -2923,6 +2936,14 @@ int main(int const argc, char** const argv) try {
     fuse_opt_add_arg(&args, "-s");
   }
 
+  // Mount read-only.
+  fuse_opt_add_arg(&args, "-r");
+
+#if FUSE_USE_VERSION < 30
+  // Respect inode numbers.
+  fuse_opt_add_arg(&args, "-ouse_ino");
+#endif
+
   // Read archive and build tree.
   Timer timer;
   BuildTree();
@@ -2989,15 +3010,8 @@ int main(int const argc, char** const argv) try {
   // The mount point is in place.
   fuse_opt_add_arg(&args, g_mount_point.c_str());
 
-#if FUSE_USE_VERSION < 30
-  // Respect inode numbers.
-  fuse_opt_add_arg(&args, "-ouse_ino");
-#endif
-
-  // Mount read-only.
-  fuse_opt_add_arg(&args, "-r");
-
   // Start serving the filesystem.
+  LOG(DEBUG) << "Calling fuse_main() with " << args;
   int const res = fuse_main(args.argc, args.argv, &operations, nullptr);
   LOG(DEBUG) << "Returning " << ExitCode(res);
   return res;
