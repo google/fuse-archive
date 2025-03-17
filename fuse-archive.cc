@@ -2286,8 +2286,6 @@ void BuildTree() {
     throw ExitCode::GENERIC_FAILURE;
   }
 
-  Timer timer;
-
   // Open archive file.
   g_archive_fd = open(g_archive_path.c_str(), O_RDONLY);
   if (g_archive_fd < 0) {
@@ -2349,17 +2347,6 @@ void BuildTree() {
     }
 
     LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
-  }
-
-  // Log some debug messages.
-  if (LOG_IS_ON(DEBUG)) {
-    LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
-    LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() << " items";
-    if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
-      LOG(DEBUG) << "The cache takes " << i64(z.st_blocks) * block_size
-                 << " bytes of disk space";
-      assert(z.st_size == g_cache_size);
-    }
   }
 
   // Close archive file if decompressed data is already cached.
@@ -2937,7 +2924,21 @@ int main(int const argc, char** const argv) try {
   }
 
   // Read archive and build tree.
+  Timer timer;
   BuildTree();
+
+  // Log some debug messages.
+  if (LOG_IS_ON(DEBUG)) {
+    LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
+    LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() - 1
+               << " items totalling " << i64(g_block_count) * block_size
+               << " bytes";
+    if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
+      LOG(DEBUG) << "The cache takes " << i64(z.st_blocks) * block_size
+                 << " bytes of disk space";
+      assert(z.st_size == g_cache_size);
+    }
+  }
 
   // Create the mount point if it does not already exist.
   Cleanup cleanup;
