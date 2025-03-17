@@ -258,7 +258,7 @@ def TestArchiveWithOptions(options=[]):
             'archive.taz', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
             'archive.tgz', 'archive.tlz', 'archive.tlz4', 'archive.tlzma',
             'archive.txz', 'archive.tz', 'archive.tz2', 'archive.tzst',
-            'archive.zip'
+            'archive.zip', 'compressed.tar'
     ]:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 

@@ -1467,6 +1467,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_tar(a), a);
   }
 
+  // Some `.tar` archives are actually compressed TARs, even though they don't
+  // have the compression extension. So, as a special case for `.tar`,
+  // automatically recognize the possible compression filters.
+  static void SetPossiblyCompressedTarFormat(Archive* const a) {
+    Check(archive_read_support_filter_all(a), a);
+    SetTarFormat(a);
+  }
+
   // Special case for .rar files because they can be of two different formats:
   // RAR or RAR5.
   static void SetRarFormat(Archive* const a) {
@@ -1581,7 +1589,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"ppsx", SET_FORMAT(zip_seekable)},
         {"pptx", SET_FORMAT(zip_seekable)},
         {"rar", SetRarFormat},
-        {"tar", SetTarFormat},
+        {"tar", SetPossiblyCompressedTarFormat},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
         {"xlsx", SET_FORMAT(zip_seekable)},
