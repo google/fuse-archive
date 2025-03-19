@@ -2,7 +2,7 @@
 title: fuse-archive
 section: 1
 header: User Manual
-footer: fuse-archive 1.12
+footer: fuse-archive 1.13
 date: March 2025
 ---
 
