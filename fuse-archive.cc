@@ -1215,11 +1215,15 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_tar(a), a);
   }
 
+  static void SetAllFilters(Archive* const a) {
+    Check(archive_read_support_filter_all(a), a);
+  }
+
   // Some `.tar` archives are actually compressed TARs, even though they don't
   // have the compression extension. So, as a special case for `.tar`,
   // automatically recognize the possible compression filters.
   static void SetPossiblyCompressedTarFormat(Archive* const a) {
-    Check(archive_read_support_filter_all(a), a);
+    SetAllFilters(a);
     SetTarFormat(a);
   }
 
@@ -1278,13 +1282,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
         // Work around https://github.com/libarchive/libarchive/issues/2513
         // {"lzo", SET_FILTER(LZOP)},
         // {"lzop", SET_FILTER(LZOP)},
-        {"lzo", SET_FILTER_COMMAND(lzop)},
-        {"lzop", SET_FILTER_COMMAND(lzop)},
+        {"lzo", SetAllFilters},
+        {"lzop", SetAllFilters},
         {"uu", SET_FILTER(UU)},
         {"xz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"z", SET_FILTER(COMPRESS)},
-        {"z", SET_FILTER_COMMAND(compress)},
+        {"z", SetAllFilters},
         {"zst", SET_FILTER(ZSTD)},
         {"zstd", SET_FILTER(ZSTD)},
     };
@@ -1319,26 +1323,20 @@ struct Reader : bi::list_base_hook<LinkMode> {
         std::string_view, std::function<void(Archive*)>> const ext_to_format = {
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"taz", SET_COMPRESSED_TAR(COMPRESS)},
-        {"taz", SET_COMPRESSED_TAR_COMMAND(compress)},
+        {"taz", SetPossiblyCompressedTarFormat},
         {"tbr", SET_COMPRESSED_TAR_COMMAND(brotli)},
         {"tb2", SET_COMPRESSED_TAR(BZIP2)},
         {"tbz", SET_COMPRESSED_TAR(BZIP2)},
         {"tbz2", SET_COMPRESSED_TAR(BZIP2)},
         {"tgz", SET_COMPRESSED_TAR(GZIP)},
-        {"tlz",
-         [](Archive* const a) {
-           // .tlz could mean .tar.lz or .tar.lzma
-           Check(archive_read_support_filter_lzip(a), a);
-           Check(archive_read_support_filter_lzma(a), a);
-           SetTarFormat(a);
-         }},
+        {"tlz", SetPossiblyCompressedTarFormat},
         {"tlz4", SET_COMPRESSED_TAR(LZ4)},
         {"tlzip", SET_COMPRESSED_TAR(LZIP)},
         {"tlzma", SET_COMPRESSED_TAR(LZMA)},
         {"txz", SET_COMPRESSED_TAR(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"tz", SET_COMPRESSED_TAR(COMPRESS)},
-        {"tz", SET_COMPRESSED_TAR_COMMAND(compress)},
+        {"tz", SetPossiblyCompressedTarFormat},
         {"tz2", SET_COMPRESSED_TAR(BZIP2)},
         {"tzs", SET_COMPRESSED_TAR(ZSTD)},
         {"tzst", SET_COMPRESSED_TAR(ZSTD)},
