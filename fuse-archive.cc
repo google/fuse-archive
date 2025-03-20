@@ -1559,7 +1559,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"tbz", SET_COMPRESSED_TAR(BZIP2)},
         {"tbz2", SET_COMPRESSED_TAR(BZIP2)},
         {"tgz", SET_COMPRESSED_TAR(GZIP)},
-        {"tlz", SET_COMPRESSED_TAR(LZMA)},
+        {"tlz",
+         [](Archive* const a) {
+           // .tlz could mean .tar.lz or .tar.lzma
+           Check(archive_read_support_filter_lzip(a), a);
+           Check(archive_read_support_filter_lzma(a), a);
+           SetTarFormat(a);
+         }},
         {"tlz4", SET_COMPRESSED_TAR(LZ4)},
         {"tlzma", SET_COMPRESSED_TAR(LZMA)},
         {"txz", SET_COMPRESSED_TAR(XZ)},
