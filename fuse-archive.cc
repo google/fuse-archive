@@ -1555,6 +1555,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"taz", SET_COMPRESSED_TAR(COMPRESS)},
         {"taz", SET_COMPRESSED_TAR_COMMAND(compress)},
+        {"tbr", SET_COMPRESSED_TAR_COMMAND(brotli)},
         {"tb2", SET_COMPRESSED_TAR(BZIP2)},
         {"tbz", SET_COMPRESSED_TAR(BZIP2)},
         {"tbz2", SET_COMPRESSED_TAR(BZIP2)},
@@ -1567,6 +1568,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
            SetTarFormat(a);
          }},
         {"tlz4", SET_COMPRESSED_TAR(LZ4)},
+        {"tlzip", SET_COMPRESSED_TAR(LZIP)},
         {"tlzma", SET_COMPRESSED_TAR(LZMA)},
         {"txz", SET_COMPRESSED_TAR(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514

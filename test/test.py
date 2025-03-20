@@ -251,14 +251,15 @@ def TestArchiveWithOptions(options=[]):
 
     for zip_name in [
             'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.b64',
-            'archive.tar.br', 'archive.tar.bz2', 'archive.tar.gz',
-            'archive.tar.lrz', 'archive.tar.lz', 'archive.tar.lz4',
-            'archive.tar.lzma', 'archive.tar.lzo', 'archive.tar.uu',
-            'archive.tar.xz', 'archive.tar.Z', 'archive.tar.zst',
-            'archive.taz', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
-            'archive.tgz', 'archive.tlz', 'archive.tlz4', 'archive.tlzma',
-            'archive.txz', 'archive.tz', 'archive.tz2', 'archive.tzst',
-            'archive.zip', 'compressed.tar', 'lz_is_lzip.tlz', 'lz_is_lzma.tlz',
+            'archive.tar.br', 'archive.tbr', 'archive.tar.bz2',
+            'archive.tar.gz', 'archive.tar.lrz', 'archive.tar.lz',
+            'archive.tar.lz4', 'archive.tar.lzma', 'archive.tar.lzo',
+            'archive.tar.uu', 'archive.tar.xz', 'archive.tar.Z',
+            'archive.tar.zst', 'archive.taz', 'archive.tb2', 'archive.tbz',
+            'archive.tbz2', 'archive.tgz', 'archive.tlz', 'archive.tlzip',
+            'archive.tlz4', 'archive.tlzma', 'archive.txz', 'archive.tz',
+            'archive.tz2', 'archive.tzst', 'archive.zip', 'compressed.tar',
+            'lz_is_lzip.tlz', 'lz_is_lzma.tlz',
     ]:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
