@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -652,6 +653,9 @@ struct Node {
 
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
+
+  // Number of open file descriptors that are currently reading this file node.
+  std::atomic<int> fd_count = 0;
 
   // Hard link target.
   Node* hardlink_target = nullptr;
@@ -1819,7 +1823,7 @@ int Reader::count = 0;
 bi::list<Reader> Reader::recycled;
 
 struct FileHandle {
-  const Node* const node;
+  Node* const node;
   Reader::Ptr reader;
 };
 
@@ -2425,7 +2429,7 @@ int ReadLink(const char* const path, char* const buf, size_t const size) {
 
 int Open(const char* const path, fuse_file_info* const fi) try {
   assert(path);
-  const Node* const n = FindNode(path);
+  Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
     return -ENOENT;
@@ -2446,7 +2450,14 @@ int Open(const char* const path, fuse_file_info* const fi) try {
   assert(fi);
   static_assert(sizeof(fi->fh) >= sizeof(FileHandle*));
   fi->fh = reinterpret_cast<uintptr_t>(new FileHandle{.node = n});
-  LOG(DEBUG) << "Opened " << *n;
+  int const fd_count = ++n->fd_count;
+  assert(fd_count > 0);
+  if (fd_count == 1) {
+    LOG(DEBUG) << "Opened " << *n;
+  } else {
+    LOG(DEBUG) << "Opened " << *n << " (" << fd_count
+               << " file descriptors currently open)";
+  }
   return 0;
 } catch (...) {
   LOG(DEBUG) << "Caught exception";
@@ -2567,11 +2578,18 @@ int Release(const char*, fuse_file_info* const fi) {
   FileHandle* const h = reinterpret_cast<FileHandle*>(fi->fh);
   assert(h);
 
-  const Node* const n = h->node;
+  Node* const n = h->node;
   assert(n);
+  int const fd_count = --n->fd_count;
+  assert(fd_count >= 0);
   delete h;
 
-  LOG(DEBUG) << "Closed " << *n;
+  if (fd_count > 0) {
+    LOG(DEBUG) << "Closed " << *n << " (" << fd_count
+               << " file descriptors are still open)";
+  } else {
+    LOG(DEBUG) << "Closed " << *n;
+  }
   return 0;
 }
 
