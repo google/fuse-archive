@@ -98,6 +98,77 @@ struct Timer {
   }
 };
 
+enum class LogLevel {
+  DEBUG = LOG_DEBUG,
+  INFO = LOG_INFO,
+  WARNING = LOG_WARNING,
+  ERROR = LOG_ERR,
+};
+
+LogLevel g_log_level = LogLevel::INFO;
+
+void SetLogLevel(LogLevel const level) {
+  g_log_level = level;
+  setlogmask(LOG_UPTO(static_cast<int>(level)));
+}
+
+#define LOG_IS_ON(level) (LogLevel::level <= g_log_level)
+
+bool g_latest_log_is_ephemeral = false;
+
+enum class ProgressMessage : int;
+
+// Accumulates a log message and logs it.
+class Logger {
+ public:
+  explicit Logger(LogLevel const level, int err = -1)
+      : level_(level), err_(err) {}
+
+  Logger(const Logger&) = delete;
+
+  ~Logger() {
+    if (err_ >= 0) {
+      if (LOG_IS_ON(DEBUG)) {
+        oss_ << ": Error " << err_;
+      }
+      oss_ << ": " << strerror(err_);
+    }
+
+    if (g_latest_log_is_ephemeral && isatty(STDERR_FILENO)) {
+      std::string_view const s = "\e[F\e[K";
+      std::ignore = write(STDERR_FILENO, s.data(), s.size());
+    }
+
+    syslog(static_cast<int>(level_), "%s", std::move(oss_).str().c_str());
+    g_latest_log_is_ephemeral = ephemeral_;
+  }
+
+  Logger&& operator<<(const auto& a) && {
+    oss_ << a;
+    return std::move(*this);
+  }
+
+  Logger&& operator<<(ProgressMessage const a) && {
+    oss_ << "Loading " << static_cast<int>(a) << "%";
+    ephemeral_ = true;
+    return std::move(*this);
+  }
+
+ private:
+  LogLevel const level_;
+  int const err_;
+  std::ostringstream oss_;
+  bool ephemeral_ = false;
+};
+
+#define LOG(level)                    \
+  if (LogLevel::level <= g_log_level) \
+  Logger(LogLevel::level)
+
+#define PLOG(level)                   \
+  if (LogLevel::level <= g_log_level) \
+  Logger(LogLevel::level, errno)
+
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -617,169 +688,49 @@ constexpr blksize_t block_size = 512;
 // Total number of blocks taken by the tree of nodes.
 blkcnt_t g_block_count = 1;
 
-namespace bi = boost::intrusive;
+using Archive = struct archive;
+using Entry = struct archive_entry;
 
-#ifdef NDEBUG
-using LinkMode = bi::link_mode<bi::normal_link>;
-#else
-using LinkMode = bi::link_mode<bi::safe_link>;
-#endif
+struct ArchiveDeleter {
+  void operator()(Archive* const a) const { archive_read_free(a); }
+};
 
-struct Node {
-  // Name of this node in the context of its parent. This name should be a valid
-  // and non-empty filename, and it shouldn't contain any '/' separator. The
-  // only exception is the root directory, which is just named "/".
-  std::string name;
-  std::string symlink;
-  mode_t mode;
-  static ino_t count;
-  ino_t ino = ++count;
+using ArchivePtr = std::unique_ptr<Archive, ArchiveDeleter>;
 
-  uid_t uid = g_uid;
-  gid_t gid = g_gid;
+const char* ReadPassword(Archive*, void*);
 
-  // Index of the entry represented by this node in the archive, or 0 if it is
-  // not directly represented in the archive (like the root directory, or any
-  // intermediate directory).
-  i64 index_within_archive = 0;
-  i64 size = 0;
-
-  // Where does the cached data start in the cache file?
-  i64 cache_offset = std::numeric_limits<i64>::min();
-
-  time_t mtime = 0;
-  dev_t rdev = 0;
-  i64 nlink = 1;
-
-  // Number of entries whose name have initially collided with this file node.
-  int collision_count = 0;
-
-  // Number of open file descriptors that are currently reading this file node.
-  std::atomic<int> fd_count = 0;
-
-  // Hard link target.
-  Node* hardlink_target = nullptr;
-
-  // Pointer to the parent node. Should be non null. The only exception is the
-  // root directory which has a null parent pointer.
-  Node* parent = nullptr;
-
-  // Hook used to index Nodes by parent.
-  using ByParent = bi::slist_member_hook<LinkMode>;
-  ByParent by_parent;
-
-  // Children of this Node. The children are not sorted and their order is not
-  // relevant. This Node doesn't own its children nodes. The `parent` pointer of
-  // every child in `children` should point back to this Node.
-  using Children = bi::slist<Node,
-                             bi::member_hook<Node, ByParent, &Node::by_parent>,
-                             bi::constant_time_size<false>,
-                             bi::linear<true>,
-                             bi::cache_last<true>>;
-  Children children;
-
-  // Hooks used to index Nodes by full path.
-  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<true>>;
-  ByPath by_path;
-
-  FileType GetType() const { return GetFileType(mode); }
-
-  bool IsDir() const { return S_ISDIR(mode); }
-
-  void AddChild(Node* const child) {
-    assert(child);
-    assert(!child->parent);
-    assert(IsDir());
-    assert(!hardlink_target);
-    assert(nlink >= 2);
-    // Count one "block" for each directory entry.
-    size += block_size;
-    g_block_count += 1;
-    nlink += child->IsDir();
-    child->parent = this;
-    children.push_back(*child);
+// Converts libarchive errors to fuse-archive exit codes. libarchive doesn't
+// have designated passphrase-related error numbers. As for whether a particular
+// archive file's encryption is supported, libarchive isn't consistent in
+// archive_read_has_encrypted_entries returning
+// ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
+// comparison on the various possible error messages.
+void ThrowExitCode(std::string_view const e) {
+  if (e.starts_with("Incorrect passphrase")) {
+    throw ExitCode::PASSPHRASE_INCORRECT;
   }
 
-  i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
-
-  const Node* GetTarget() const { return hardlink_target ?: this; }
-
-  struct stat GetStat() const {
-    struct stat z = {};
-    z.st_nlink = GetTarget()->nlink;
-    assert(z.st_nlink > 0);
-    z.st_ino = ino;
-    z.st_mode = mode;
-    z.st_uid = uid;
-    z.st_gid = gid;
-    z.st_size = size;
-    z.st_atime = g_now;
-    z.st_ctime = g_now;
-    z.st_mtime = mtime ?: g_now;
-    z.st_blksize = block_size;
-    z.st_blocks = GetBlockCount();
-    z.st_rdev = rdev;
-    return z;
+  if (e.starts_with("Passphrase required")) {
+    throw ExitCode::PASSPHRASE_REQUIRED;
   }
 
-  std::string GetPath() const {
-    if (!parent) {
-      return name;
+  std::string_view const not_supported_prefixes[] = {
+      "Crypto codec not supported",
+      "Decryption is unsupported",
+      "Encrypted file is unsupported",
+      "Encryption is not supported",
+      "RAR encryption support unavailable",
+      "The archive header is encrypted, but currently not supported",
+      "The file content is encrypted, but currently not supported",
+      "Unsupported encryption format",
+  };
+
+  for (std::string_view const prefix : not_supported_prefixes) {
+    if (e.starts_with(prefix)) {
+      throw ExitCode::PASSPHRASE_NOT_SUPPORTED;
     }
-
-    std::string path = parent->GetPath();
-    Path::Append(&path, name);
-    return path;
   }
-};
-
-ino_t Node::count = 0;
-
-std::ostream& operator<<(std::ostream& out, const Node& n) {
-  return out << n.GetType() << " [" << n.index_within_archive << "] "
-             << Path(n.GetPath());
 }
-
-// These global variables are the in-memory directory tree of nodes.
-//
-// Building the directory tree can take minutes, for archive file formats like
-// .tar.gz that are compressed but also do not contain an explicit on-disk
-// directory of archive entries.
-
-// Path extractor for Node.
-struct GetPath {
-  using type = std::string;
-  std::string operator()(const Node& node) const { return node.GetPath(); }
-};
-
-using NodesByPath =
-    bi::unordered_set<Node,
-                      bi::member_hook<Node, Node::ByPath, &Node::by_path>,
-                      bi::constant_time_size<true>,
-                      bi::power_2_buckets<true>,
-                      bi::compare_hash<true>,
-                      bi::key_of_value<GetPath>,
-                      bi::equal<std::equal_to<std::string_view>>,
-                      bi::hash<std::hash<std::string_view>>>;
-
-using Bucket = NodesByPath::bucket_type;
-using Buckets = std::vector<Bucket>;
-Buckets buckets(1 << 4);
-
-NodesByPath g_nodes_by_path({buckets.data(), buckets.size()});
-
-// Root node of the tree.
-Node* g_root_node = nullptr;
-
-// Hard link to resolve.
-struct Hardlink {
-  i64 index_within_archive;
-  std::string source_path;
-  std::string target_path;
-};
-
-// Hard links to resolve.
-std::vector<Hardlink> g_hardlinks_to_resolve;
 
 // g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
 // statically allocated buffers used as a destination for decompressed bytes
@@ -831,264 +782,6 @@ i64 SideBufferMetadata::next_lru_priority = 0;
 
 SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
 
-// ---- Libarchive Error Codes
-
-// Converts libarchive errors to fuse-archive exit codes. libarchive doesn't
-// have designated passphrase-related error numbers. As for whether a particular
-// archive file's encryption is supported, libarchive isn't consistent in
-// archive_read_has_encrypted_entries returning
-// ARCHIVE_READ_FORMAT_ENCRYPTION_UNSUPPORTED. Instead, we do a string
-// comparison on the various possible error messages.
-void ThrowExitCode(std::string_view const e) {
-  if (e.starts_with("Incorrect passphrase")) {
-    throw ExitCode::PASSPHRASE_INCORRECT;
-  }
-
-  if (e.starts_with("Passphrase required")) {
-    throw ExitCode::PASSPHRASE_REQUIRED;
-  }
-
-  std::string_view const not_supported_prefixes[] = {
-      "Crypto codec not supported",
-      "Decryption is unsupported",
-      "Encrypted file is unsupported",
-      "Encryption is not supported",
-      "RAR encryption support unavailable",
-      "The archive header is encrypted, but currently not supported",
-      "The file content is encrypted, but currently not supported",
-      "Unsupported encryption format",
-  };
-
-  for (std::string_view const prefix : not_supported_prefixes) {
-    if (e.starts_with(prefix)) {
-      throw ExitCode::PASSPHRASE_NOT_SUPPORTED;
-    }
-  }
-}
-
-template <typename... Args>
-std::string StrCat(Args&&... args) {
-  std::ostringstream out;
-  (out << ... << std::forward<Args>(args));
-  return std::move(out).str();
-}
-
-enum class LogLevel {
-  DEBUG = LOG_DEBUG,
-  INFO = LOG_INFO,
-  WARNING = LOG_WARNING,
-  ERROR = LOG_ERR,
-};
-
-LogLevel g_log_level = LogLevel::INFO;
-
-void SetLogLevel(LogLevel const level) {
-  g_log_level = level;
-  setlogmask(LOG_UPTO(static_cast<int>(level)));
-}
-
-#define LOG_IS_ON(level) (LogLevel::level <= g_log_level)
-
-bool g_latest_log_is_ephemeral = false;
-
-enum class ProgressMessage : int;
-
-// Accumulates a log message and logs it.
-class Logger {
- public:
-  explicit Logger(LogLevel const level, int err = -1)
-      : level_(level), err_(err) {}
-
-  Logger(const Logger&) = delete;
-
-  ~Logger() {
-    if (err_ >= 0) {
-      if (LOG_IS_ON(DEBUG)) {
-        oss_ << ": Error " << err_;
-      }
-      oss_ << ": " << strerror(err_);
-    }
-
-    if (g_latest_log_is_ephemeral && isatty(STDERR_FILENO)) {
-      std::string_view const s = "\e[F\e[K";
-      std::ignore = write(STDERR_FILENO, s.data(), s.size());
-    }
-
-    syslog(static_cast<int>(level_), "%s", std::move(oss_).str().c_str());
-    g_latest_log_is_ephemeral = ephemeral_;
-  }
-
-  Logger&& operator<<(const auto& a) && {
-    oss_ << a;
-    return std::move(*this);
-  }
-
-  Logger&& operator<<(ProgressMessage const a) && {
-    oss_ << "Loading " << static_cast<int>(a) << "%";
-    ephemeral_ = true;
-    return std::move(*this);
-  }
-
- private:
-  LogLevel const level_;
-  int const err_;
-  std::ostringstream oss_;
-  bool ephemeral_ = false;
-};
-
-#define LOG(level)                    \
-  if (LogLevel::level <= g_log_level) \
-  Logger(LogLevel::level)
-
-#define PLOG(level)                   \
-  if (LogLevel::level <= g_log_level) \
-  Logger(LogLevel::level, errno)
-
-std::string GetCacheDir() {
-  const char* const val = std::getenv("TMPDIR");
-  return val && *val ? val : "/tmp";
-}
-
-void CreateCacheFile() {
-  assert(g_cache_fd < 0);
-  assert(g_cache_size == 0);
-
-  std::string const cache_dir = GetCacheDir();
-
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
-  g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
-  if (g_cache_fd >= 0) {
-    LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
-    return;
-  }
-
-  if (errno != ENOTSUP) {
-    PLOG(ERROR) << "Cannot create anonymous cache file in " << Path(cache_dir);
-    throw ExitCode::CANNOT_CREATE_CACHE;
-  }
-
-  // Some filesystems, such as overlayfs, do not support the creation of temp
-  // files with O_TMPFILE. Unfortunately, these filesystems are sometimes used
-  // for the /tmp directory. In that case, create a named temp file, and unlink
-  // it immediately.
-  assert(errno == ENOTSUP);
-  LOG(DEBUG) << "The filesystem of " << Path(cache_dir)
-             << " does not support O_TMPFILE";
-#endif
-
-  std::string path = cache_dir;
-  Path::Append(&path, "XXXXXX");
-  g_cache_fd = mkstemp(path.data());
-
-  if (g_cache_fd < 0) {
-    PLOG(ERROR) << "Cannot create named cache file in " << Path(cache_dir);
-    throw ExitCode::CANNOT_CREATE_CACHE;
-  }
-
-  LOG(DEBUG) << "Created cache file " << Path(path);
-
-  if (unlink(path.c_str()) < 0) {
-    PLOG(ERROR) << "Cannot unlink cache file " << Path(path);
-    throw ExitCode::CANNOT_CREATE_CACHE;
-  }
-}
-
-// Checks that the cache file is open and empty.
-void CheckCacheFile() {
-  struct stat z;
-  if (fstat(g_cache_fd, &z) != 0) {
-    PLOG(ERROR) << "Cannot stat cache file";
-    throw ExitCode::CANNOT_CREATE_CACHE;
-  }
-
-  if (z.st_size != 0) {
-    LOG(ERROR) << "Cache file is not empty: It contains " << z.st_size
-               << " bytes";
-    throw ExitCode::CANNOT_CREATE_CACHE;
-  }
-
-  if (z.st_nlink != 0) {
-    LOG(ERROR) << "Cache file is not hidden: It has " << z.st_nlink << " links";
-    throw ExitCode::CANNOT_CREATE_CACHE;
-  }
-}
-
-// Temporarily suppresses the echo on the terminal.
-// Used when waiting for password to be typed.
-class SuppressEcho {
- public:
-  explicit SuppressEcho() {
-    if (tcgetattr(STDIN_FILENO, &tattr_) < 0) {
-      return;
-    }
-
-    struct termios tattr = tattr_;
-    tattr.c_lflag &= ~ECHO;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
-    reset_ = true;
-  }
-
-  ~SuppressEcho() {
-    if (reset_) {
-      tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr_);
-    }
-  }
-
-  explicit operator bool() const { return reset_; }
-
- private:
-  struct termios tattr_;
-  bool reset_ = false;
-};
-
-using Archive = struct archive;
-using Entry = struct archive_entry;
-
-struct ArchiveDeleter {
-  void operator()(Archive* const a) const { archive_read_free(a); }
-};
-
-using ArchivePtr = std::unique_ptr<Archive, ArchiveDeleter>;
-
-// Read a password from the standard input if necessary.
-const char* ReadPassword(Archive*, void*) {
-  if (g_password_count++) {
-    return nullptr;
-  }
-
-  SuppressEcho const guard;
-  if (guard) {
-    std::cout << "The archive is encrypted.\n"
-                 "What is the passphrase that unlocks this archive?\n"
-                 "> "
-              << std::flush;
-  }
-
-  // Read password from standard input.
-  if (!std::getline(std::cin, g_password)) {
-    g_password.clear();
-  }
-
-  if (guard) {
-    std::cout << "Got it!" << std::endl;
-  }
-
-  // Remove newline at the end of password.
-  while (g_password.ends_with('\n')) {
-    g_password.pop_back();
-  }
-
-  if (g_password.empty()) {
-    LOG(DEBUG) << "Got an empty password";
-    return nullptr;
-  }
-
-  LOG(DEBUG) << "Got a password of " << g_password.size() << " bytes";
-  return g_password.c_str();
-}
-
-// ---- Side Buffer
-
 // Returns the index of the least recently used side buffer. This indexes
 // g_side_buffer_data and g_side_buffer_metadata.
 int AcquireSideBuffer() {
@@ -1134,6 +827,14 @@ bool ReadFromSideBuffer(i64 const index_within_archive,
 
   return false;
 }
+
+namespace bi = boost::intrusive;
+
+#ifdef NDEBUG
+using LinkMode = bi::link_mode<bi::normal_link>;
+#else
+using LinkMode = bi::link_mode<bi::safe_link>;
+#endif
 
 // A Reader bundles libarchive concepts (an archive and an archive entry) and
 // other state to point to a particular offset (in decompressed space) of a
@@ -1821,6 +1522,305 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
 int Reader::count = 0;
 bi::list<Reader> Reader::recycled;
+
+struct Node {
+  // Name of this node in the context of its parent. This name should be a valid
+  // and non-empty filename, and it shouldn't contain any '/' separator. The
+  // only exception is the root directory, which is just named "/".
+  std::string name;
+  std::string symlink;
+  mode_t mode;
+  static ino_t count;
+  ino_t ino = ++count;
+
+  uid_t uid = g_uid;
+  gid_t gid = g_gid;
+
+  // Index of the entry represented by this node in the archive, or 0 if it is
+  // not directly represented in the archive (like the root directory, or any
+  // intermediate directory).
+  i64 index_within_archive = 0;
+  i64 size = 0;
+
+  // Where does the cached data start in the cache file?
+  i64 cache_offset = std::numeric_limits<i64>::min();
+  i64 cached_size = 0;
+  Reader::Ptr reader;
+
+  time_t mtime = 0;
+  dev_t rdev = 0;
+  i64 nlink = 1;
+
+  // Number of entries whose name have initially collided with this file node.
+  int collision_count = 0;
+
+  // Number of open file descriptors that are currently reading this file node.
+  std::atomic<int> fd_count = 0;
+
+  // Hard link target.
+  Node* hardlink_target = nullptr;
+
+  // Pointer to the parent node. Should be non null. The only exception is the
+  // root directory which has a null parent pointer.
+  Node* parent = nullptr;
+
+  // Hook used to index Nodes by parent.
+  using ByParent = bi::slist_member_hook<LinkMode>;
+  ByParent by_parent;
+
+  // Children of this Node. The children are not sorted and their order is not
+  // relevant. This Node doesn't own its children nodes. The `parent` pointer of
+  // every child in `children` should point back to this Node.
+  using Children = bi::slist<Node,
+                             bi::member_hook<Node, ByParent, &Node::by_parent>,
+                             bi::constant_time_size<false>,
+                             bi::linear<true>,
+                             bi::cache_last<true>>;
+  Children children;
+
+  // Hooks used to index Nodes by full path.
+  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<true>>;
+  ByPath by_path;
+
+  FileType GetType() const { return GetFileType(mode); }
+
+  bool IsDir() const { return S_ISDIR(mode); }
+
+  void AddChild(Node* const child) {
+    assert(child);
+    assert(!child->parent);
+    assert(IsDir());
+    assert(!hardlink_target);
+    assert(nlink >= 2);
+    // Count one "block" for each directory entry.
+    size += block_size;
+    g_block_count += 1;
+    nlink += child->IsDir();
+    child->parent = this;
+    children.push_back(*child);
+  }
+
+  i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
+
+  const Node* GetTarget() const { return hardlink_target ?: this; }
+
+  struct stat GetStat() const {
+    struct stat z = {};
+    z.st_nlink = GetTarget()->nlink;
+    assert(z.st_nlink > 0);
+    z.st_ino = ino;
+    z.st_mode = mode;
+    z.st_uid = uid;
+    z.st_gid = gid;
+    z.st_size = size;
+    z.st_atime = g_now;
+    z.st_ctime = g_now;
+    z.st_mtime = mtime ?: g_now;
+    z.st_blksize = block_size;
+    z.st_blocks = GetBlockCount();
+    z.st_rdev = rdev;
+    return z;
+  }
+
+  std::string GetPath() const {
+    if (!parent) {
+      return name;
+    }
+
+    std::string path = parent->GetPath();
+    Path::Append(&path, name);
+    return path;
+  }
+};
+
+ino_t Node::count = 0;
+
+std::ostream& operator<<(std::ostream& out, const Node& n) {
+  return out << n.GetType() << " [" << n.index_within_archive << "] "
+             << Path(n.GetPath());
+}
+
+// These global variables are the in-memory directory tree of nodes.
+//
+// Building the directory tree can take minutes, for archive file formats like
+// .tar.gz that are compressed but also do not contain an explicit on-disk
+// directory of archive entries.
+
+// Path extractor for Node.
+struct GetPath {
+  using type = std::string;
+  std::string operator()(const Node& node) const { return node.GetPath(); }
+};
+
+using NodesByPath =
+    bi::unordered_set<Node,
+                      bi::member_hook<Node, Node::ByPath, &Node::by_path>,
+                      bi::constant_time_size<true>,
+                      bi::power_2_buckets<true>,
+                      bi::compare_hash<true>,
+                      bi::key_of_value<GetPath>,
+                      bi::equal<std::equal_to<std::string_view>>,
+                      bi::hash<std::hash<std::string_view>>>;
+
+using Bucket = NodesByPath::bucket_type;
+using Buckets = std::vector<Bucket>;
+Buckets buckets(1 << 4);
+
+NodesByPath g_nodes_by_path({buckets.data(), buckets.size()});
+
+// Root node of the tree.
+Node* g_root_node = nullptr;
+
+// Hard link to resolve.
+struct Hardlink {
+  i64 index_within_archive;
+  std::string source_path;
+  std::string target_path;
+};
+
+// Hard links to resolve.
+std::vector<Hardlink> g_hardlinks_to_resolve;
+
+template <typename... Args>
+std::string StrCat(Args&&... args) {
+  std::ostringstream out;
+  (out << ... << std::forward<Args>(args));
+  return std::move(out).str();
+}
+
+std::string GetCacheDir() {
+  const char* const val = std::getenv("TMPDIR");
+  return val && *val ? val : "/tmp";
+}
+
+void CreateCacheFile() {
+  assert(g_cache_fd < 0);
+  assert(g_cache_size == 0);
+
+  std::string const cache_dir = GetCacheDir();
+
+#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
+  g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
+  if (g_cache_fd >= 0) {
+    LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
+    return;
+  }
+
+  if (errno != ENOTSUP) {
+    PLOG(ERROR) << "Cannot create anonymous cache file in " << Path(cache_dir);
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+
+  // Some filesystems, such as overlayfs, do not support the creation of temp
+  // files with O_TMPFILE. Unfortunately, these filesystems are sometimes used
+  // for the /tmp directory. In that case, create a named temp file, and unlink
+  // it immediately.
+  assert(errno == ENOTSUP);
+  LOG(DEBUG) << "The filesystem of " << Path(cache_dir)
+             << " does not support O_TMPFILE";
+#endif
+
+  std::string path = cache_dir;
+  Path::Append(&path, "XXXXXX");
+  g_cache_fd = mkstemp(path.data());
+
+  if (g_cache_fd < 0) {
+    PLOG(ERROR) << "Cannot create named cache file in " << Path(cache_dir);
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+
+  LOG(DEBUG) << "Created cache file " << Path(path);
+
+  if (unlink(path.c_str()) < 0) {
+    PLOG(ERROR) << "Cannot unlink cache file " << Path(path);
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+}
+
+// Checks that the cache file is open and empty.
+void CheckCacheFile() {
+  struct stat z;
+  if (fstat(g_cache_fd, &z) != 0) {
+    PLOG(ERROR) << "Cannot stat cache file";
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+
+  if (z.st_size != 0) {
+    LOG(ERROR) << "Cache file is not empty: It contains " << z.st_size
+               << " bytes";
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+
+  if (z.st_nlink != 0) {
+    LOG(ERROR) << "Cache file is not hidden: It has " << z.st_nlink << " links";
+    throw ExitCode::CANNOT_CREATE_CACHE;
+  }
+}
+
+// Temporarily suppresses the echo on the terminal.
+// Used when waiting for password to be typed.
+class SuppressEcho {
+ public:
+  explicit SuppressEcho() {
+    if (tcgetattr(STDIN_FILENO, &tattr_) < 0) {
+      return;
+    }
+
+    struct termios tattr = tattr_;
+    tattr.c_lflag &= ~ECHO;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr);
+    reset_ = true;
+  }
+
+  ~SuppressEcho() {
+    if (reset_) {
+      tcsetattr(STDIN_FILENO, TCSAFLUSH, &tattr_);
+    }
+  }
+
+  explicit operator bool() const { return reset_; }
+
+ private:
+  struct termios tattr_;
+  bool reset_ = false;
+};
+
+// Read a password from the standard input if necessary.
+const char* ReadPassword(Archive*, void*) {
+  if (g_password_count++) {
+    return nullptr;
+  }
+
+  SuppressEcho const guard;
+  if (guard) {
+    std::cout << "The archive is encrypted.\n"
+                 "What is the passphrase that unlocks this archive?\n"
+                 "> "
+              << std::flush;
+  }
+
+  // Read password from standard input.
+  if (!std::getline(std::cin, g_password)) {
+    g_password.clear();
+  }
+
+  if (guard) {
+    std::cout << "Got it!" << std::endl;
+  }
+
+  // Remove newline at the end of password.
+  while (g_password.ends_with('\n')) {
+    g_password.pop_back();
+  }
+
+  if (g_password.empty()) {
+    LOG(DEBUG) << "Got an empty password";
+    return nullptr;
+  }
+
+  LOG(DEBUG) << "Got a password of " << g_password.size() << " bytes";
+  return g_password.c_str();
+}
 
 struct FileHandle {
   Node* const node;
