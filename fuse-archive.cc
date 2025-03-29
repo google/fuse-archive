@@ -234,6 +234,7 @@ enum {
   KEY_VERBOSE,
   KEY_REDACT,
   KEY_FORCE,
+  KEY_LAZY_CACHE,
   KEY_NO_CACHE,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
@@ -265,6 +266,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("--redact", KEY_REDACT),
     FUSE_OPT_KEY("redact", KEY_REDACT),
     FUSE_OPT_KEY("force", KEY_FORCE),
+    FUSE_OPT_KEY("lazycache", KEY_LAZY_CACHE),
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
@@ -283,7 +285,6 @@ bool g_help = false;
 bool g_version = false;
 bool g_redact = false;
 bool g_force = false;
-bool g_cache = true;
 bool g_specials = true;
 bool g_symlinks = true;
 bool g_hardlinks = true;
@@ -300,6 +301,15 @@ std::string g_archive_path;
 
 // Path of the mount point.
 std::string g_mount_point;
+
+enum class Cache {
+  None,
+  Lazy,
+  Full,
+};
+
+// Caching strategy.
+Cache g_cache = Cache::Full;
 
 // File descriptor of the cache file.
 int g_cache_fd = -1;
@@ -1603,6 +1613,7 @@ struct Node {
   i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
 
   const Node* GetTarget() const { return hardlink_target ?: this; }
+  Node* GetTarget() { return hardlink_target ?: this; }
 
   struct stat GetStat() const {
     struct stat z = {};
@@ -1630,6 +1641,78 @@ struct Node {
     std::string path = parent->GetPath();
     Path::Append(&path, name);
     return path;
+  }
+
+  void CacheUpTo(i64 const want_cached_size) {
+    if (want_cached_size <= cached_size) {
+      return;
+    }
+
+    assert(want_cached_size <= size);
+    LOG(DEBUG) << "Caching " << *this << " from " << cached_size << " to "
+               << want_cached_size;
+
+    Timer const timer;
+    if (cache_offset < 0) {
+      assert(cached_size == 0);
+      cache_offset = g_cache_size;
+      g_cache_size += size;
+      while (ftruncate(g_cache_fd, g_cache_size) < 0) {
+        if (errno != EINTR) {
+          PLOG(ERROR) << "Cannot resize cache to " << g_cache_size << " bytes";
+          throw ExitCode::CANNOT_WRITE_CACHE;
+        }
+      }
+
+      LOG(DEBUG) << "Increased cache file size by " << size << " bytes to "
+                 << g_cache_size << " bytes";
+    }
+
+    assert(cache_offset >= 0);
+
+    if (!reader) {
+      reader = Reader::ReuseOrCreate(index_within_archive, cached_size);
+    }
+
+    assert(reader);
+    assert(reader->index_within_archive == index_within_archive);
+    assert(reader->offset_within_entry == cached_size);
+
+    i64 const old_cached_size = cached_size;
+    while (cached_size < want_cached_size) {
+      char buff[64 * 1024];
+
+      ssize_t n = reader->Read(buff, sizeof(buff));
+      assert(n >= 0 && n <= sizeof(buff));
+      if (n == 0) {
+        LOG(ERROR) << "Unexpected EOF while caching " << *this;
+        break;
+      }
+
+      const char* p = buff;
+      while (n > 0) {
+        ssize_t const r = pwrite(g_cache_fd, p, n, cache_offset + cached_size);
+        if (r < 0) {
+          if (errno == EINTR) {
+            LOG(ERROR) << "Unexpected EOF while reading " << *this
+                       << " at offset " << cached_size;
+            continue;
+          }
+
+          PLOG(ERROR) << "Cannot write to cache";
+          throw ExitCode::CANNOT_WRITE_CACHE;
+        }
+
+        assert(r <= n);
+        p += r;
+        n -= r;
+        cached_size += r;
+        assert(reader->offset_within_entry == cached_size);
+      }
+    }
+
+    LOG(DEBUG) << "Cached " << cached_size - old_cached_size << " bytes of "
+               << *this << " up to " << cached_size << " in " << timer;
   }
 };
 
@@ -2184,13 +2267,13 @@ void ProcessEntry(Reader& r) {
   }
 
   // Regular file.
-  if (g_cache) {
+  if (g_cache == Cache::Full) {
     // Cache file data.
     node->size = archive_entry_size(e);
     i64 const offset = g_cache_size;
     CacheEntryData(a);
     node->cache_offset = offset;
-    node->size = g_cache_size - offset;
+    node->cached_size = node->size = g_cache_size - offset;
   } else {
     // Get the entry size without caching the data.
     node->size = r.GetEntrySize();
@@ -2370,7 +2453,7 @@ void BuildTree() {
   }
 
   // Close archive file if decompressed data is already cached.
-  if (g_cache && close(std::exchange(g_archive_fd, -1)) < 0) {
+  if (g_cache == Cache::Full && close(std::exchange(g_archive_fd, -1)) < 0) {
     PLOG(ERROR) << "Cannot close archive file";
   }
 }
@@ -2429,7 +2512,7 @@ int ReadLink(const char* const path, char* const buf, size_t const size) {
 
 int Open(const char* const path, fuse_file_info* const fi) try {
   assert(path);
-  Node* const n = FindNode(path);
+  Node* n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
     return -ENOENT;
@@ -2440,9 +2523,10 @@ int Open(const char* const path, fuse_file_info* const fi) try {
     return -EISDIR;
   }
 
+  n = n->GetTarget();
   assert(n->index_within_archive > 0);
 
-  if (g_cache && n->cache_offset < 0) {
+  if (g_cache == Cache::Full && n->cache_offset < 0) {
     LOG(ERROR) << "Cannot open " << *n << ": No cached data";
     return -EIO;
   }
@@ -2477,20 +2561,25 @@ int Read(const char*,
   FileHandle* const h = reinterpret_cast<FileHandle*>(fi->fh);
   assert(h);
 
-  const Node* const node = h->node;
+  Node* const node = h->node;
   assert(node);
 
-  if (g_cache) {
-    if (offset >= node->size) {
-      // No data past the end of a file.
-      return 0;
-    }
+  if (offset >= node->size) {
+    // No data past the end of a file.
+    return 0;
+  }
 
-    if (dst_len >= node->size - offset) {
-      // No data past the end of a file.
-      dst_len = node->size - offset;
-    }
+  if (dst_len >= node->size - offset) {
+    // No data past the end of a file.
+    dst_len = node->size - offset;
+  }
 
+  if (g_cache == Cache::Lazy) {
+    node->CacheUpTo(offset + dst_len);
+    assert(node->cache_offset >= 0);
+  }
+
+  if (g_cache != Cache::None) {
     assert(node->cache_offset >= 0);
     offset += node->cache_offset;
 
@@ -2589,7 +2678,12 @@ int Release(const char*, fuse_file_info* const fi) {
                << " file descriptors are still open)";
   } else {
     LOG(DEBUG) << "Closed " << *n;
+
+    if (g_cache == Cache::Lazy) {
+      n->reader = nullptr;
+    }
   }
+
   return 0;
 }
 
@@ -2756,8 +2850,12 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_force = true;
       return DISCARD;
 
+    case KEY_LAZY_CACHE:
+      g_cache = Cache::Lazy;
+      return DISCARD;
+
     case KEY_NO_CACHE:
-      g_cache = false;
+      g_cache = Cache::None;
       return DISCARD;
 
     case KEY_NO_SPECIALS:
@@ -2962,11 +3060,13 @@ int main(int const argc, char** const argv) try {
   }
 
   // Create cache file if necessary.
-  if (g_cache) {
+  if (g_cache != Cache::None) {
     CreateCacheFile();
     CheckCacheFile();
-  } else {
-    // Force single-threading if no cache is used.
+  }
+
+  if (g_cache != Cache::Full) {
+    // Force single-threading if not fully cached.
     fuse_opt_add_arg(&args, "-s");
   }
 
@@ -2988,7 +3088,7 @@ int main(int const argc, char** const argv) try {
     LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() - 1
                << " items totalling " << i64(g_block_count) * block_size
                << " bytes";
-    if (struct stat z; g_cache && fstat(g_cache_fd, &z) == 0) {
+    if (struct stat z; g_cache == Cache::Full && fstat(g_cache_fd, &z) == 0) {
       LOG(DEBUG) << "The cache takes " << i64(z.st_blocks) * block_size
                  << " bytes of disk space";
       assert(z.st_size == g_cache_size);
