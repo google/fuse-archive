@@ -302,10 +302,11 @@ std::string g_archive_path;
 // Path of the mount point.
 std::string g_mount_point;
 
+// Possible caching strategies.
 enum class Cache {
-  None,
-  Lazy,
-  Full,
+  None,  // No caching.
+  Lazy,  // Incremental caching.
+  Full,  // Full caching.
 };
 
 // Caching strategy.
@@ -2379,6 +2380,11 @@ void CheckRawArchive(Archive* const a) {
     LOG(ERROR) << "Cannot recognize the archive format";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
   }
+
+  if (filter_count > 0 && g_cache != Cache::Full) {
+    LOG(WARNING) << "Using the lazycache or the nocache option with this kind "
+                    "of archive can result in poor performance";
+  }
 }
 
 // Opens the archive file, scans it and builds the tree representing the files
@@ -2949,6 +2955,7 @@ general options:
     -v   -o verbose        print more log messages
     -o redact              redact paths from log messages
     -o force               continue despite errors
+    -o lazycache           incremental caching of uncompressed data
     -o nocache             no caching of uncompressed data
     -o nospecials          no special files (FIFOs, sockets, devices)
     -o nosymlinks          no symlinks
@@ -3065,8 +3072,8 @@ int main(int const argc, char** const argv) try {
     CheckCacheFile();
   }
 
+  // Force single-threading if not fully cached.
   if (g_cache != Cache::Full) {
-    // Force single-threading if not fully cached.
     fuse_opt_add_arg(&args, "-s");
   }
 
