@@ -388,6 +388,10 @@ std::ostream& operator<<(std::ostream& out, ArchiveFormat const f) {
 
 ArchiveFormat g_archive_format = ArchiveFormat::NONE;
 
+// Number of decompression or decoding filters (e.g. `gz`, `bz2`, `br`, `uu`,
+// `b64`).
+int g_filter_count = 0;
+
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
 //
@@ -1131,7 +1135,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // Find the closest warm Reader that is below or at the requested position.
     Reader* best = nullptr;
     for (Reader& r : recycled) {
-      if (std::pair(r.index_within_archive, r.offset_within_entry) <=
+      if ((g_filter_count > 0 ||
+           r.index_within_archive == want_index_within_archive) &&
+          std::pair(r.index_within_archive, r.offset_within_entry) <=
               std::pair(want_index_within_archive, want_offset_within_entry) &&
           (!best ||
            std::pair(best->index_within_archive, best->offset_within_entry) <
@@ -2364,11 +2370,11 @@ void CheckRawArchive(Archive* const a) {
   LOG(DEBUG) << "Archive format is " << archive_format_name(a) << " ("
              << g_archive_format << ")";
 
-  int filter_count = 0;
+  assert(g_filter_count == 0);
   for (int i = archive_filter_count(a); i > 0;) {
     if (archive_filter_code(a, --i) != ARCHIVE_FILTER_NONE) {
-      ++filter_count;
-      LOG(DEBUG) << "Filter #" << filter_count << " is "
+      ++g_filter_count;
+      LOG(DEBUG) << "Filter #" << g_filter_count << " is "
                  << archive_filter_name(a, i);
     }
   }
@@ -2376,12 +2382,12 @@ void CheckRawArchive(Archive* const a) {
   // For 'raw' archives, check that at least one of the compression filters
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
-  if (g_archive_format == ArchiveFormat::RAW && filter_count == 0) {
+  if (g_archive_format == ArchiveFormat::RAW && g_filter_count == 0) {
     LOG(ERROR) << "Cannot recognize the archive format";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
   }
 
-  if (filter_count > 0 && g_cache != Cache::Full) {
+  if (g_filter_count > 0 && g_cache != Cache::Full) {
     LOG(WARNING) << "Using the lazycache or the nocache option with this kind "
                     "of archive can result in poor performance";
   }
