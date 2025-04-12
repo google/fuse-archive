@@ -3,7 +3,7 @@ title: fuse-archive
 section: 1
 header: User Manual
 footer: fuse-archive 1.13
-date: March 2025
+date: April 2025
 ---
 
 # NAME
@@ -47,6 +47,9 @@ mount read-only, not read-write.
 
 **-o force**
 :   Continue despite errors
+
+**-o lazycache**
+:   Incremental caching of uncompressed data
 
 **-o nocache**
 :   No caching of uncompressed data
@@ -119,8 +122,8 @@ Decompressed data is cached in an anonymous file created in the `tmp` directory
 disk space, but it is automatically deleted when the archive is unmounted.
 
 If there is not enough temporary space to cache the whole archive,
-**fuse-archive** can be run with the `-o nocache` option. However, this can
-cause **fuse-archive** to be much slower at serving files.
+**fuse-archive** can be run with the `-o nocache` or the `-o lazycache` options.
+However, this can cause **fuse-archive** to be much slower at serving files.
 
 # PERFORMANCE
 
