@@ -489,7 +489,7 @@ class Path : public std::string_view {
     static std::unordered_set<std::string_view> const special_exts = {
         "b64", "base64", "br",  "brotli", "bz2", "bzip2", "grz", "grzip",
         "gz",  "gzip",   "lrz", "lrzip",  "lz",  "lzip",  "lz4", "lzma",
-        "lzo", "lzop",   "rpm", "uu",     "xz",  "z",     "zst", "zstd"};
+        "lzo", "lzop",   "uu",  "xz",     "z",   "zst",   "zstd"};
 
     if (special_exts.contains(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
@@ -1204,6 +1204,20 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_rar5(a), a);
   }
 
+  // Special case for .rpm files.
+  // https://en.wikipedia.org/wiki/RPM_Package_Manager#Binary_format
+  // https://github.com/google/fuse-archive/issues/50
+  static void SetRpmFormat(Archive* const a) {
+    Check(archive_read_support_filter_rpm(a), a);
+    Check(archive_read_support_filter_gzip(a), a);
+    Check(archive_read_support_filter_lzip(a), a);
+    Check(archive_read_support_filter_lzma(a), a);
+    Check(archive_read_support_filter_xz(a), a);
+    Check(archive_read_support_filter_zstd(a), a);
+    Check(archive_read_support_format_cpio(a), a);
+    Check(archive_read_support_format_xar(a), a);
+  }
+
   bool SetFilter(std::string_view const ext) {
 #define SET_FILTER(s)                                            \
   [](Archive* const a) {                                         \
@@ -1236,7 +1250,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
         // {"lzo", SET_FILTER(LZOP)},
         {"lzo", SET_FILTER_COMMAND(lzop)},
         {"lzop", SET_FILTER_COMMAND(lzop)},
-        {"rpm", SET_FILTER(RPM)},
         {"uu", SET_FILTER(UU)},
         {"xz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
@@ -1319,6 +1332,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"ppsx", SET_FORMAT(zip_seekable)},
         {"pptx", SET_FORMAT(zip_seekable)},
         {"rar", SetRarFormat},
+        {"rpm", SetRpmFormat},
+        {"spm", SetRpmFormat},
         {"tar", SetPossiblyCompressedTarFormat},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
