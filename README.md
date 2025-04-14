@@ -92,8 +92,8 @@ mount read-only, not read-write.
 **fuse-archive** determines the archive format from its filename extension. It
 recognizes the following extensions:
 
-*   Archive formats `7z`, `7zip`, `a`, `ar`, `cab`, `cpio`, `iso`, `iso9660`,
-    `jar`, `mtree`, `rar`, `rpm`, `tar`, `warc`, `xar`, `zip`, `zipx`
+*   Archive formats `7z`, `7zip`, `a`, `ar`, `cab`, `cpio`, `deb`, `iso`,
+    `iso9660`, `jar`, `mtree`, `rar`, `rpm`, `tar`, `warc`, `xar`, `zip`, `zipx`
 *   ZIP-based file formats `crx`, `odf`, `odg`, `odp`, `ods`, `odt`, `docx`,
     `ppsx`, `pptx`, `xlsx`
 *   Compressed TARs `tb2`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz4`, `tlz`, `tlzma`,

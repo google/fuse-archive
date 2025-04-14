@@ -1318,6 +1318,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"cab", SET_FORMAT(cab)},
         {"cpio", SET_FORMAT(cpio)},
         {"crx", SET_FORMAT(zip_seekable)},
+        {"deb", SET_FORMAT(ar)},
         {"docx", SET_FORMAT(zip_seekable)},
         {"iso", SET_FORMAT(iso9660)},
         {"iso9660", SET_FORMAT(iso9660)},
