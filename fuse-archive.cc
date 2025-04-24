@@ -769,7 +769,7 @@ constexpr int NUM_SIDE_BUFFERS = 8;
 // Linux, that seems to be the largest buffer size passed to Read().
 constexpr ssize_t SIDE_BUFFER_SIZE = 128 << 10;
 
-uint8_t g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
+char g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
 
 struct SideBufferMetadata {
   i64 index_within_archive = -1;
@@ -868,7 +868,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   i64 offset_within_entry = 0;
   bool should_print_progress = false;
   i64 raw_pos = 0;
-  std::byte raw_bytes[16 * 1024];
+  char raw_bytes[16 * 1024];
 
   ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
 
@@ -976,7 +976,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     int const sb = AcquireSideBuffer();
     assert(0 <= sb && sb < NUM_SIDE_BUFFERS);
 
-    uint8_t* const dst_ptr = g_side_buffer_data[sb];
+    char* const dst_ptr = g_side_buffer_data[sb];
     SideBufferMetadata& meta = g_side_buffer_metadata[sb];
     meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
     meta.index_within_archive = index_within_archive;
@@ -1022,7 +1022,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     // Consume the entry's data.
-    for (off_t offset = offset_within_entry;;) {
+    off_t offset = offset_within_entry;
+    while (true) {
       const void* buff = nullptr;
       size_t len = 0;
 
@@ -1071,13 +1072,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Reading the first bytes of the first encrypted entry will reveal whether
     // we also need a passphrase.
-    std::byte buffer[16];
+    char buffer[16];
     g_password_checked = Read(buffer, sizeof(buffer)) > 0;
   }
 
   // Copies from the archive entry's decompressed contents to the destination
   // buffer. It also advances the Reader's offset_within_entry.
-  ssize_t Read(void* dst_ptr, size_t dst_len) {
+  ssize_t Read(char* dst_ptr, size_t dst_len) {
     ssize_t total = 0;
     while (dst_len > 0) {
       ssize_t const n = archive_read_data(archive.get(), dst_ptr, dst_len);
@@ -1099,7 +1100,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       assert(n > 0);
       assert(n <= dst_len);
       dst_len -= n;
-      dst_ptr = static_cast<std::byte*>(dst_ptr) + n;
+      dst_ptr += n;
       offset_within_entry += n;
       total += n;
     }
@@ -2137,8 +2138,10 @@ void CacheEntryData(Archive* const a) {
         assert(g_cache_size <= file_start_offset + offset);
         g_cache_size = file_start_offset + offset;
 
-        while (len > 0) {
-          ssize_t const n = pwrite(g_cache_fd, buff, len, g_cache_size);
+        for (std::string_view s(static_cast<const char*>(buff), len);
+             !s.empty();) {
+          ssize_t const n =
+              pwrite(g_cache_fd, s.data(), s.size(), g_cache_size);
           if (n < 0) {
             if (errno == EINTR) {
               continue;
@@ -2148,10 +2151,8 @@ void CacheEntryData(Archive* const a) {
             throw ExitCode::CANNOT_WRITE_CACHE;
           }
 
-          assert(n <= len);
-          buff = static_cast<const std::byte*>(buff) + n;
-          len -= n;
           g_cache_size += n;
+          s.remove_prefix(n);
         }
 
         continue;
