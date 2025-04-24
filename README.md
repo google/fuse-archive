@@ -96,10 +96,13 @@ recognizes the following extensions:
     `iso9660`, `jar`, `mtree`, `rar`, `rpm`, `tar`, `warc`, `xar`, `zip`, `zipx`
 *   ZIP-based file formats `crx`, `odf`, `odg`, `odp`, `ods`, `odt`, `docx`,
     `ppsx`, `pptx`, `xlsx`
-*   Compressed TARs `tb2`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz4`, `tlz`, `tlzma`,
-    `txz`, `tz`, `taz`, `tzst`, `tar.gz`, `tar.bz2`, `tar.xz`...
+*   Compressed TARs `tb2`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz`, `tlz4`, `tlzma`,
+    `txz`, `tz`, `taz`, `tzs`, `tzst`, `tzstd`, `tar.br`, `tar.brotli`,
+    `tar.bz2`, `tar.bzip2`, `tar.grz`, `tar.grzip`, `tar.gz`, `tar.gzip`,
+    `tar.lha`, `tar.lrz`, `tar.lrzip`, `tar.lz`, `tar.lz4`, `tar.lzip`,
+    `tar.lzma`, `tar.lzo`, `tar.lzop`, `tar.xz`, `tar.z`, `tar.zst`, `tar.zstd`
 *   Compression filters `br`, `brotli`, `bz2`, `bzip2`, `grz`, `grzip`, `gz`,
-    `gzip`, `lha`, `lrz`, `lrzip`, `lz4`, `lz`, `lzip`, `lzma`, `lzo`, `lzop`,
+    `gzip`, `lha`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`, `lzop`,
     `xz`, `z`, `zst`, `zstd`
 *   ASCII encoding filters `b64`, `base64`, `uu`
 
