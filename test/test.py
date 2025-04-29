@@ -1287,6 +1287,10 @@ def TestInvalidArchive():
     # https://github.com/google/fuse-archive/issues/36
     CheckArchiveMountingError('truncated.7z', 32)
 
+    # 7Z encryption is not supported
+    CheckArchiveMountingError("encrypted.7z", 22, password='password')
+    CheckArchiveMountingError("encrypted-solidly.7z", 22, password='password')
+
     if os.getuid() != 0:
         with tempfile.NamedTemporaryFile() as f:
             os.chmod(f.name, 0)
