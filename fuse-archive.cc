@@ -49,6 +49,7 @@
 #include <locale>
 #include <memory>
 #include <ostream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -747,102 +748,6 @@ void ThrowExitCode(std::string_view const e) {
   }
 }
 
-// g_side_buffer_data and g_side_buffer_metadata combine to hold side buffers:
-// statically allocated buffers used as a destination for decompressed bytes
-// when Reader::advance_offset isn't a no-op. These buffers are roughly
-// equivalent to Unix's /dev/null or Go's io.Discard as a first approximation.
-// However, since we are already producing valid decompressed bytes, by saving
-// them (and their metadata), we may be able to serve some subsequent read
-// requests cheaply, without having to spin up another libarchive decompressor
-// to walk forward from the start of the archive entry.
-//
-// In particular (https://crbug.com/1245925#c18), even when libfuse is single-
-// threaded, we have seen kernel readahead causing the offset arguments in a
-// sequence of read calls to sometimes arrive out-of-order, where conceptually
-// consecutive reads are swapped. With side buffers, we can serve the
-// second-to-arrive request by a cheap memcpy instead of an expensive "re-do
-// decompression from the start". That side-buffer was filled by a
-// Reader::advance_offset side-effect from serving the first-to-arrive request.
-constexpr int NUM_SIDE_BUFFERS = 8;
-
-// This defaults to 128 KiB (0x20000 bytes) because, on a vanilla x86_64 Debian
-// Linux, that seems to be the largest buffer size passed to Read().
-constexpr ssize_t SIDE_BUFFER_SIZE = 128 << 10;
-
-char g_side_buffer_data[NUM_SIDE_BUFFERS][SIDE_BUFFER_SIZE] = {};
-
-struct SideBufferMetadata {
-  i64 index_within_archive = -1;
-  i64 offset_within_entry = -1;
-  i64 length = -1;
-  i64 lru_priority = 0;
-
-  static i64 next_lru_priority;
-
-  bool Contains(i64 const index_within_archive,
-                i64 const offset_within_entry,
-                i64 const length) const {
-    if (this->index_within_archive >= 0 &&
-        this->index_within_archive == index_within_archive &&
-        this->offset_within_entry <= offset_within_entry) {
-      i64 const o = offset_within_entry - this->offset_within_entry;
-      return this->length >= o && this->length - o >= length;
-    }
-
-    return false;
-  }
-};
-
-i64 SideBufferMetadata::next_lru_priority = 0;
-
-SideBufferMetadata g_side_buffer_metadata[NUM_SIDE_BUFFERS] = {};
-
-// Returns the index of the least recently used side buffer. This indexes
-// g_side_buffer_data and g_side_buffer_metadata.
-int AcquireSideBuffer() {
-  int oldest_i = 0;
-  i64 oldest_lru_priority = g_side_buffer_metadata[0].lru_priority;
-  for (int i = 1; i < NUM_SIDE_BUFFERS; i++) {
-    if (oldest_lru_priority > g_side_buffer_metadata[i].lru_priority) {
-      oldest_lru_priority = g_side_buffer_metadata[i].lru_priority;
-      oldest_i = i;
-    }
-  }
-  g_side_buffer_metadata[oldest_i].index_within_archive = -1;
-  g_side_buffer_metadata[oldest_i].offset_within_entry = -1;
-  g_side_buffer_metadata[oldest_i].length = -1;
-  g_side_buffer_metadata[oldest_i].lru_priority = UINT64_MAX;
-  return oldest_i;
-}
-
-bool ReadFromSideBuffer(i64 const index_within_archive,
-                        char* const dst_ptr,
-                        size_t const dst_len,
-                        i64 const offset_within_entry) {
-  // Find the longest side buffer that contains (index_within_archive,
-  // offset_within_entry, dst_len).
-  int best_i = -1;
-  i64 best_length = -1;
-  for (int i = 0; i < NUM_SIDE_BUFFERS; i++) {
-    const SideBufferMetadata& meta = g_side_buffer_metadata[i];
-    if (meta.length > best_length &&
-        meta.Contains(index_within_archive, offset_within_entry, dst_len)) {
-      best_i = i;
-      best_length = meta.length;
-    }
-  }
-
-  if (best_i >= 0) {
-    SideBufferMetadata& meta = g_side_buffer_metadata[best_i];
-    meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
-    i64 const o = offset_within_entry - meta.offset_within_entry;
-    memcpy(dst_ptr, g_side_buffer_data[best_i] + o, dst_len);
-    return true;
-  }
-
-  return false;
-}
-
 namespace bi = boost::intrusive;
 
 #ifdef NDEBUG
@@ -869,6 +774,17 @@ struct Reader : bi::list_base_hook<LinkMode> {
   bool should_print_progress = false;
   i64 raw_pos = 0;
   char raw_bytes[16 * 1024];
+
+  // Rolling buffer of uncompressed bytes. See (https://crbug.com/1245925#c18).
+  // Even when libfuse is single-threaded, we have seen kernel readahead
+  // causing the offset arguments in a sequence of read calls to sometimes
+  // arrive out-of-order, where conceptually consecutive reads are swapped. With
+  // a rolling buffer, we can serve the second-to-arrive request by a cheap
+  // memcpy instead of an expensive "re-do decompression from the start".
+  static ssize_t const rolling_buffer_size = 256 * 1024;
+  static ssize_t const rolling_buffer_mask = rolling_buffer_size - 1;
+  static_assert((rolling_buffer_size & rolling_buffer_mask) == 0);
+  char rolling_buffer[rolling_buffer_size];
 
   ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
 
@@ -934,6 +850,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
   }
 
+  // Gets the offset within the current entry of the beginning of the rolling
+  // buffer.
+  i64 GetBufferOffset() const {
+    return std::max<i64>(offset_within_entry - rolling_buffer_size, 0);
+  }
+
   // Walks forward until positioned at the want'th index. An index identifies an
   // archive entry. If this Reader wasn't already positioned at that index, it
   // also resets the Reader's offset to zero.
@@ -962,8 +884,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // a byte position relative to the start of an archive entry's decompressed
   // contents.
   void AdvanceOffset(i64 const want) {
-    if (offset_within_entry == want) {
-      // We are exactly where we want to be.
+    if (offset_within_entry >= want) {
+      assert(GetBufferOffset() <= want);
+      // We already are where we want to be.
       return;
     }
 
@@ -972,39 +895,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Timer const timer;
 
     // We are behind where we want to be. Advance (decompressing from the
-    // archive entry into a side buffer) until we get there.
-    int const sb = AcquireSideBuffer();
-    assert(0 <= sb && sb < NUM_SIDE_BUFFERS);
-
-    char* const dst_ptr = g_side_buffer_data[sb];
-    SideBufferMetadata& meta = g_side_buffer_metadata[sb];
-    meta.lru_priority = ++SideBufferMetadata::next_lru_priority;
-    meta.index_within_archive = index_within_archive;
-
-    do {
-      meta.offset_within_entry = offset_within_entry;
-      i64 dst_len = want - offset_within_entry;
-      assert(dst_len > 0);
-      // If the amount we need to advance is greater than the SIDE_BUFFER_SIZE,
-      // we need multiple Read calls, but the total advance might not be an
-      // exact multiple of SIDE_BUFFER_SIZE. Read that remainder amount first,
-      // not last. For example, if advancing 260KiB with a 128KiB
-      // SIDE_BUFFER_SIZE then read 4+128+128 instead of 128+128+4. This leaves
-      // a full side buffer when we've finished advancing, maximizing later
-      // requests' chances of side-buffer-as-cache hits.
-      if (dst_len > SIDE_BUFFER_SIZE) {
-        dst_len %= SIDE_BUFFER_SIZE;
-        if (dst_len == 0) {
-          dst_len = SIDE_BUFFER_SIZE;
-        }
-      }
-
-      meta.length = 0;
-      ssize_t const n = Read(dst_ptr, dst_len);
-      assert(n >= 0);
-
-      meta.length = n;
-    } while (offset_within_entry < want);
+    // archive entry into a rolling buffer) until we get there.
+    Read(nullptr, want - offset_within_entry);
 
     assert(offset_within_entry == want);
     LOG(DEBUG) << "Advanced " << *this << " to offset " << offset_within_entry
@@ -1072,16 +964,26 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Reading the first bytes of the first encrypted entry will reveal whether
     // we also need a passphrase.
-    char buffer[16];
-    g_password_checked = Read(buffer, sizeof(buffer)) > 0;
+    g_password_checked = Read(nullptr, 16) > 0;
   }
 
   // Copies from the archive entry's decompressed contents to the destination
   // buffer. It also advances the Reader's offset_within_entry.
-  ssize_t Read(char* dst_ptr, size_t dst_len) {
-    ssize_t total = 0;
+  i64 Read(char* dst_ptr, i64 dst_len) {
+    assert(dst_len >= 0);
+    i64 total = 0;
     while (dst_len > 0) {
-      ssize_t const n = archive_read_data(archive.get(), dst_ptr, dst_len);
+      std::span<char> b(rolling_buffer);
+      assert(b.size() == rolling_buffer_size);
+      ssize_t const i =
+          static_cast<ssize_t>(offset_within_entry & rolling_buffer_mask);
+      assert(i >= 0);
+      assert(i < b.size());
+      b = b.subspan(i);
+      if (dst_len < b.size()) {
+        b = b.first(static_cast<ssize_t>(dst_len));
+      }
+      ssize_t const n = archive_read_data(archive.get(), b.data(), b.size());
       if (n == 0) {
         break;
       }
@@ -1098,13 +1000,67 @@ struct Reader : bi::list_base_hook<LinkMode> {
       }
 
       assert(n > 0);
-      assert(n <= dst_len);
+      assert(n <= b.size());
+      b = b.first(n);
       dst_len -= n;
-      dst_ptr += n;
+      if (dst_ptr) {
+        dst_ptr = std::ranges::copy(b, dst_ptr).out;
+      }
       offset_within_entry += n;
       total += n;
     }
 
+    return total;
+  }
+
+  ssize_t Read(std::span<char> const dst) {
+    return static_cast<ssize_t>(Read(dst.data(), dst.size()));
+  }
+
+  ssize_t Read(i64 from_offset, std::span<char> dst) {
+    assert(!dst.empty());
+    assert(from_offset >= GetBufferOffset());
+    ssize_t total = 0;
+
+    if (from_offset < offset_within_entry) {
+      ssize_t const j =
+          static_cast<ssize_t>(offset_within_entry & rolling_buffer_mask);
+      assert(j >= 0);
+      assert(j < rolling_buffer_size);
+
+      // Copy from rolling buffer.
+      do {
+        assert(from_offset >= GetBufferOffset());
+        std::span<char> b(rolling_buffer);
+        assert(b.size() == rolling_buffer_size);
+        ssize_t const i =
+            static_cast<ssize_t>(from_offset & rolling_buffer_mask);
+        assert(i >= 0);
+        assert(i < rolling_buffer_size);
+        b = b.subspan(i);
+        if (i < j) {
+          b = b.first(j - i);
+        }
+
+        if (dst.size() < b.size()) {
+          b = b.first(dst.size());
+        }
+
+        std::ranges::copy(b, dst.begin());
+        from_offset += b.size();
+        dst = dst.subspan(b.size());
+        total += b.size();
+
+        if (dst.empty()) {
+          return total;
+        }
+      } while (from_offset < offset_within_entry);
+    } else {
+      AdvanceOffset(from_offset);
+    }
+
+    assert(from_offset == offset_within_entry);
+    total += Read(dst);
     return total;
   }
 
@@ -1138,7 +1094,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     for (Reader& r : recycled) {
       if ((g_filter_count > 0 ||
            r.index_within_archive == want_index_within_archive) &&
-          std::pair(r.index_within_archive, r.offset_within_entry) <=
+          std::pair(r.index_within_archive, r.GetBufferOffset()) <=
               std::pair(want_index_within_archive, want_offset_within_entry) &&
           (!best ||
            std::pair(best->index_within_archive, best->offset_within_entry) <
@@ -1702,26 +1658,26 @@ struct Node {
 
     assert(reader);
     assert(reader->index_within_archive == index_within_archive);
-    assert(reader->offset_within_entry == cached_size);
 
     i64 const old_cached_size = cached_size;
     while (cached_size < want_cached_size) {
       char buff[64 * 1024];
+      std::span<char> b(buff);
 
-      ssize_t n = reader->Read(buff, sizeof(buff));
-      assert(n >= 0 && n <= sizeof(buff));
+      ssize_t const n = reader->Read(cached_size, b);
+      assert(n >= 0);
       if (n == 0) {
         LOG(ERROR) << "Unexpected EOF while caching " << *this;
         break;
       }
 
-      const char* p = buff;
-      while (n > 0) {
-        ssize_t const r = pwrite(g_cache_fd, p, n, cache_offset + cached_size);
+      assert(n <= b.size());
+      b = b.first(n);
+      while (!b.empty()) {
+        ssize_t const r =
+            pwrite(g_cache_fd, b.data(), b.size(), cache_offset + cached_size);
         if (r < 0) {
           if (errno == EINTR) {
-            LOG(ERROR) << "Unexpected EOF while reading " << *this
-                       << " at offset " << cached_size;
             continue;
           }
 
@@ -1729,9 +1685,8 @@ struct Node {
           throw ExitCode::CANNOT_WRITE_CACHE;
         }
 
-        assert(r <= n);
-        p += r;
-        n -= r;
+        assert(r <= b.size());
+        b = b.subspan(r);
         cached_size += r;
         assert(reader->offset_within_entry == cached_size);
       }
@@ -2581,12 +2536,14 @@ int Open(const char* const path, fuse_file_info* const fi) try {
 
 int Read(const char*,
          char* const dst_ptr,
-         size_t dst_len,
+         size_t const dst_len,
          off_t offset,
          fuse_file_info* const fi) try {
   if (offset < 0 || dst_len > std::numeric_limits<int>::max()) {
     return -EINVAL;
   }
+
+  std::span dst(dst_ptr, dst_len);
 
   assert(fi);
   FileHandle* const h = reinterpret_cast<FileHandle*>(fi->fh);
@@ -2595,18 +2552,26 @@ int Read(const char*,
   Node* const node = h->node;
   assert(node);
 
-  if (offset >= node->size) {
+  i64 const size = node->size;
+  assert(size >= 0);
+
+  i64 const remaining = size - offset;
+  if (remaining <= 0) {
     // No data past the end of a file.
     return 0;
   }
 
-  if (dst_len >= node->size - offset) {
+  if (dst.size() > remaining) {
     // No data past the end of a file.
-    dst_len = node->size - offset;
+    dst = dst.first(static_cast<ssize_t>(remaining));
+  }
+
+  if (dst.empty()) {
+    return 0;
   }
 
   if (g_cache == Cache::Lazy) {
-    node->CacheUpTo(offset + dst_len);
+    node->CacheUpTo(offset + dst.size());
     assert(node->cache_offset >= 0);
   }
 
@@ -2615,79 +2580,59 @@ int Read(const char*,
     offset += node->cache_offset;
 
     // Read data from the cache file.
-    ssize_t const n = pread(g_cache_fd, dst_ptr, dst_len, offset);
+    ssize_t const n = pread(g_cache_fd, dst.data(), dst.size(), offset);
     if (n < 0) {
       int const e = errno;
-      PLOG(ERROR) << "Cannot read " << dst_len << " bytes from cache at offset "
-                  << offset;
+      PLOG(ERROR) << "Cannot read " << dst.size()
+                  << " bytes from cache at offset " << offset;
       return -e;
     }
 
-    assert(n <= dst_len);
+    assert(n <= dst.size());
     return n;
   }
 
-  i64 const size = node->size;
-  assert(size >= 0);
-  if (size <= offset) {
-    return 0;
-  }
-
-  i64 const remaining = size - offset;
-  if (dst_len > remaining) {
-    dst_len = remaining;
-  }
-
-  if (dst_len == 0) {
-    return 0;
-  }
-
-  if (ReadFromSideBuffer(node->index_within_archive, dst_ptr, dst_len,
-                         offset)) {
-    return dst_len;
-  }
-
-  // libarchive is designed for streaming access, not random access. If we
-  // need to seek backwards, there's more work to do.
-  if (Reader* const r = h->reader.get()) {
+  Reader::Ptr& r = h->reader;
+  if (r) {
     assert(r->index_within_archive == node->index_within_archive);
-    if (offset < r->offset_within_entry) {
+    if (offset < r->GetBufferOffset()) {
+      // libarchive is designed for streaming access, not random access. If we
+      // need to seek backwards, there's more work to do.
       LOG(DEBUG) << *r << " cannot jump " << r->offset_within_entry - offset
                  << " bytes backwards from offset " << r->offset_within_entry
                  << " to " << offset;
-      h->reader.reset();
-    } else if (offset > r->offset_within_entry + SIDE_BUFFER_SIZE) {
+      r.reset();
+    } else if (offset > r->offset_within_entry + r->rolling_buffer_size) {
       LOG(DEBUG) << *r << " might have to jump "
                  << offset - r->offset_within_entry
                  << " bytes forwards from offset " << r->offset_within_entry
                  << " to " << offset;
-      h->reader.reset();
+      r.reset();
     }
   }
 
-  if (h->reader) {
-    assert(h->reader->index_within_archive == node->index_within_archive);
-    h->reader->AdvanceOffset(offset);
-  } else {
-    h->reader = Reader::ReuseOrCreate(node->index_within_archive, offset);
+  if (!r) {
+    r = Reader::ReuseOrCreate(node->index_within_archive, offset);
   }
 
-  assert(h->reader);
-  assert(h->reader->index_within_archive == node->index_within_archive);
-  assert(h->reader->offset_within_entry == offset);
-  ssize_t const n = h->reader->Read(dst_ptr, dst_len);
+  assert(r);
+  assert(r->index_within_archive == node->index_within_archive);
+  assert(r->offset_within_entry >= offset);
+  assert(r->offset_within_entry <= offset + r->rolling_buffer_size);
+
+  ssize_t n = r->Read(offset, dst);
   assert(n >= 0);
-  assert(n <= dst_len);
-  if (n < dst_len) {
-    // Pad the buffer with NUL bytes. This is a workaround for
-    // https://github.com/libarchive/libarchive/issues/1194.
-    // See https://github.com/google/fuse-archive/issues/40.
-    // std::fill(dst_ptr + n, dst_ptr + dst_len, '\0');
-    assert(std::all_of(dst_ptr + n, dst_ptr + dst_len,
-                       [](char const c) { return c == '\0'; }));
-  }
+  assert(n <= dst.size());
+  dst = dst.subspan(n);
 
-  return dst_len;
+  // Pad the buffer with NUL bytes. This is a workaround for
+  // https://github.com/libarchive/libarchive/issues/1194.
+  // See https://github.com/google/fuse-archive/issues/40.
+  // std::ranges::fill(dst, '\0');
+  assert(std::ranges::all_of(dst, [](char const c) { return c == '\0'; }));
+  n += dst.size();
+
+  return static_cast<int>(n);
 } catch (...) {
   LOG(DEBUG) << "Caught exception";
   return -EIO;
