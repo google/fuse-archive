@@ -2470,9 +2470,12 @@ int GetAttr(const char* const path,
       return -ENOENT;
     }
   }
+  
+  const Node* const t = n->GetTarget();
+  assert(t);
 
   assert(z);
-  *z = n->GetStat();
+  *z = t->GetStat();
   return 0;
 }
 
@@ -2487,32 +2490,37 @@ int ReadLink(const char* const path, char* const buf, size_t const size) {
     return -ENOENT;
   }
 
-  if (n->GetType() != FileType::Symlink) {
+  const Node* const t = n->GetTarget();
+  assert(t);
+
+  if (t->GetType() != FileType::Symlink) {
     LOG(ERROR) << "Cannot read link " << *n << ": Not a symlink";
     return -ENOLINK;
   }
 
-  snprintf(buf, size, "%s", n->symlink.c_str());
+  snprintf(buf, size, "%s", t->symlink.c_str());
   return 0;
 }
 
 int Open(const char* const path, fuse_file_info* const fi) try {
   assert(path);
-  Node* n = FindNode(path);
+  Node* const n = FindNode(path);
   if (!n) {
     LOG(ERROR) << "Cannot open " << Path(path) << ": No such item";
     return -ENOENT;
   }
 
-  if (n->IsDir()) {
+  Node* const t = n->GetTarget();
+  assert(t);
+
+  if (t->IsDir()) {
     LOG(ERROR) << "Cannot open " << *n << ": It is a directory";
     return -EISDIR;
   }
 
-  n = n->GetTarget();
-  assert(n->index_within_archive > 0);
+  assert(t->index_within_archive > 0);
 
-  if (g_cache == Cache::Full && n->cache_offset < 0) {
+  if (g_cache == Cache::Full && t->cache_offset < 0) {
     LOG(ERROR) << "Cannot open " << *n << ": No cached data";
     return -EIO;
   }
@@ -2520,7 +2528,7 @@ int Open(const char* const path, fuse_file_info* const fi) try {
   assert(fi);
   static_assert(sizeof(fi->fh) >= sizeof(FileHandle*));
   fi->fh = reinterpret_cast<uintptr_t>(new FileHandle{.node = n});
-  int const fd_count = ++n->fd_count;
+  int const fd_count = ++t->fd_count;
   assert(fd_count > 0);
   if (fd_count == 1) {
     LOG(DEBUG) << "Opened " << *n;
@@ -2551,8 +2559,10 @@ int Read(const char*,
 
   Node* const node = h->node;
   assert(node);
+  Node* const t = node->GetTarget();
+  assert(t);
 
-  i64 const size = node->size;
+  i64 const size = t->size;
   assert(size >= 0);
 
   i64 const remaining = size - offset;
@@ -2571,13 +2581,13 @@ int Read(const char*,
   }
 
   if (g_cache == Cache::Lazy) {
-    node->CacheUpTo(offset + dst.size());
-    assert(node->cache_offset >= 0);
+    t->CacheUpTo(offset + dst.size());
+    assert(t->cache_offset >= 0);
   }
 
   if (g_cache != Cache::None) {
-    assert(node->cache_offset >= 0);
-    offset += node->cache_offset;
+    assert(t->cache_offset >= 0);
+    offset += t->cache_offset;
 
     // Read data from the cache file.
     ssize_t const n = pread(g_cache_fd, dst.data(), dst.size(), offset);
@@ -2594,7 +2604,7 @@ int Read(const char*,
 
   Reader::Ptr& r = h->reader;
   if (r) {
-    assert(r->index_within_archive == node->index_within_archive);
+    assert(r->index_within_archive == t->index_within_archive);
     if (offset < r->GetBufferOffset()) {
       // libarchive is designed for streaming access, not random access. If we
       // need to seek backwards, there's more work to do.
@@ -2612,11 +2622,11 @@ int Read(const char*,
   }
 
   if (!r) {
-    r = Reader::ReuseOrCreate(node->index_within_archive, offset);
+    r = Reader::ReuseOrCreate(t->index_within_archive, offset);
   }
 
   assert(r);
-  assert(r->index_within_archive == node->index_within_archive);
+  assert(r->index_within_archive == t->index_within_archive);
   assert(r->offset_within_entry >= offset);
   assert(r->offset_within_entry <= offset + r->rolling_buffer_size);
 
@@ -2645,7 +2655,9 @@ int Release(const char*, fuse_file_info* const fi) {
 
   Node* const n = h->node;
   assert(n);
-  int const fd_count = --n->fd_count;
+  Node* const t = n->GetTarget();
+  assert(t);
+  int const fd_count = --t->fd_count;
   assert(fd_count >= 0);
   delete h;
 
@@ -2656,7 +2668,7 @@ int Release(const char*, fuse_file_info* const fi) {
     LOG(DEBUG) << "Closed " << *n;
 
     if (g_cache == Cache::Lazy) {
-      n->reader = nullptr;
+      t->reader = nullptr;
     }
   }
 
