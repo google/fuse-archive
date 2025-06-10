@@ -15,7 +15,8 @@ DEPS += libarchive
 
 CXXFLAGS += $(shell $(PKG_CONFIG) --cflags $(DEPS))
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(DEPS))
-CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
+STD := c++20
+CXXFLAGS += -std=$(STD) -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
 CXXFLAGS += -D_FILE_OFFSET_BITS=64
 
 ifeq ($(DEBUG), 1)
