@@ -1763,7 +1763,7 @@ void CreateCacheFile() {
 
   std::string const cache_dir = GetCacheDir();
 
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
+#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__APPLE__)
   g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
   if (g_cache_fd >= 0) {
     LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
@@ -3042,7 +3042,13 @@ int main(int const argc, char** const argv) try {
   // Get a file descriptor to the parent directory of the mount point.
   int mount_point_parent_fd =
       open(!mount_point_parent.empty() ? mount_point_parent.c_str() : ".",
-           O_DIRECTORY | O_PATH);
+#if defined(O_PATH)
+           O_DIRECTORY | O_PATH); // Linux, FreeBSD >= 13
+#elif defined(O_EXEC)
+           O_DIRECTORY | O_EXEC); // macOS, FreeBSD <= 12
+#else
+           O_DIRECTORY | O_RDONLY); // OpenBSD
+#endif
   if (mount_point_parent_fd < 0) {
     PLOG(ERROR) << "Cannot access directory " << Path(mount_point_parent);
     throw ExitCode::CANNOT_CREATE_MOUNT_POINT;
