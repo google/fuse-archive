@@ -1316,7 +1316,9 @@ def TestExtendedAttributes(options=[]):
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {
-            "xattr": {"user.attr_{:04d}".format(i): f"value_{i}" for i in range(1, 11)}
+            "xattr": {
+                "user.attr_{:04d}".format(i): f"value_{i}" for i in range(1, 11)
+            },
         },
     }
 
@@ -1324,12 +1326,28 @@ def TestExtendedAttributes(options=[]):
 
     # Test very long name xattr cases
     zip_name = 'long-xattr-name.tar.gz'
-    want_tree = {".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2}, "file.txt": {}}
+    want_tree = {
+        ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
+        "file.txt": {
+            "xattr": {
+                'user.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_!@#$%25^&*()': 'Special characters in long name',
+                'user.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx': 'This is a very long attribute name',
+            },
+        },
+    }
     MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
 
     # Test xattr error cases
     zip_name = 'xattr-errors.tar.gz'
-    want_tree = {".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2}, "file.txt": {}}
+    want_tree = {
+        ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
+        "file.txt": {
+            "xattr": {
+                'user.normal_attr': 'valid value',
+                'user.corrupt_attr': '-',
+            },
+        },
+    }
     MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
 
 
