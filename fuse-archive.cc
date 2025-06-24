@@ -2511,12 +2511,25 @@ int GetXattr(const char* const path,
 
   auto const it = node->xattrs.find(name);
   if (it == node->xattrs.end()) {
-    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
-               << ": No such xattr";
+    LOG(DEBUG) << *node << " has no xattr " << std::quoted(name);
     return -ENODATA;
   }
 
   const std::string& value = it->second;
+
+  if (dst_len > 0) {
+    assert(dst_ptr);
+    if (dst_len < value.size()) {
+      LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
+                 << ": The destination buffer of " << dst_len
+                 << " bytes is too small: Needs at least " << value.size()
+                 << " bytes";
+      return -ERANGE;
+    }
+
+    std::copy_n(value.data(), value.size(), dst_ptr);
+  }
+
   if (value.size() > std::numeric_limits<int>::max()) {
     LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
                << ": The value is " << value.size()
@@ -2524,22 +2537,14 @@ int GetXattr(const char* const path,
     return -E2BIG;
   }
 
-  if (dst_len == 0) {
-    return value.size();
-  }
-
-  assert(dst_ptr);
-  if (dst_len < value.size()) {
-    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
-               << ": The output buffer is too small: Only " << dst_len
-               << " bytes when " << value.size() << " bytes are needed";
-    return -ERANGE;
-  }
-
-  return static_cast<int>(value.copy(dst_ptr, dst_len));
+  LOG(DEBUG) << "Get xattr " << std::quoted(name) << " of " << *node << " -> "
+             << value.size() << " bytes";
+  return static_cast<int>(value.size());
 }
 
-int ListXattr(const char* const path, char* dst_ptr, size_t dst_len) {
+int ListXattr(const char* const path,
+              char* const dst_ptr,
+              size_t const dst_len) {
   const Node* const node = FindNode(path);
   if (!node) {
     LOG(ERROR) << "Cannot list xattrs of " << Path(path)
@@ -2547,42 +2552,41 @@ int ListXattr(const char* const path, char* dst_ptr, size_t dst_len) {
     return -ENOENT;
   }
 
+  size_t total_bytes = 0;
   if (dst_len == 0) {
     // Compute required buffer size.
-    size_t n = 0;
     for (const auto& [key, _] : node->xattrs) {
-      n += key.size() + 1;
+      total_bytes += key.size() + 1;
     }
+  } else {
+    assert(dst_ptr);
+    std::span<char> dst(dst_ptr, dst_len);
+    for (const auto& [key, _] : node->xattrs) {
+      const size_t n = key.size() + 1;
+      if (dst.size() < n) {
+        LOG(ERROR) << "Cannot list " << node->xattrs.size() << " xattrs of "
+                   << *node << ": The destination buffer of " << dst_len
+                   << " bytes is too small";
+        return -ERANGE;
+      }
 
-    if (n > std::numeric_limits<int>::max()) {
-      LOG(ERROR) << "Cannot list xattr of " << *node << ": The list is " << n
-                 << " bytes long, which is greater than MAX_INT";
-      return -E2BIG;
+      // Copy the NUL terminator as well.
+      std::copy_n(key.c_str(), n, dst.data());
+      dst = dst.subspan(n);
+      total_bytes += n;
     }
-
-    return static_cast<int>(n);
   }
 
-  assert(dst_ptr);
-  std::span<char> dst(dst_ptr, dst_len);
-  if (dst.size() > std::numeric_limits<int>::max()) {
-    dst = dst.first(std::numeric_limits<int>::max());
+  if (total_bytes > std::numeric_limits<int>::max()) {
+    LOG(ERROR) << "Cannot list " << node->xattrs.size() << " xattrs of "
+               << *node << ": The list is " << total_bytes
+               << " bytes long, which is greater than MAX_INT";
+    return -E2BIG;
   }
 
-  for (const auto& [key, _] : node->xattrs) {
-    const size_t n = key.size() + 1;
-    if (dst.size() < n) {
-      LOG(ERROR) << "Cannot list xattrs of " << Path(path)
-                 << ": The destination buffer is too small";
-      return -ERANGE;
-    }
-
-    // Copy the NUL terminator as well.
-    std::copy_n(key.c_str(), n, dst.data());
-    dst = dst.subspan(n);
-  }
-
-  return static_cast<int>(dst.data() - dst_ptr);
+  LOG(DEBUG) << "List " << node->xattrs.size() << " xattrs of " << *node
+             << " -> " << total_bytes << " bytes";
+  return static_cast<int>(total_bytes);
 }
 
 int ReadLink(const char* const path, char* const buf, size_t const size) {
