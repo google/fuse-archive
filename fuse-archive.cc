@@ -1543,6 +1543,9 @@ struct Node {
   dev_t rdev = 0;
   i64 nlink = 1;
 
+  // Extended attributes.
+  std::unordered_map<std::string, std::string> xattrs;
+
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
 
@@ -2260,6 +2263,19 @@ void ProcessEntry(Reader& r) {
     node->size = r.GetEntrySize();
   }
 
+  // Extract extended attributes.
+  if (int const n = archive_entry_xattr_reset(e)) {
+    node->xattrs.reserve(n);
+    const char* key;
+    const void* value;
+    size_t len;
+    while (archive_entry_xattr_next(e, &key, &value, &len) == ARCHIVE_OK) {
+      assert(key);
+      assert(value);
+      node->xattrs.try_emplace(key, static_cast<const char*>(value), len);
+    }
+  }
+
   // Check password if necessary.
   r.CheckPassword();
 
@@ -2470,13 +2486,103 @@ int GetAttr(const char* const path,
       return -ENOENT;
     }
   }
-  
+
   const Node* const t = n->GetTarget();
   assert(t);
 
   assert(z);
   *z = t->GetStat();
   return 0;
+}
+
+int GetXattr(const char* const path,
+             const char* const name,
+             char* const dst_ptr,
+             size_t const dst_len) {
+  assert(path);
+  assert(name);
+
+  const Node* const node = FindNode(path);
+  if (!node) {
+    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of "
+               << Path(path) << ": No such file or directory";
+    return -ENOENT;
+  }
+
+  auto const it = node->xattrs.find(name);
+  if (it == node->xattrs.end()) {
+    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
+               << ": No such xattr";
+    return -ENODATA;
+  }
+
+  const std::string& value = it->second;
+  if (value.size() > std::numeric_limits<int>::max()) {
+    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
+               << ": The value is " << value.size()
+               << " bytes long, which is greater than MAX_INT";
+    return -E2BIG;
+  }
+
+  if (dst_len == 0) {
+    return value.size();
+  }
+
+  assert(dst_ptr);
+  if (dst_len < value.size()) {
+    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
+               << ": The output buffer is too small: Only " << dst_len
+               << " bytes when " << value.size() << " bytes are needed";
+    return -ERANGE;
+  }
+
+  return static_cast<int>(value.copy(dst_ptr, dst_len));
+}
+
+int ListXattr(const char* const path, char* dst_ptr, size_t dst_len) {
+  const Node* const node = FindNode(path);
+  if (!node) {
+    LOG(ERROR) << "Cannot list xattrs of " << Path(path)
+               << ": No such file or directory";
+    return -ENOENT;
+  }
+
+  if (dst_len == 0) {
+    // Compute required buffer size.
+    size_t n = 0;
+    for (const auto& [key, _] : node->xattrs) {
+      n += key.size() + 1;
+    }
+
+    if (n > std::numeric_limits<int>::max()) {
+      LOG(ERROR) << "Cannot list xattr of " << *node << ": The list is " << n
+                 << " bytes long, which is greater than MAX_INT";
+      return -E2BIG;
+    }
+
+    return static_cast<int>(n);
+  }
+
+  assert(dst_ptr);
+  std::span<char> dst(dst_ptr, dst_len);
+  if (dst.size() > std::numeric_limits<int>::max()) {
+    dst = dst.first(std::numeric_limits<int>::max());
+  }
+
+  for (const auto& [key, _] : node->xattrs) {
+    const size_t n = key.size() + 1;
+    if (dst.size() < n) {
+      LOG(ERROR) << "Cannot list xattrs of " << Path(path)
+                 << ": The destination buffer is too small";
+      return -ERANGE;
+    }
+
+    // Copy the NUL terminator as well.
+    std::copy_n(key.c_str(), n, dst.data());
+    dst = dst.subspan(n);
+  }
+
+  return static_cast<int>(dst.data() - dst_ptr);
 }
 
 int ReadLink(const char* const path, char* const buf, size_t const size) {
@@ -2781,6 +2887,8 @@ fuse_operations const operations = {
   .read = Read,
   .statfs = StatFs,
   .release = Release,
+  .getxattr = GetXattr,
+  .listxattr = ListXattr,
   .opendir = OpenDir,
   .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30
