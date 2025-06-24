@@ -1521,6 +1521,9 @@ struct Node {
   // only exception is the root directory, which is just named "/".
   std::string name;
   std::string symlink;
+  std::unordered_map<std::string, std::string> xattrs;
+  size_t total_keyname_buffer_len;
+  size_t total_keys_count;
   mode_t mode;
   static ino_t count;
   ino_t ino = ++count;
@@ -2260,6 +2263,22 @@ void ProcessEntry(Reader& r) {
     node->size = r.GetEntrySize();
   }
 
+  // init xattrs
+  const char* xattr_name;
+  const void* value;
+  size_t size;
+  archive_entry_xattr_reset(e);
+  node->total_keyname_buffer_len = 0;
+  node->total_keys_count = 0;
+  while (archive_entry_xattr_next(e, &xattr_name, &value, &size) ==
+         ARCHIVE_OK) {
+    node->xattrs[xattr_name] =
+        std::string(static_cast<const char*>(value), size);
+
+    node->total_keyname_buffer_len += std::strlen(xattr_name);
+    node->total_keys_count++;
+  }
+
   // Check password if necessary.
   r.CheckPassword();
 
@@ -2477,6 +2496,71 @@ int GetAttr(const char* const path,
   assert(z);
   *z = t->GetStat();
   return 0;
+}
+
+int GetXattr(const char* path, const char* name, char* value, size_t size) {
+  assert(path);
+  assert(name);
+
+  const Node* node = FindNode(path);
+  if (!node) {
+    LOG(ERROR) << "Cannot open " << Path(path) << ": No such file or directory";
+    return -ENOENT;
+  }
+
+  auto it = node->xattrs.find(name);
+  if (it == node->xattrs.end()) {
+    LOG(DEBUG) << "Cannot get xattr " << Path(name) << ": No such item";
+    return -ENODATA;
+  }
+
+  const std::string& data = it->second;
+  const auto data_size = data.size();
+  if (size == 0)
+    return data_size;
+
+  assert(value);
+
+  if (size < data_size) {
+    LOG(DEBUG) << "The size of the value buffer is too small";
+    return -ERANGE;
+  }
+
+  std::memcpy(value, data.c_str(), data_size);
+  return data_size;
+}
+
+int ListXattr(const char* path, char* list, size_t size) {
+  assert(path);
+
+  const Node* node = FindNode(path);
+  if (!node) {
+    LOG(ERROR) << "Cannot open " << Path(path) << ": No such file or directory";
+    return -ENOENT;
+  }
+
+  const auto total_len =
+      node->total_keyname_buffer_len + node->total_keys_count;
+  if (size == 0)
+    return total_len;
+
+  assert(list);
+
+  if (size < total_len) {
+    LOG(ERROR) << "The size of the value buffer is too small";
+    return -ERANGE;
+  }
+
+  char* current = list;
+  for (const auto& [key, _] : node->xattrs) {
+    const size_t key_len = key.size();
+
+    std::memcpy(current, key.c_str(), key_len);
+    current[key_len] = '\0';  // NUL terminator
+    current += key_len + 1;   // next key
+  }
+
+  return total_len;
 }
 
 int ReadLink(const char* const path, char* const buf, size_t const size) {
@@ -2781,6 +2865,8 @@ fuse_operations const operations = {
   .read = Read,
   .statfs = StatFs,
   .release = Release,
+  .getxattr = GetXattr,
+  .listxattr = ListXattr,
   .opendir = OpenDir,
   .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30

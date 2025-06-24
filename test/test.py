@@ -70,6 +70,19 @@ def GetTree(root, use_md5=True):
             for entry in os.scandir(path):
                 scan(entry.path, entry.stat(follow_symlinks=False))
 
+        try:
+            attrs = os.listxattr(path)
+            xattr_dict = dict()
+            for attr in attrs:
+                try:
+                    value = os.getxattr(path, attr)
+                    xattr_dict[attr] = value.decode('utf-8')
+                except OSError as e:
+                    xattr_dict[attr] = f'<error: {e.errno}>'
+            line['xattr'] = xattr_dict
+        except OSError as e:
+            line['xattr'] = e.errno
+
     st = os.stat(root, follow_symlinks=False)
 
     # On some systems, the mount point is not immediately functional.
@@ -1296,6 +1309,52 @@ def TestInvalidArchive():
             os.chmod(f.name, 0)
             CheckArchiveMountingError(f.name, 11)
 
+# Tests extended attributes functionality
+def TestExtendedAttributes(options=[]):
+    # Test normal xattr archive
+    zip_name = 'many-xattrs.tar'
+    logging.info(f'Test {zip_name!r} with xattrs')
+
+    want_tree = {
+        ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
+        "file.txt": {
+            "xattr": {"user.attr_{:04d}".format(i): f"value_{i}" for i in range(1, 11)}
+        },
+    }
+
+    MountArchiveAndCheckTree(
+        zip_name,
+        want_tree,
+        options=options,
+        use_md5=False  # MD5 not needed for xattr test
+    )
+
+    # Test very long name xattr cases
+    zip_name = 'long-xattr-name.tar'
+    logging.info(f'Test {zip_name!r} with xattr errors')
+
+    want_tree = {".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2}, "file.txt": {}}
+
+    MountArchiveAndCheckTree(
+        zip_name,
+        want_tree,
+        options=options,
+        use_md5=False
+    )
+
+    # Test xattr error cases
+    zip_name = 'xattr-errors.tar'
+    logging.info(f'Test {zip_name!r} with xattr errors')
+
+    want_tree = {".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2}, "file.txt": {}}
+
+    MountArchiveAndCheckTree(
+        zip_name,
+        want_tree,
+        options=options,
+        use_md5=False
+    )
+
 
 logging.getLogger().setLevel('INFO')
 
@@ -1315,6 +1374,9 @@ TestArchiveWithManyFiles()
 TestBigArchiveRandomOrder(['-o', 'direct_io'])
 TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
 TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
+TestExtendedAttributes()
+TestExtendedAttributes(['-o', 'nocache'])
+TestExtendedAttributes(['-o', 'lazycache'])
 
 if error_count:
     LogError(f'FAIL: There were {error_count} errors')
