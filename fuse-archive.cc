@@ -2238,8 +2238,9 @@ void ProcessEntry(Reader& r) {
     // Entry is a hard link.
     if (g_hardlinks) {
       // Save it for further resolution.
-      g_hardlinks_to_resolve.emplace_back(i, std::move(path),
-                                          Path(s).Normalized());
+      g_hardlinks_to_resolve.push_back({.index_within_archive = i,
+                                        .source_path = std::move(path),
+                                        .target_path = Path(s).Normalized()});
     } else {
       LOG(DEBUG) << "Skipped hard link "
                  << " [" << i << "] " << Path(path) << " -> " << Path(s);
