@@ -404,6 +404,75 @@ gid_t const g_gid = getgid();
 using Clock = std::chrono::system_clock;
 time_t const g_now = Clock::to_time_t(Clock::now());
 
+// A string view and its hashed value.
+struct HashedStringView {
+  std::string_view string;
+  size_t hashed_value = std::hash<std::string_view>()(string);
+  explicit HashedStringView(std::string_view s) : string(s) {}
+};
+
+// A string and its hashed value.
+struct HashedString {
+  std::string string;
+  size_t hashed_value;
+  HashedString(const HashedStringView& x)
+      : string(x.string), hashed_value(x.hashed_value) {}
+};
+
+// Function object that compares HashedStringView and HashedString objects for
+// equality.
+struct IsEqual {
+  using is_transparent = std::true_type;
+  bool operator()(const auto& a, const auto& b) const {
+    return a.hashed_value == b.hashed_value && a.string == b.string;
+  }
+};
+
+// Function object that gets the hashed value of HashedStringView and
+// HashedString objects.
+struct Hash {
+  using is_transparent = std::true_type;
+  size_t operator()(const auto& x) const { return x.hashed_value; }
+};
+
+// Set of unique (i.e. deduplicated) strings. Lazily constructed and populated.
+// Never destructed.
+using HashedStrings = std::unordered_set<HashedString, Hash, IsEqual>;
+HashedStrings* g_unique_strings = nullptr;
+
+// Gets a pointer to the unique registered string matching the given string, or
+// null if no such string has been registered.
+const HashedString* GetUniqueOrNull(std::string_view const s) {
+  if (!g_unique_strings) {
+    return nullptr;
+  }
+
+  HashedStrings::const_iterator const it =
+      g_unique_strings->find(HashedStringView(s));
+  if (it == g_unique_strings->cend()) {
+    return nullptr;
+  }
+
+  assert(it->string == s);
+  assert(it->string.data() != s.data());
+  return &*it;
+}
+
+// Gets a non-null pointer to the unique registered string matching the given
+// string, creating and registering it if necessary.
+const HashedString* GetOrCreateUnique(std::string_view const s) {
+  if (!g_unique_strings) {
+    g_unique_strings = new HashedStrings();
+  }
+
+  HashedStrings::const_iterator const it =
+      g_unique_strings->insert(HashedStringView(s)).first;
+  assert(it != g_unique_strings->cend());
+  assert(it->string == s);
+  assert(it->string.data() != s.data());
+  return &*it;
+}
+
 // Converts a string to ASCII lower case.
 std::string ToLower(std::string_view const s) {
   std::string r(s);
@@ -1544,7 +1613,12 @@ struct Node {
   i64 nlink = 1;
 
   // Extended attributes.
-  std::unordered_map<std::string, std::string> xattrs;
+  struct Attribute {
+    const HashedString* key;
+    std::string value;
+  };
+
+  std::vector<Attribute> attributes;
 
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
@@ -2265,14 +2339,16 @@ void ProcessEntry(Reader& r) {
 
   // Extract extended attributes.
   if (int const n = archive_entry_xattr_reset(e)) {
-    node->xattrs.reserve(n);
+    node->attributes.reserve(n);
     const char* key;
     const void* value;
     size_t len;
     while (archive_entry_xattr_next(e, &key, &value, &len) == ARCHIVE_OK) {
       assert(key);
       assert(value);
-      node->xattrs.try_emplace(key, static_cast<const char*>(value), len);
+      node->attributes.push_back(
+          {.key = GetOrCreateUnique(key),
+           .value = std::string(static_cast<const char*>(value), len)});
     }
   }
 
@@ -2496,32 +2572,48 @@ int GetAttr(const char* const path,
 }
 
 int GetXattr(const char* const path,
-             const char* const name,
+             const char* const xattr_name,
              char* const dst_ptr,
              size_t const dst_len) {
   assert(path);
-  assert(name);
+  assert(xattr_name);
 
   const Node* const node = FindNode(path);
   if (!node) {
-    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of "
+    LOG(ERROR) << "Cannot get xattr " << std::quoted(xattr_name) << " of "
                << Path(path) << ": No such file or directory";
     return -ENOENT;
   }
 
-  auto const it = node->xattrs.find(name);
-  if (it == node->xattrs.end()) {
-    LOG(DEBUG) << *node << " has no xattr " << std::quoted(name);
+  if (node->attributes.empty()) {
+    // The node has no extended attributes.
+    LOG(DEBUG) << *node << " has no xattr " << std::quoted(xattr_name);
     return -ENODATA;
   }
 
-  const std::string& value = it->second;
+  const HashedString* const key = GetUniqueOrNull(xattr_name);
+  if (!key) {
+    // No extended attribute has ever been recorded with the given name.
+    LOG(DEBUG) << *node << " has no xattr " << std::quoted(xattr_name);
+    return -ENODATA;
+  }
+
+  auto const it =
+      std::ranges::find(node->attributes, key, &Node::Attribute::key);
+  if (it == node->attributes.end()) {
+    // The node has some extended attributes, but none matching the given name.
+    LOG(DEBUG) << *node << " has no xattr " << std::quoted(xattr_name);
+    return -ENODATA;
+  }
+
+  assert(it->key->string == xattr_name);
+  const std::string& value = it->value;
 
   if (dst_len > 0) {
     assert(dst_ptr);
     if (dst_len < value.size()) {
-      LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
-                 << ": The destination buffer of " << dst_len
+      LOG(ERROR) << "Cannot get xattr " << std::quoted(xattr_name) << " of "
+                 << *node << ": The destination buffer of " << dst_len
                  << " bytes is too small: Needs at least " << value.size()
                  << " bytes";
       return -ERANGE;
@@ -2531,14 +2623,14 @@ int GetXattr(const char* const path,
   }
 
   if (value.size() > std::numeric_limits<int>::max()) {
-    LOG(ERROR) << "Cannot get xattr " << std::quoted(name) << " of " << *node
-               << ": The value is " << value.size()
+    LOG(ERROR) << "Cannot get xattr " << std::quoted(xattr_name) << " of "
+               << *node << ": The value is " << value.size()
                << " bytes long, which is greater than MAX_INT";
     return -E2BIG;
   }
 
-  LOG(DEBUG) << "Get xattr " << std::quoted(name) << " of " << *node << " -> "
-             << value.size() << " bytes";
+  LOG(DEBUG) << "Get xattr " << std::quoted(xattr_name) << " of " << *node
+             << " -> " << value.size() << " bytes";
   return static_cast<int>(value.size());
 }
 
@@ -2555,16 +2647,18 @@ int ListXattr(const char* const path,
   size_t total_bytes = 0;
   if (dst_len == 0) {
     // Compute required buffer size.
-    for (const auto& [key, _] : node->xattrs) {
+    for (const Node::Attribute& a : node->attributes) {
+      const std::string& key = a.key->string;
       total_bytes += key.size() + 1;
     }
   } else {
     assert(dst_ptr);
     std::span<char> dst(dst_ptr, dst_len);
-    for (const auto& [key, _] : node->xattrs) {
+    for (const Node::Attribute& a : node->attributes) {
+      const std::string& key = a.key->string;
       const size_t n = key.size() + 1;
       if (dst.size() < n) {
-        LOG(ERROR) << "Cannot list " << node->xattrs.size() << " xattrs of "
+        LOG(ERROR) << "Cannot list " << node->attributes.size() << " xattrs of "
                    << *node << ": The destination buffer of " << dst_len
                    << " bytes is too small";
         return -ERANGE;
@@ -2578,13 +2672,13 @@ int ListXattr(const char* const path,
   }
 
   if (total_bytes > std::numeric_limits<int>::max()) {
-    LOG(ERROR) << "Cannot list " << node->xattrs.size() << " xattrs of "
+    LOG(ERROR) << "Cannot list " << node->attributes.size() << " xattrs of "
                << *node << ": The list is " << total_bytes
                << " bytes long, which is greater than MAX_INT";
     return -E2BIG;
   }
 
-  LOG(DEBUG) << "List " << node->xattrs.size() << " xattrs of " << *node
+  LOG(DEBUG) << "List " << node->attributes.size() << " xattrs of " << *node
              << " -> " << total_bytes << " bytes";
   return static_cast<int>(total_bytes);
 }
@@ -3155,11 +3249,11 @@ int main(int const argc, char** const argv) try {
   int mount_point_parent_fd =
       open(!mount_point_parent.empty() ? mount_point_parent.c_str() : ".",
 #if defined(O_PATH)
-           O_DIRECTORY | O_PATH); // Linux, FreeBSD >= 13
+           O_DIRECTORY | O_PATH);  // Linux, FreeBSD >= 13
 #elif defined(O_EXEC)
-           O_DIRECTORY | O_EXEC); // macOS, FreeBSD <= 12
+           O_DIRECTORY | O_EXEC);  // macOS, FreeBSD <= 12
 #else
-           O_DIRECTORY | O_RDONLY); // OpenBSD
+           O_DIRECTORY | O_RDONLY);  // OpenBSD
 #endif
   if (mount_point_parent_fd < 0) {
     PLOG(ERROR) << "Cannot access directory " << Path(mount_point_parent);
