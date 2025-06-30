@@ -1635,6 +1635,24 @@ struct Node {
   dev_t rdev = 0;
   i64 nlink = 1;
 
+  // A hole in a sparse file.
+  struct Hole {
+    i64 from, to;
+
+    std::weak_ordering operator<=>(i64 const x) const {
+      assert(from <= to);
+      if (from > x)
+        return std::weak_ordering::greater;
+      if (to <= x)
+        return std::weak_ordering::less;
+      assert(from <= x && x < to);
+      return std::weak_ordering::equivalent;
+    }
+  };
+
+  using Holes = std::vector<Hole>;
+  Holes holes;
+
   // Extended attributes.
   struct Attribute {
     const HashedString* key;
@@ -3002,7 +3020,7 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
 }
 
 off_t Seek(const char*,
-           off_t const off,
+           off_t const offset,
            int const whence,
            fuse_file_info* const fi) {
   assert(fi);
@@ -3012,30 +3030,58 @@ off_t Seek(const char*,
   assert(n);
 
   LOG(DEBUG) << "Seeking " << *n << " with whence = " << Whence(whence)
-             << " and off = " << off;
+             << " and offset = " << offset;
+
+  Node::Holes::const_iterator const it = std::ranges::upper_bound(
+      n->holes, offset, std::less<i64>(), &Node::Hole::to);
 
   switch (whence) {
     case SEEK_DATA:
-      if (off < 0) {
+      if (offset < 0) {
         return EINVAL;
       }
-      if (off >= n->size) {
+
+      if (offset >= n->size) {
         return ENXIO;
       }
-      return off;
+
+      if (it != n->holes.end() && it->from <= offset) {
+        assert(offset < it->to);
+        // offset is located in a hole
+        return it->to < n->size ? it->to : ENXIO;
+      }
+
+      return offset;
 
     case SEEK_HOLE:
-      if (off < 0) {
+      if (offset < 0) {
         return EINVAL;
       }
-      if (off > n->size) {
+
+      if (offset > n->size) {
         return ENXIO;
       }
-      return n->size;
+
+      if (it == n->holes.end()) {
+        // offset is past the last hole
+        return n->size;
+      }
+
+      assert(it != n->holes.end());
+      assert(offset < it->to);
+
+      if (it->from <= offset) {
+        // offset is located in a hole
+        return offset;
+      }
+
+      // offset is before a hole
+      assert(offset < it->from);
+      return it->from;
   }
 
   LOG(ERROR) << "Cannot seek " << *n << " with whence = " << Whence(whence)
-             << " and off = " << off;
+             << " and offset = " << offset;
   return -EINVAL;
 }
 #endif
