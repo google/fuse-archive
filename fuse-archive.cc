@@ -1262,8 +1262,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"brotli", SET_FILTER_COMMAND(brotli)},
         {"bz2", SET_FILTER(BZIP2)},
         {"bzip2", SET_FILTER(BZIP2)},
-        {"grz", SET_FILTER(GRZIP)},
-        {"grzip", SET_FILTER(GRZIP)},
+        // Work around https://github.com/libarchive/libarchive/issues/2513
+        // {"grz", SET_FILTER(GRZIP)},
+        // {"grzip", SET_FILTER(GRZIP)},
+        {"grz", SET_FILTER_COMMAND(grzip)},
+        {"grzip", SET_FILTER_COMMAND(grzip)},
         {"gz", SET_FILTER(GZIP)},
         {"gzip", SET_FILTER(GZIP)},
         {"lrz", SET_FILTER(LRZIP)},
@@ -1274,6 +1277,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"lzma", SET_FILTER(LZMA)},
         // Work around https://github.com/libarchive/libarchive/issues/2513
         // {"lzo", SET_FILTER(LZOP)},
+        // {"lzop", SET_FILTER(LZOP)},
         {"lzo", SET_FILTER_COMMAND(lzop)},
         {"lzop", SET_FILTER_COMMAND(lzop)},
         {"uu", SET_FILTER(UU)},

@@ -112,7 +112,7 @@ right most of the time, but there are corner cases for which it might get
 confused.
 
 **fuse-archive** relies on the availability of the following filter programs:
-`base64`, `brotli`, `compress`, `lrzip` and `lzop`.
+`base64`, `brotli`, `compress`, `lrzip`, `lzop` and `grzip`.
 
 # CACHING
 
