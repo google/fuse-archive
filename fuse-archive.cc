@@ -3135,7 +3135,7 @@ class NumPunct : public std::numpunct<char> {
 };
 
 void PrintUsage() {
-  std::cerr << "usage: " PROGRAM_NAME
+  std::cout << "usage: " PROGRAM_NAME
                R"( [options] <archive_file> [mount_point]
 
 general options:
@@ -3159,7 +3159,7 @@ general options:
                R"(
     -o direct_io           use direct I/O)"
 #endif
-               "\n\n";
+      "\n\n" << std::flush;
 }
 
 }  // namespace
@@ -3204,23 +3204,24 @@ int main(int const argc, char** const argv) try {
   }
 
   if (g_version) {
-    std::cerr << PROGRAM_NAME " version: " PROGRAM_VERSION "\n";
-    std::cerr << "libarchive version: " << archive_version_string() << "\n";
+    std::cout << PROGRAM_NAME " version: " PROGRAM_VERSION "\n";
+    std::cout << "libarchive version: " << archive_version_string() << "\n";
     if (const char* const s = archive_bzlib_version()) {
-      std::cerr << "bzlib version: " << s << "\n";
+      std::cout << "bzlib version: " << s << "\n";
     }
     if (const char* const s = archive_liblz4_version()) {
-      std::cerr << "liblz4 version: " << s << "\n";
+      std::cout << "liblz4 version: " << s << "\n";
     }
     if (const char* const s = archive_liblzma_version()) {
-      std::cerr << "liblzma version: " << s << "\n";
+      std::cout << "liblzma version: " << s << "\n";
     }
     if (const char* const s = archive_libzstd_version()) {
-      std::cerr << "libzstd version: " << s << "\n";
+      std::cout << "libzstd version: " << s << "\n";
     }
     if (const char* const s = archive_zlib_version()) {
-      std::cerr << "zlib version: " << s << "\n";
+      std::cout << "zlib version: " << s << "\n";
     }
+    std::cout.flush();
 
     fuse_opt_add_arg(&args, "--version");
     fuse_main(args.argc, args.argv, &operations, nullptr);
