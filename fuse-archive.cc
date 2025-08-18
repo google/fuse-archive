@@ -2579,7 +2579,12 @@ int GetAttr(const char* const path,
 int GetXattr(const char* const path,
              const char* const xattr_name,
              char* const dst_ptr,
+#ifdef __APPLE__
+             size_t const dst_len,
+             uint32_t) {
+#else
              size_t const dst_len) {
+#endif
   assert(path);
   assert(xattr_name);
 
