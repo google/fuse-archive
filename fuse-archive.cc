@@ -3262,9 +3262,9 @@ int main(int const argc, char** const argv) try {
 #if defined(O_PATH)
            O_DIRECTORY | O_PATH);  // Linux, FreeBSD >= 13
 #elif defined(O_EXEC)
-           O_DIRECTORY | O_EXEC);  // macOS, FreeBSD <= 12
+           O_DIRECTORY | O_EXEC);  // FreeBSD <= 12
 #else
-           O_DIRECTORY | O_RDONLY);  // OpenBSD
+           O_DIRECTORY | O_RDONLY);  // OpenBSD, macOS
 #endif
   if (mount_point_parent_fd < 0) {
     PLOG(ERROR) << "Cannot access directory " << Path(mount_point_parent);
