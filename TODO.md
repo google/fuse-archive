@@ -53,3 +53,12 @@
 - [x] Optimize the `Reader` recycling system.
 - [x] Use a `Reader` when building the tree.
 - [x] Add a rolling buffer of uncompressed data to each `Reader`.
+- [x] Handle extended attributes.
+- [x] Add a `-o noxattrs` option.
+- [ ] Detect "holes" in sparse files.
+- [ ] Add a `-o nosparse` option.
+- [ ] Add tests for sparse files.
+- [ ] Add the ability to mount several archives in the same mount point.
+- [ ] Add a `-o nomerge` option to mount several archives next to each other in the same mount point.
+- [ ] Automatically trim the top of the tree.
+- [ ] Add a `-o notrim` option to prevent trimming the tree.

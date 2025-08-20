@@ -70,7 +70,7 @@
 
 // Even minor versions (e.g. 1.0 or 1.2) are stable versions.
 // Odd minor versions (e.g. 1.1 or 1.3) are development versions.
-#define PROGRAM_VERSION "1.15"
+#define PROGRAM_VERSION "1.16"
 
 namespace {
 
