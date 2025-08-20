@@ -1321,8 +1321,13 @@ def TestExtendedAttributes(options=[]):
             },
         },
     }
-
     MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
+
+    want_tree = {
+        ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
+        "file.txt": {"xattr": {}},
+    }
+    MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
     # Test very long name xattr cases
     zip_name = 'long-xattr-name.tar.gz'
@@ -1337,6 +1342,12 @@ def TestExtendedAttributes(options=[]):
     }
     MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
 
+    want_tree = {
+        ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
+        "file.txt": {"xattr": {}},
+    }
+    MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
+
     # Test xattr error cases
     zip_name = 'xattr-errors.tar.gz'
     want_tree = {
@@ -1349,6 +1360,12 @@ def TestExtendedAttributes(options=[]):
         },
     }
     MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
+
+    want_tree = {
+        ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
+        "file.txt": {"xattr": {}},
+    }
+    MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
 
 logging.getLogger().setLevel('INFO')

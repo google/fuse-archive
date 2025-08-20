@@ -240,6 +240,7 @@ enum {
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
   KEY_NO_HARDLINKS,
+  KEY_NO_XATTRS,
   KEY_DEFAULT_PERMISSIONS,
 #if FUSE_USE_VERSION >= 30
   KEY_DIRECT_IO,
@@ -272,6 +273,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
     FUSE_OPT_KEY("nohardlinks", KEY_NO_HARDLINKS),
+    FUSE_OPT_KEY("noxattrs", KEY_NO_XATTRS),
     FUSE_OPT_KEY("default_permissions", KEY_DEFAULT_PERMISSIONS),
 #if FUSE_USE_VERSION >= 30
     FUSE_OPT_KEY("direct_io", KEY_DIRECT_IO),
@@ -289,6 +291,7 @@ bool g_force = false;
 bool g_specials = true;
 bool g_symlinks = true;
 bool g_hardlinks = true;
+bool g_xattrs = true;
 bool g_default_permissions = false;
 #if FUSE_USE_VERSION >= 30
 bool g_direct_io = false;
@@ -2343,17 +2346,19 @@ void ProcessEntry(Reader& r) {
   }
 
   // Extract extended attributes.
-  if (int const n = archive_entry_xattr_reset(e)) {
-    node->attributes.reserve(n);
-    const char* key;
-    const void* value;
-    size_t len;
-    while (archive_entry_xattr_next(e, &key, &value, &len) == ARCHIVE_OK) {
-      assert(key);
-      assert(value);
-      node->attributes.push_back(
-          {.key = GetOrCreateUnique(key),
-           .value = std::string(static_cast<const char*>(value), len)});
+  if (g_xattrs) {
+    if (int const n = archive_entry_xattr_reset(e)) {
+      node->attributes.reserve(n);
+      const char* key;
+      const void* value;
+      size_t len;
+      while (archive_entry_xattr_next(e, &key, &value, &len) == ARCHIVE_OK) {
+        assert(key);
+        assert(value);
+        node->attributes.push_back(
+            {.key = GetOrCreateUnique(key),
+             .value = std::string(static_cast<const char*>(value), len)});
+      }
     }
   }
 
@@ -3074,6 +3079,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_hardlinks = false;
       return DISCARD;
 
+    case KEY_NO_XATTRS:
+      g_xattrs = false;
+      return DISCARD;
+
     case KEY_DEFAULT_PERMISSIONS:
       g_default_permissions = true;
       return KEEP;
@@ -3158,6 +3167,7 @@ general options:
     -o nospecials          no special files (FIFOs, sockets, devices)
     -o nosymlinks          no symlinks
     -o nohardlinks         no hard links
+    -o noxattrs            no extended attributes
     -o dmask=M             directory permission mask in octal (default 0022)
     -o fmask=M             file permission mask in octal (default 0022))"
 #if FUSE_USE_VERSION >= 30

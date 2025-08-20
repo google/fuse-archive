@@ -63,11 +63,14 @@ mount read-only, not read-write.
 **-o nohardlinks**
 :   No files with multiple hard links
 
+**-o noxattrs**
+:   No extended attributes
+
 **-o dmask=M**
-:   Directory permission mask in octal (default 0022)
+:   Directory permission mask in octal (default is 0022)
 
 **-o fmask=M**
-:   File permission mask in octal (default 0022)
+:   File permission mask in octal (default is 0022)
 
 **-o uid=N**
 :   Set the file owner of all the items in the mounted archive (default is
