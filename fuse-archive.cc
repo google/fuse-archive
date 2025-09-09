@@ -2584,7 +2584,7 @@ int GetAttr(const char* const path,
 int GetXattr(const char* const path,
              const char* const xattr_name,
              char* const dst_ptr,
-#ifdef __APPLE__
+#if defined(__APPLE__) && FUSE_USE_VERSION < 30
              size_t const dst_len,
              uint32_t) {
 #else
