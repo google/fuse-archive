@@ -37,6 +37,9 @@ all: out/$(PROJECT)
 check: out/$(PROJECT) test/data/big.zip test/data/collisions.zip
 	python3 test/test.py
 
+check-fast: out/$(PROJECT)
+	python3 test/test.py --fast
+
 clean:
 	rm -rf out
 

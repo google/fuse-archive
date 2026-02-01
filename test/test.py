@@ -1385,10 +1385,12 @@ TestExtendedAttributes(['-o', 'nocache'])
 TestExtendedAttributes(['-o', 'lazycache'])
 TestInvalidArchive()
 TestMasks()
-TestArchiveWithManyFiles()
-TestBigArchiveRandomOrder(['-o', 'direct_io'])
-TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
-TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
+
+if '--fast' not in sys.argv:
+    TestArchiveWithManyFiles()
+    TestBigArchiveRandomOrder(['-o', 'direct_io'])
+    TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
+    TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
 
 if error_count:
     LogError(f'FAIL: There were {error_count} errors')
