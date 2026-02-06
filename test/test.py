@@ -701,23 +701,30 @@ def TestArchiveWithOptions(options=[]):
             '.': {'mode': 'drwxr-xr-x'},
             'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'}
         },
-        'zeroes-256mib.tar.gz': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-            'zeroes': {'mode': '-rw-r--r--', 'mtime': 1630037295000000000, 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2'},
-        },
         'dot-slash-foo.tar': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'foo': {'mode': '-rw-r--r--', 'mtime': 1641016352000000000, 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
         },
-        'sparse.tar.gz': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-            # https://github.com/google/fuse-archive/issues/40
-            'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
-        }
     }
 
     for zip_name, want_tree in want_trees.items():
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
+    if '--fast' not in sys.argv:
+        want_trees = {
+            'zeroes-256mib.tar.gz': {
+                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+                'zeroes': {'mode': '-rw-r--r--', 'mtime': 1630037295000000000, 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2'},
+            },
+            'sparse.tar.gz': {
+                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+                # https://github.com/google/fuse-archive/issues/40
+                'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
+            },
+        }
+
+        for zip_name, want_tree in want_trees.items():
+            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
 
 def TestHardlinks(options=[]):
