@@ -300,9 +300,6 @@ bool g_direct_io = false;
 // Number of command line arguments seen so far.
 int g_arg_count = 0;
 
-// Command line argument naming the archive file.
-std::string g_archive_path;
-
 // Path of the mount point.
 std::string g_mount_point;
 
@@ -321,12 +318,6 @@ int g_cache_fd = -1;
 
 // Size of the cache file.
 i64 g_cache_size = 0;
-
-// File descriptor returned by opening g_archive_path.
-int g_archive_fd = -1;
-
-// Size of the archive file.
-i64 g_archive_size = 0;
 
 // Decryption password.
 std::string g_password;
@@ -390,11 +381,25 @@ std::ostream& operator<<(std::ostream& out, ArchiveFormat const f) {
   return out << static_cast<int>(f);
 }
 
-ArchiveFormat g_archive_format = ArchiveFormat::NONE;
+struct ArchiveWithPath {
+  // Command line argument naming the archive file.
+  std::string path;
 
-// Number of decompression or decoding filters (e.g. `gz`, `bz2`, `br`, `uu`,
-// `b64`).
-int g_filter_count = 0;
+  // File descriptor of the opened archive file.
+  int fd = -1;
+
+  // Size of this archive file.
+  i64 size = 0;
+
+  // Format of this archive.
+  ArchiveFormat format = ArchiveFormat::NONE;
+
+  // Number of decompression or decoding filters (e.g. `gz`, `bz2`, `br`, `uu`,
+  // `b64`).
+  int filter_count = 0;
+};
+
+ArchiveWithPath g_archive;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
@@ -1164,7 +1169,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // Find the closest warm Reader that is below or at the requested position.
     Reader* best = nullptr;
     for (Reader& r : recycled) {
-      if ((g_filter_count > 0 ||
+      if ((g_archive.filter_count > 0 ||
            r.index_within_archive == want_index_within_archive) &&
           std::pair(r.index_within_archive, r.GetBufferOffset()) <=
               std::pair(want_index_within_archive, want_offset_within_entry) &&
@@ -1393,7 +1398,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   // Determines the archive format from the filename extension.
   void SetFormat() {
-    Path p = Path(g_archive_path).Split().second;
+    Path p = Path(g_archive.path).Split().second;
 
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
@@ -1497,11 +1502,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
                          void* const p,
                          const void** const out) {
     assert(p);
-    assert(g_archive_fd >= 0);
+    assert(g_archive.fd >= 0);
     Reader& r = *static_cast<Reader*>(p);
     while (true) {
       ssize_t const n =
-          pread(g_archive_fd, r.raw_bytes, sizeof(r.raw_bytes), r.raw_pos);
+          pread(g_archive.fd, r.raw_bytes, sizeof(r.raw_bytes), r.raw_pos);
       if (n >= 0) {
         r.raw_pos += n;
         r.PrintProgress();
@@ -1533,7 +1538,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         r.raw_pos += offset;
         return r.raw_pos;
       case SEEK_END:
-        r.raw_pos = g_archive_size + offset;
+        r.raw_pos = g_archive.size + offset;
         return r.raw_pos;
     }
     return ARCHIVE_FATAL;
@@ -1560,9 +1565,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     next = now + period;
-    assert(g_archive_size > 0);
-    LOG(INFO) << ProgressMessage(100 * std::min<i64>(raw_pos, g_archive_size) /
-                                 g_archive_size);
+    assert(g_archive.size > 0);
+    LOG(INFO) << ProgressMessage(100 * std::min<i64>(raw_pos, g_archive.size) /
+                                 g_archive.size);
   }
 
   // A cache of warm Readers. Libarchive is designed for streaming access, not
@@ -1988,7 +1993,7 @@ std::string GetNormalizedPath(Entry* const e) {
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive_format == ArchiveFormat::RAW && path == "data") {
+  if (g_archive.format == ArchiveFormat::RAW && path == "data") {
     return g_archive_name_without_extension.Normalized();
   }
 
@@ -2437,20 +2442,20 @@ void ResolveHardlinks() {
 }
 
 void CheckRawArchive(Archive* const a) {
-  if (g_archive_format != ArchiveFormat::NONE) {
+  if (g_archive.format != ArchiveFormat::NONE) {
     // Already checked.
     return;
   }
 
-  g_archive_format = ArchiveFormat(archive_format(a));
+  g_archive.format = ArchiveFormat(archive_format(a));
   LOG(DEBUG) << "Archive format is " << archive_format_name(a) << " ("
-             << g_archive_format << ")";
+             << g_archive.format << ")";
 
-  assert(g_filter_count == 0);
+  assert(g_archive.filter_count == 0);
   for (int i = archive_filter_count(a); i > 0;) {
     if (archive_filter_code(a, --i) != ARCHIVE_FILTER_NONE) {
-      ++g_filter_count;
-      LOG(DEBUG) << "Filter #" << g_filter_count << " is "
+      ++g_archive.filter_count;
+      LOG(DEBUG) << "Filter #" << g_archive.filter_count << " is "
                  << archive_filter_name(a, i);
     }
   }
@@ -2458,12 +2463,12 @@ void CheckRawArchive(Archive* const a) {
   // For 'raw' archives, check that at least one of the compression filters
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
-  if (g_archive_format == ArchiveFormat::RAW && g_filter_count == 0) {
+  if (g_archive.format == ArchiveFormat::RAW && g_archive.filter_count == 0) {
     LOG(ERROR) << "Cannot recognize the archive format";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
   }
 
-  if (g_filter_count > 0 && g_cache != Cache::Full) {
+  if (g_archive.filter_count > 0 && g_cache != Cache::Full) {
     LOG(WARNING) << "Using the lazycache or the nocache option with this kind "
                     "of archive can result in poor performance";
   }
@@ -2472,34 +2477,34 @@ void CheckRawArchive(Archive* const a) {
 // Opens the archive file, scans it and builds the tree representing the files
 // and directories contained in this archive.
 void BuildTree() {
-  if (g_archive_path.empty()) {
+  if (g_archive.path.empty()) {
     LOG(ERROR) << "Missing archive_filename argument";
     throw ExitCode::GENERIC_FAILURE;
   }
 
   // Open archive file.
-  g_archive_fd = open(g_archive_path.c_str(), O_RDONLY);
-  if (g_archive_fd < 0) {
-    PLOG(ERROR) << "Cannot open " << Path(g_archive_path);
+  g_archive.fd = open(g_archive.path.c_str(), O_RDONLY);
+  if (g_archive.fd < 0) {
+    PLOG(ERROR) << "Cannot open " << Path(g_archive.path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   }
 
   // Check archive file size and type.
-  if (struct stat z; fstat(g_archive_fd, &z) != 0) {
-    PLOG(ERROR) << "Cannot stat " << Path(g_archive_path);
+  if (struct stat z; fstat(g_archive.fd, &z) != 0) {
+    PLOG(ERROR) << "Cannot stat " << Path(g_archive.path);
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   } else if (FileType const ft = GetFileType(z.st_mode); ft != FileType::File) {
-    LOG(ERROR) << "Archive " << Path(g_archive_path)
+    LOG(ERROR) << "Archive " << Path(g_archive.path)
                << " is not a regular file: It is a " << ft;
     throw ExitCode::CANNOT_OPEN_ARCHIVE;
   } else {
-    g_archive_size = z.st_size;
-    LOG(DEBUG) << "Archive file size is " << g_archive_size << " bytes";
+    g_archive.size = z.st_size;
+    LOG(DEBUG) << "Archive file size is " << g_archive.size << " bytes";
   }
 
   // Prepare a Reader to read the archive.
   Reader r;
-  r.should_print_progress = LOG_IS_ON(INFO) && g_archive_size > 0;
+  r.should_print_progress = LOG_IS_ON(INFO) && g_archive.size > 0;
 
   // Create root node.
   assert(!g_root_node);
@@ -2541,7 +2546,7 @@ void BuildTree() {
   }
 
   // Close archive file if decompressed data is already cached.
-  if (g_cache == Cache::Full && close(std::exchange(g_archive_fd, -1)) < 0) {
+  if (g_cache == Cache::Full && close(std::exchange(g_archive.fd, -1)) < 0) {
     PLOG(ERROR) << "Cannot close archive file";
   }
 }
@@ -3023,7 +3028,7 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
     case FUSE_OPT_KEY_NONOPT:
       switch (++g_arg_count) {
         case 1:
-          g_archive_path = arg;
+          g_archive.path = arg;
           return DISCARD;
 
         case 2:
@@ -3243,7 +3248,7 @@ int main(int const argc, char** const argv) try {
     return EXIT_SUCCESS;
   }
 
-  if (g_archive_path.empty()) {
+  if (g_archive.path.empty()) {
     PrintUsage();
     return EXIT_FAILURE;
   }
@@ -3252,7 +3257,7 @@ int main(int const argc, char** const argv) try {
   std::string mount_point_parent, mount_point_basename;
   bool const mount_point_specified_by_user = !g_mount_point.empty();
   if (!mount_point_specified_by_user) {
-    g_mount_point = Path(g_archive_path)
+    g_mount_point = Path(g_archive.path)
                         .WithoutTrailingSeparator()
                         .Split()
                         .second.WithoutExtension();
@@ -3306,7 +3311,7 @@ int main(int const argc, char** const argv) try {
 
   // Log some debug messages.
   if (LOG_IS_ON(DEBUG)) {
-    LOG(DEBUG) << "Loaded " << Path(g_archive_path) << " in " << timer;
+    LOG(DEBUG) << "Loaded " << Path(g_archive.path) << " in " << timer;
     LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() - 1
                << " items totalling " << i64(g_block_count) * block_size
                << " bytes";
