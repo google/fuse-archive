@@ -3,7 +3,7 @@ title: fuse-archive
 section: 1
 header: User Manual
 footer: fuse-archive 1.17
-date: August 2025
+date: February 2026
 ---
 
 # NAME
@@ -150,7 +150,7 @@ real    0m0.443s
 $ dd if=mnt/zeroes of=/dev/null status=progress
 268435456 bytes (268 MB, 256 MiB) copied, 0.836048 s, 321 MB/s
 
-$ fusermount -u mnt
+$ umount mnt
 ```
 
 For comparison, here are **archivemount**'s timings:
@@ -162,7 +162,7 @@ real    0m0.581s
 $ dd if=mnt/zeroes of=/dev/null status=progress
 268435456 bytes (268 MB, 256 MiB) copied, 570.146 s, 471 kB/s
 
-$ fusermount -u mnt
+$ umount mnt
 ```
 
 In this case, **fuse-archive** takes about the same time to load the archive as

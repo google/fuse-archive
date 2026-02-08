@@ -156,7 +156,7 @@ def MountArchiveAndGetTree(zip_name, options=[], password='', use_md5=True):
             return GetTree(mount_point, use_md5=use_md5), os.statvfs(mount_point)
         finally:
             logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-            subprocess.run(['fusermount', '-u', '-z', mount_point], check=True)
+            subprocess.run(['umount', '-l', mount_point], check=True)
             logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
 
 
@@ -1094,7 +1094,7 @@ def TestBigArchiveRandomOrder(options=[]):
                 os.close(fd)
         finally:
             logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-            subprocess.run(['fusermount', '-u', '-z', mount_point], check=True)
+            subprocess.run(['umount', '-l', mount_point], check=True)
             logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
 
 
@@ -1136,7 +1136,7 @@ def TestBigArchiveStreamed(options=[]):
                 os.close(fd)
         finally:
             logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-            subprocess.run(['fusermount', '-u', '-z', mount_point], check=True)
+            subprocess.run(['umount', '-l', mount_point], check=True)
             logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
 
 
