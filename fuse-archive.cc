@@ -3224,23 +3224,8 @@ int main(int const argc, char** const argv) try {
   }
 
   if (g_version) {
-    std::cout << PROGRAM_NAME " version: " PROGRAM_VERSION "\n";
-    std::cout << "libarchive version: " << archive_version_string() << "\n";
-    if (const char* const s = archive_bzlib_version()) {
-      std::cout << "bzlib version: " << s << "\n";
-    }
-    if (const char* const s = archive_liblz4_version()) {
-      std::cout << "liblz4 version: " << s << "\n";
-    }
-    if (const char* const s = archive_liblzma_version()) {
-      std::cout << "liblzma version: " << s << "\n";
-    }
-    if (const char* const s = archive_libzstd_version()) {
-      std::cout << "libzstd version: " << s << "\n";
-    }
-    if (const char* const s = archive_zlib_version()) {
-      std::cout << "zlib version: " << s << "\n";
-    }
+    std::cout << PROGRAM_NAME " " PROGRAM_VERSION "\n";
+    std::cout << archive_version_details() << "\n";
     std::cout.flush();
 
     fuse_opt_add_arg(&args, "--version");
