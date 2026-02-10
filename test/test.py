@@ -142,7 +142,7 @@ def CanRun(args):
         return True
     except FileNotFoundError as e:
         logging.debug(f'Cannot run {args!r}: {e}')
-        logging.info(f'Will skip tests relying on the {args[0]} filter program')
+        logging.info(f'Will skip tests relying on {args[0]}')
         return False
 
 has_base64 = CanRun(['base64', '--version'])
@@ -151,6 +151,13 @@ has_compress = CanRun(['compress', '-V'])
 has_gzip = CanRun(['gzip', '--version'])
 has_lrzip = CanRun(['lrzip', '--version'])
 has_lzop = CanRun(['lzop', '--version'])
+
+sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
+has_bz2 = ' bz2lib/' in sr.stdout
+has_lz4 = ' liblz4/' in sr.stdout
+has_lzma = ' liblzma/' in sr.stdout
+has_zlib = ' zlib/' in sr.stdout
+has_zstd = ' libzstd/' in sr.stdout
 
 # Mounts the given archive, walks the mounted archive and unmounts.
 # Returns a pair where:
@@ -281,14 +288,24 @@ def TestArchiveWithOptions(options=[]):
     }
 
     zip_names = [
-        'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.bz2',
-        'archive.tar.gz', 'archive.tar.lz', 'archive.tar.lz4',
-        'archive.tar.lzma', 'archive.tar.uu', 'archive.tar.xz',
-        'archive.tar.zst', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
-        'archive.tgz', 'archive.tlz', 'archive.tlzip', 'archive.tlz4',
-        'archive.tlzma', 'archive.txz', 'archive.tz2', 'archive.tzs',
-        'archive.tzst', 'archive.tzstd', 'archive.zip', 'compressed.tar',
-        'lz_is_lzip.tlz', 'lz_is_lzma.tlz']
+        'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.gz',
+        'archive.tar.lz', 'archive.tar.uu', 'archive.tgz', 'archive.tlzip',
+        'archive.zip', 'lz_is_lzip.tlz']
+
+    if has_bz2:
+        zip_names += ['archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2', 'archive.tz2']
+
+    if has_lz4:
+        zip_names += ['archive.tar.lz4', 'archive.tlz4']
+
+    if has_lzma:
+        zip_names += [
+            'archive.tar.lzma', 'archive.tlz', 'archive.tlzma',
+            'lz_is_lzma.tlz', 'archive.tar.xz', 'archive.txz',
+            'compressed.tar']
+
+    if has_zstd:
+        zip_names += ['archive.tar.zst', 'archive.tzs', 'archive.tzst', 'archive.tzstd']
 
     if has_base64:
         zip_names += ['archive.tar.b64']
@@ -313,11 +330,19 @@ def TestArchiveWithOptions(options=[]):
         'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
     }
 
-    zip_names = [
-        'romeo.txt.bz2', 'romeo.txt.bzip2', 'romeo.txt.gz', 'romeo.txt.gzip',
-        'romeo.txt.lz', 'romeo.txt.lz4', 'romeo.txt.lzip', 'romeo.txt.lzma',
-        'romeo.txt.uu', 'romeo.txt.xz', 'romeo.txt.zst', 'romeo.txt.zstd',
-        'romeo.bzip2.zip', 'romeo.lzma.zip', 'romeo.xz.zip']
+    zip_names = ['romeo.txt.gz', 'romeo.txt.gzip', 'romeo.txt.lz', 'romeo.txt.lzip', 'romeo.txt.uu']
+
+    if has_bz2:
+        zip_names += ['romeo.txt.bz2', 'romeo.txt.bzip2', 'romeo.bzip2.zip', ]
+
+    if has_lz4:
+        zip_names += ['romeo.txt.lz4']
+
+    if has_lzma:
+        zip_names += ['romeo.txt.lzma', 'romeo.txt.xz', 'romeo.lzma.zip', 'romeo.xz.zip']
+
+    if has_zstd:
+        zip_names += ['romeo.txt.zst', 'romeo.txt.zstd']
 
     if has_base64:
         zip_names += ['romeo.txt.b64', 'romeo.txt.base64']
