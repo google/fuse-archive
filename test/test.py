@@ -26,6 +26,8 @@ import tempfile
 import time
 
 
+logging.getLogger().setLevel('INFO')
+
 # Computes the MD5 hash of the given file.
 # Returns the MD5 hash as an hexadecimal string.
 # Throws OSError if the file cannot be read.
@@ -133,6 +135,22 @@ data_dir = os.path.join(script_dir, 'data')
 # Path of the FUSE mounter.
 mount_program = os.path.join(script_dir, '..', 'out', 'fuse-archive')
 
+def CanRun(args):
+    try:
+        subprocess.run(args, capture_output=True, check=True)
+        logging.debug(f'Can run {args!r}')
+        return True
+    except FileNotFoundError as e:
+        logging.debug(f'Cannot run {args!r}: {e}')
+        logging.info(f'Will skip tests relying on the {args[0]} filter program')
+        return False
+
+has_base64 = CanRun(['base64', '--version'])
+has_brotli = CanRun(['brotli', '--version'])
+has_compress = CanRun(['compress', '-V'])
+has_gzip = CanRun(['gzip', '--version'])
+has_lrzip = CanRun(['lrzip', '--version'])
+has_lzop = CanRun(['lzop', '--version'])
 
 # Mounts the given archive, walks the mounted archive and unmounts.
 # Returns a pair where:
@@ -262,19 +280,32 @@ def TestArchiveWithOptions(options=[]):
         'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
     }
 
-    for zip_name in [
-            'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.b64',
-            'archive.tar.br', 'archive.tbr', 'archive.tar.bz2',
-            'archive.tar.gz', 'archive.tar.lrz', 'archive.tar.lz',
-            'archive.tar.lz4', 'archive.tar.lzma', 'archive.tar.lzo',
-            'archive.tar.uu', 'archive.tar.xz', 'archive.tar.Z',
-            'archive.tar.zst', 'archive.taz', 'archive.tb2', 'archive.tbz',
-            'archive.tbz2', 'archive.tgz', 'archive.tlz', 'archive.tlzip',
-            'archive.tlz4', 'archive.tlzma', 'archive.txz', 'archive.tz',
-            'archive.tz2', 'archive.tzs', 'archive.tzst', 'archive.tzstd',
-            'archive.zip', 'compressed.tar', 'lz_is_lzip.tlz',
-            'lz_is_lzma.tlz',
-    ]:
+    zip_names = [
+        'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.bz2',
+        'archive.tar.gz', 'archive.tar.lz', 'archive.tar.lz4',
+        'archive.tar.lzma', 'archive.tar.uu', 'archive.tar.xz',
+        'archive.tar.zst', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
+        'archive.tgz', 'archive.tlz', 'archive.tlzip', 'archive.tlz4',
+        'archive.tlzma', 'archive.txz', 'archive.tz2', 'archive.tzs',
+        'archive.tzst', 'archive.tzstd', 'archive.zip', 'compressed.tar',
+        'lz_is_lzip.tlz', 'lz_is_lzma.tlz']
+
+    if has_base64:
+        zip_names += ['archive.tar.b64']
+
+    if has_brotli:
+        zip_names += ['archive.tar.br', 'archive.tbr']
+
+    if has_compress:
+        zip_names += ['archive.tar.Z', 'archive.taz', 'archive.tz']
+
+    if has_lrzip:
+        zip_names += ['archive.tar.lrz']
+
+    if has_lzop:
+        zip_names += ['archive.tar.lzo']
+
+    for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     want_tree = {
@@ -282,32 +313,28 @@ def TestArchiveWithOptions(options=[]):
         'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
     }
 
-    for zip_name in [
-        'romeo.txt.b64',
-        'romeo.txt.base64',
-        'romeo.txt.br',
-        'romeo.txt.brotli',
-        'romeo.txt.bz2',
-        'romeo.txt.bzip2',
-        'romeo.txt.gz',
-        'romeo.txt.gzip',
-        'romeo.txt.lrz',
-        'romeo.txt.lrzip',
-        'romeo.txt.lz',
-        'romeo.txt.lz4',
-        'romeo.txt.lzip',
-        'romeo.txt.lzma',
-        'romeo.txt.lzo',
-        'romeo.txt.lzop',
-        'romeo.txt.uu',
-        'romeo.txt.xz',
-        'romeo.txt.Z',
-        'romeo.txt.zst',
-        'romeo.txt.zstd',
-        'romeo.bzip2.zip',
-        'romeo.lzma.zip',
-        'romeo.xz.zip',
-    ]:
+    zip_names = [
+        'romeo.txt.bz2', 'romeo.txt.bzip2', 'romeo.txt.gz', 'romeo.txt.gzip',
+        'romeo.txt.lz', 'romeo.txt.lz4', 'romeo.txt.lzip', 'romeo.txt.lzma',
+        'romeo.txt.uu', 'romeo.txt.xz', 'romeo.txt.zst', 'romeo.txt.zstd',
+        'romeo.bzip2.zip', 'romeo.lzma.zip', 'romeo.xz.zip']
+
+    if has_base64:
+        zip_names += ['romeo.txt.b64', 'romeo.txt.base64']
+
+    if has_brotli:
+        zip_names += ['romeo.txt.br', 'romeo.txt.brotli']
+
+    if has_compress:
+        zip_names += ['romeo.txt.Z']
+
+    if has_lrzip:
+        zip_names += ['romeo.txt.lrz', 'romeo.txt.lrzip']
+
+    if has_lzop:
+        zip_names += ['romeo.txt.lzo', 'romeo.txt.lzop']
+
+    for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     want_tree = {
@@ -1374,8 +1401,6 @@ def TestExtendedAttributes(options=[]):
     }
     MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
-
-logging.getLogger().setLevel('INFO')
 
 TestArchiveWithOptions()
 TestArchiveWithOptions(['-o', 'nocache'])
