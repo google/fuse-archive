@@ -135,6 +135,8 @@ data_dir = os.path.join(script_dir, 'data')
 # Path of the FUSE mounter.
 mount_program = os.path.join(script_dir, '..', 'out', 'fuse-archive')
 
+is_fast = '--fast' in sys.argv
+
 def CanRun(args):
     try:
         subprocess.run(args, capture_output=True, check=True)
@@ -153,11 +155,18 @@ has_lrzip = CanRun(['lrzip', '--version'])
 has_lzop = CanRun(['lzop', '--version'])
 
 sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
-has_bz2 = ' bz2lib/' in sr.stdout
-has_lz4 = ' liblz4/' in sr.stdout
-has_lzma = ' liblzma/' in sr.stdout
-has_zlib = ' zlib/' in sr.stdout
-has_zstd = ' libzstd/' in sr.stdout
+
+def HasLib(name):
+    if ' ' + name + '/' in sr.stdout:
+        return True
+    logging.info(f'Will skip tests relying on {name}')
+    return False
+
+has_bz2 = HasLib('bz2lib')
+has_lz4 = HasLib('liblz4')
+has_lzma = HasLib('liblzma')
+has_zlib = HasLib('zlib')
+has_zstd = HasLib('libzstd')
 
 # Mounts the given archive, walks the mounted archive and unmounts.
 # Returns a pair where:
@@ -762,21 +771,22 @@ def TestArchiveWithOptions(options=[]):
     for zip_name, want_tree in want_trees.items():
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
-    if '--fast' not in sys.argv:
-        want_trees = {
-            'zeroes-256mib.tar.gz': {
-                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-                'zeroes': {'mode': '-rw-r--r--', 'mtime': 1630037295000000000, 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2'},
-            },
-            'sparse.tar.gz': {
-                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-                # https://github.com/google/fuse-archive/issues/40
-                'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
-            },
-        }
+    if is_fast: return
 
-        for zip_name, want_tree in want_trees.items():
-            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+    want_trees = {
+        'zeroes-256mib.tar.gz': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'zeroes': {'mode': '-rw-r--r--', 'mtime': 1630037295000000000, 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2'},
+        },
+        'sparse.tar.gz': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            # https://github.com/google/fuse-archive/issues/40
+            'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
+        },
+    }
+
+    for zip_name, want_tree in want_trees.items():
+        MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
 
 def TestHardlinks(options=[]):
@@ -1016,6 +1026,8 @@ def TestMasks():
 
 # Tests the archive with lots of files.
 def TestArchiveWithManyFiles():
+    if is_fast: return
+
     # Only check a few files: the first one, the last one, and one in the middle.
     want_tree = {
         '1': {
@@ -1092,6 +1104,7 @@ def TestArchiveWithManyFiles():
 
 # Tests that a big file can be accessed in random order.
 def TestBigArchiveRandomOrder(options=[]):
+    if is_fast or not has_zlib: return
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
@@ -1153,6 +1166,7 @@ def TestBigArchiveRandomOrder(options=[]):
 # Tests that a big file can be accessed in somewhat globally increasing order
 # even with no cache file.
 def TestBigArchiveStreamed(options=[]):
+    if is_fast or not has_zlib: return
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
@@ -1442,12 +1456,10 @@ TestExtendedAttributes(['-o', 'nocache'])
 TestExtendedAttributes(['-o', 'lazycache'])
 TestInvalidArchive()
 TestMasks()
-
-if '--fast' not in sys.argv:
-    TestArchiveWithManyFiles()
-    TestBigArchiveRandomOrder(['-o', 'direct_io'])
-    TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
-    TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
+TestArchiveWithManyFiles()
+TestBigArchiveRandomOrder(['-o', 'direct_io'])
+TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
+TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
 
 if error_count:
     LogError(f'FAIL: There were {error_count} errors')
