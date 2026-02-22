@@ -150,6 +150,7 @@ def CanRun(args):
 has_base64 = CanRun(['base64', '--version'])
 has_brotli = CanRun(['brotli', '--version'])
 has_compress = CanRun(['compress', '-V'])
+has_gpg = CanRun(['gpg', '--version'])
 has_gzip = CanRun(['gzip', '--version'])
 has_lrzip = CanRun(['lrzip', '--version'])
 has_lzop = CanRun(['lzop', '--version'])
@@ -331,6 +332,9 @@ def TestArchiveWithOptions(options=[]):
     if has_lzop:
         zip_names += ['archive.tar.lzo']
 
+    if has_gpg:
+        zip_names += ['archive.tar.gpg', 'archive.tar.pgp', 'archive.tar.asc']
+
     for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
@@ -368,6 +372,9 @@ def TestArchiveWithOptions(options=[]):
     if has_lzop:
         zip_names += ['romeo.txt.lzo', 'romeo.txt.lzop']
 
+    if has_gpg:
+        zip_names += ['romeo.txt.gpg', 'romeo.txt.pgp', 'romeo.txt.asc']
+
     for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
@@ -388,6 +395,14 @@ def TestArchiveWithOptions(options=[]):
 
     for zip_name in ['archive.iso', 'archive.iso9660']:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
+    if has_gpg:
+        want_tree = {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
+        }
+        for zip_name in ['archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc']:
+            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     want_trees = {
         # This should not be mistaken for an mtree archive.
@@ -1441,9 +1456,35 @@ def TestExtendedAttributes(options=[]):
     MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
 
-TestArchiveWithOptions()
-TestArchiveWithOptions(['-o', 'nocache'])
-TestArchiveWithOptions(['-o', 'lazycache'])
+if has_gpg:
+    subprocess.run(
+        ['gpg', '--quiet', '--import'],
+        check=True,
+        input=b'''-----BEGIN PGP PRIVATE KEY BLOCK-----
+
+lFgEaZo1fhYJKwYBBAHaRw8BAQdAluzXFhgZsK/hf+nmr5NeRwH/ErXLA7gG6r47
+GXdneYoAAP4vOlornRnpAn3s7te7GE2lf04jCHhK3KA9Rboz2Yazkg/JtBlUZXN0
+IGtleSBmb3IgZnVzZS1hcmNoaXZliJMEExYKADsWIQR9dJYXArytNdWRu4luxarS
+zF/sDgUCaZo1fgIbAwULCQgHAgIiAgYVCgkICwIEFgIDAQIeBwIXgAAKCRBuxarS
+zF/sDp0kAQCIW8TDBjBU1S0DbPfIDzQS7p/OdswpnNqF00PA+4KsWwEA6rhHSiQS
+gRlCOFj95E3KbS5tRfaGfgrUnKExlvQEWAGcXQRpmjV+EgorBgEEAZdVAQUBAQdA
+3as1UqUnET84sOAvsY5PQwt9ShODOFyx3Dt1LHDN/wUDAQgHAAD/TqX3FvTPyvXu
+LBL++L6Mz+JHDJ+oOGTkpPfU3alg9CgVKYh4BBgWCgAgFiEEfXSWFwK8rTXVkbuJ
+bsWq0sxf7A4FAmmaNX4CGwwACgkQbsWq0sxf7A66xwEAtm8rQLzLDi39vkdLNdkR
+FUW8JyI7dh1QU9A8wSOvXR0A+wbAyMqXk9eHhzBLyxs+Pk+LEK1ekZoep8zaVrZo
+3NMK
+=059l
+-----END PGP PRIVATE KEY BLOCK-----
+''')
+
+try:
+    TestArchiveWithOptions()
+    TestArchiveWithOptions(['-o', 'nocache'])
+    TestArchiveWithOptions(['-o', 'lazycache'])
+finally:
+    if has_gpg:
+        subprocess.run(['gpg', '--batch', '--yes', '--delete-secret-and-public-key', '7D74961702BCAD35D591BB896EC5AAD2CC5FEC0E'])
+
 TestHardlinks()
 TestHardlinks(['-o', 'nocache'])
 TestHardlinks(['-o', 'lazycache'])

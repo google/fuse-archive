@@ -108,6 +108,7 @@ recognizes the following extensions:
     `gzip`, `lha`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`, `lzop`,
     `xz`, `z`, `zst`, `zstd`
 *   ASCII encoding filters `b64`, `base64`, `uu`
+*   Encryption filters `asc`, `gpg`, `pgp` 
 
 If the filename extension is not recognized, then **fuse-archive** determines
 the archive format by looking at its byte contents. This heuristic works all
@@ -115,7 +116,7 @@ right most of the time, but there are corner cases for which it might get
 confused.
 
 **fuse-archive** relies on the availability of the following filter programs:
-`base64`, `brotli`, `compress`, `lrzip`, `lzop` and `grzip`.
+`base64`, `brotli`, `compress`, `gpg`, `grzip`, `lrzip` and `lzop`.
 
 # CACHING
 

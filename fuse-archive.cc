@@ -565,9 +565,10 @@ class Path : public std::string_view {
 
     // Is it a special extension?
     static std::unordered_set<std::string_view> const special_exts = {
-        "b64", "base64", "br",  "brotli", "bz2", "bzip2", "grz", "grzip",
-        "gz",  "gzip",   "lrz", "lrzip",  "lz",  "lzip",  "lz4", "lzma",
-        "lzo", "lzop",   "uu",  "xz",     "z",   "zst",   "zstd"};
+        "asc", "b64",  "base64", "br",   "brotli", "bz2",  "bzip2",
+        "gpg", "grz",  "grzip",  "gz",   "gzip",   "lrz",  "lrzip",
+        "lz",  "lzip", "lz4",    "lzma", "lzo",    "lzop", "pgp",
+        "uu",  "xz",   "z",      "zst",  "zstd"};
 
     if (special_exts.contains(ext)) {
       return Path(substr(0, last_dot)).FinalExtensionPosition();
@@ -1264,6 +1265,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     static std::unordered_map<
         std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
+        {"asc", SET_FILTER_COMMAND(gpg)},
+        {"gpg", SET_FILTER_COMMAND(gpg)},
+        {"pgp", SET_FILTER_COMMAND(gpg)},
         {"b64", SET_FILTER_COMMAND(base64)},
         {"base64", SET_FILTER_COMMAND(base64)},
         {"br", SET_FILTER_COMMAND(brotli)},
