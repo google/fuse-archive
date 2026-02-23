@@ -2112,48 +2112,52 @@ void RenameIfCollision(Node* const node) {
   }
 }
 
-Node* GetOrCreateDirNode(std::string_view const path) {
-  if (path == "/") {
-    assert(g_root_node);
-    assert(g_root_node->IsDir());
-    return g_root_node;
+Node* GetOrCreateDirNode(std::string_view path) {
+  std::vector<std::string_view> names;
+  assert(!path.empty());
+  Node* node = FindNode(path);
+  while (!node) {
+    auto const [parent_path, name] = Path(path).Split();
+    assert(!name.empty());
+    assert(!parent_path.empty());
+    names.push_back(name);
+    path = parent_path;
+    node = FindNode(path);
   }
 
-  auto const [parent_path, name] = Path(path).Split();
+  assert(node);
   Node* to_rename = nullptr;
-  Node* parent = nullptr;
 
-  if (Node* const node = FindNode(path)) {
-    if (node->IsDir()) {
-      return node;
-    }
-
+  if (!node->IsDir()) {
     // There is an existing node with the given name, but it's not a
     // directory.
     LOG(DEBUG) << "Found conflicting " << *node << " while creating Dir "
                << Path(path);
-    parent = node->parent;
 
     // Remove it from g_nodes_by_path, in order to insert it again later with a
     // different name.
     to_rename = node;
     g_nodes_by_path.erase(g_nodes_by_path.iterator_to(*node));
-  } else {
-    parent = GetOrCreateDirNode(parent_path);
+    names.push_back(node->name);
+    node = node->parent;
   }
 
-  assert(parent);
+  assert(node);
+  assert(node->IsDir());
 
-  // Create the Directory node.
-  Node* const node =
-      new Node{.name = std::string(name),
-               .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
-               .nlink = 2};
-  parent->AddChild(node);
-  assert(node->GetPath() == path);
-  [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
-  assert(ok);
-  RehashIfNecessary();
+  while (!names.empty()) {
+    // Create a Directory node.
+    Node* const child =
+        new Node{.name = std::string(names.back()),
+                .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
+                .nlink = 2};
+    node->AddChild(child);
+    node = child;
+    [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
+    assert(ok);
+    RehashIfNecessary();
+    names.pop_back();
+  }
 
   if (to_rename) {
     RenameIfCollision(to_rename);
