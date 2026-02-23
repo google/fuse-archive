@@ -28,6 +28,8 @@ import time
 
 logging.getLogger().setLevel('INFO')
 
+sys.setrecursionlimit(3000)
+
 # Computes the MD5 hash of the given file.
 # Returns the MD5 hash as an hexadecimal string.
 # Throws OSError if the file cannot be read.
@@ -1115,6 +1117,48 @@ def TestArchiveWithManyFiles():
         strict=False,
         use_md5=False,
     )
+
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x', 'nlink': 4},
+        'Too Deep': {'mode': 'drwxr-xr-x', 'nlink': 2},
+        'Too Deep/pwn.txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': 'd733c7099812e836812eaee2516fe4d4'},
+        'Too Deep/pwn (1).txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': '60657c4791d6bad79b828cf95885b7ab'},
+        'Too Deep/pwn (2).txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': 'bf88334df9e0e0ff2aa2e41a536905e6'},
+        'Too Deep/pwn (3).txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': '5973c12c78149afc457b2669063a01ee'},
+        'Too Deep/pwn (4).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': '86b64ca4b01c55db35aba63d05d42de4'},
+        'Too Deep/pwn (5).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'bfa9660c42e751b1631478b2b8a0799e'},
+        'Too Deep/pwn (6).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'ac4e96ff6f932eeff0fa488cd2c7cb81'},
+        'Too Deep/pwn (7).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': '61c2583acf5bbd88789439e189eb6613'},
+        'Too Deep/pwn (8).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'a26cdbfb1cb1798e11b9f72be3f97307'},
+        'Too Deep/pwn (9).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'fb26e5e27808aba7ffc4bc46046c5539'},
+        'a/' * 1689 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'f8aa4e298ad0a5f1143f57d81816d4e7'},
+        'a/' * 1266 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': '9bfd9b859f9ba50b1d9b06388262e303'},
+        'a/' * 949 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'a72f1c78cb94fa47b1cf1e5ff61bf2fc'},
+        'a/' * 711 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '023a9aac498629076c3b70a9c5e9d21e'},
+        'a/' * 533 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'e828c8adb2485fee6804d9eeb4a70949'},
+        'a/' * 399 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '30ee60225c4ae88dc4c7a708b0434ae7'},
+        'a/' * 299 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '6f813c0a68b4a1d68527035cb78d31b1'},
+        'a/' * 224 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '8ce0038a307defc7751be7682352e5b6'},
+        'a/' * 168 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'e450c61d70965770a797eb18861c38c9'},
+        'a/' * 126 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'a0586d7db1107edb247c831d41e6bc6d'},
+        'a/' * 94 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '62b97928b23d3c69967ea5fc74b781fa'},
+        'a/' * 70 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': 'fdcfdd3af603be0e79963bcbfc925302'},
+        'a/' * 52 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '23a39585f78225b36e149316daa2c754'},
+        'a/' * 39 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': 'b54df483600503861156d39d24c7506b'},
+        'a/' * 29 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '03ad535d68e82910913cda9458a6fc92'},
+        'a/' * 21 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '3df2a1f63aff9c6b94e4bcfb524d54f6'},
+        'a/' * 15 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': 'a5f0018e08394ace925324af0dbabc90'},
+        'a/' * 11 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '16cd80bdcb73f86e00cb626c41e44a91'},
+        'a/' * 8 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '250592824467b1aaedd83e82ca5fb194'},
+        'a/' * 6 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '35c6b99c7de34ada2e2cb80a84e40c33'},
+        'a/' * 4 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '1badee133a149d1a46a673538e238e69'},
+        'a/' * 3 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '2bfcd9de11861f7af0c01e3d91bd56dd'},
+        'a/' * 2 + 'pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '3e9fed35b8275175ae5841a24b3a5a2d'},
+        'a/pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': 'a46776ca9d8e292b7cf4358c449d258b'},
+    }
+
+    MountArchiveAndCheckTree('deep.tar', want_tree, want_blocks=1759, want_inodes=1725, strict=False)
+
 
 
 # Tests that a big file can be accessed in random order.

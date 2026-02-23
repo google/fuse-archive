@@ -705,6 +705,12 @@ class Path : public std::string_view {
       Append(&result, part);
     }
 
+    if (result.size() > PATH_MAX) {
+      std::string last_part(Path(result).Split().second);
+      result = "/Too Deep";
+      Append(&result, last_part);
+    }
+
     return result;
   }
 };

@@ -34,7 +34,7 @@ INSTALL = install
 
 all: out/$(PROJECT)
 
-check: out/$(PROJECT) test/data/big.zip test/data/collisions.zip
+check: out/$(PROJECT) test/data/big.zip test/data/collisions.zip test/data/deep.tar
 	python3 test/test.py
 
 check-fast: out/$(PROJECT)
@@ -69,5 +69,8 @@ test/data/big.zip: test/make_big_zip.py
 
 test/data/collisions.zip: test/make_collisions.py
 	python3 test/make_collisions.py
+
+test/data/deep.tar: test/make_deep.py
+	python3 test/make_deep.py
 
 .PHONY: all check clean doc install uninstall
