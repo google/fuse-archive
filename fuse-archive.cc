@@ -237,6 +237,7 @@ enum {
   KEY_FORCE,
   KEY_LAZY_CACHE,
   KEY_NO_CACHE,
+  KEY_NO_DIRS,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
   KEY_NO_HARDLINKS,
@@ -270,6 +271,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("force", KEY_FORCE),
     FUSE_OPT_KEY("lazycache", KEY_LAZY_CACHE),
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
+    FUSE_OPT_KEY("nodirs", KEY_NO_DIRS),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
     FUSE_OPT_KEY("nohardlinks", KEY_NO_HARDLINKS),
@@ -288,6 +290,7 @@ bool g_help = false;
 bool g_version = false;
 bool g_redact = false;
 bool g_force = false;
+bool g_dirs = true;
 bool g_specials = true;
 bool g_symlinks = true;
 bool g_hardlinks = true;
@@ -2130,6 +2133,8 @@ void RenameIfCollision(Node* const node) {
 }
 
 Node* GetOrCreateDirNode(std::string_view path) {
+  if (!g_dirs) return g_root_node;
+
   std::vector<std::string_view> names;
   assert(!path.empty());
   Node* node = FindNode(path);
@@ -2195,6 +2200,8 @@ bool ShouldSkip(FileType const ft) {
       return !g_symlinks;
 
     case FileType::Directory:
+      return !g_dirs;
+
     case FileType::File:
       return false;
   }
@@ -3114,6 +3121,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_cache = Cache::None;
       return DISCARD;
 
+    case KEY_NO_DIRS:
+      g_dirs = false;
+      return DISCARD;
+
     case KEY_NO_SPECIALS:
       g_specials = false;
       return DISCARD;
@@ -3211,6 +3222,7 @@ general options:
     -o force               continue despite errors
     -o lazycache           incremental caching of uncompressed data
     -o nocache             no caching of uncompressed data
+    -o nodirs              no directories
     -o nospecials          no special files (FIFOs, sockets, devices)
     -o nosymlinks          no symlinks
     -o nohardlinks         no hard links

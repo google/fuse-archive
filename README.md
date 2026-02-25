@@ -34,7 +34,7 @@ mount read-only, not read-write.
 :   Print help
 
 **-\-version** or **-V**
-:   Print version
+:   Print version info
 
 **-o quiet** or **-q**
 :   Print fewer log messages
@@ -53,6 +53,11 @@ mount read-only, not read-write.
 
 **-o nocache**
 :   No caching of uncompressed data
+
+**-o nodirs**
+:   No directories. Flatten the archive structure by presenting all its files in
+    its root directory. This might make sense if you're not interested in the
+    archive tree structure, but only in its file data, e.g. for malware scanning.
 
 **-o nospecials**
 :   Hide special files (FIFOs, sockets, devices)

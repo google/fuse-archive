@@ -1118,6 +1118,66 @@ def TestArchiveWithManyFiles():
         use_md5=False,
     )
 
+
+# Tests archives with lots of directories or with the `nodir` option.
+def TestDirectories():
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        '0.bytes': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+        'github-tags.json': {'mode': '-rw-r--r--', 'mtime': 1597241062000000000, 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
+        'hello.sh': {'mode': '-rwxr-xr-x', 'mtime': 1620022795000000000, 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
+        'αβ.txt': {'mode': '-rw-r--r--', 'mtime': 1620022605000000000, 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
+        '😻.txt': {'mode': '-rw-r--r--', 'mtime': 1620022983000000000, 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
+        'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
+        'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+    }
+
+    MountArchiveAndCheckTree('archive.tar', want_tree, want_blocks=20, want_inodes=9, options = ['-o', 'nodirs'])
+
+    if is_fast: return
+
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x', 'nlink': 2},
+        'pwn.txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': 'd733c7099812e836812eaee2516fe4d4'},
+        'pwn (1).txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': '60657c4791d6bad79b828cf95885b7ab'},
+        'pwn (2).txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': 'bf88334df9e0e0ff2aa2e41a536905e6'},
+        'pwn (3).txt': {'mode': '-rw-r--r--', 'size': 18, 'md5': '5973c12c78149afc457b2669063a01ee'},
+        'pwn (4).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': '86b64ca4b01c55db35aba63d05d42de4'},
+        'pwn (5).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'bfa9660c42e751b1631478b2b8a0799e'},
+        'pwn (6).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'ac4e96ff6f932eeff0fa488cd2c7cb81'},
+        'pwn (7).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': '61c2583acf5bbd88789439e189eb6613'},
+        'pwn (8).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'a26cdbfb1cb1798e11b9f72be3f97307'},
+        'pwn (9).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'fb26e5e27808aba7ffc4bc46046c5539'},
+        'pwn (10).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': 'f8aa4e298ad0a5f1143f57d81816d4e7'},
+        'pwn (11).txt': {'mode': '-rw-r--r--', 'size': 17, 'md5': '9bfd9b859f9ba50b1d9b06388262e303'},
+        'pwn (12).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'a72f1c78cb94fa47b1cf1e5ff61bf2fc'},
+        'pwn (13).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '023a9aac498629076c3b70a9c5e9d21e'},
+        'pwn (14).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'e828c8adb2485fee6804d9eeb4a70949'},
+        'pwn (15).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '30ee60225c4ae88dc4c7a708b0434ae7'},
+        'pwn (16).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '6f813c0a68b4a1d68527035cb78d31b1'},
+        'pwn (17).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': '8ce0038a307defc7751be7682352e5b6'},
+        'pwn (18).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'e450c61d70965770a797eb18861c38c9'},
+        'pwn (19).txt': {'mode': '-rw-r--r--', 'size': 16, 'md5': 'a0586d7db1107edb247c831d41e6bc6d'},
+        'pwn (20).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '62b97928b23d3c69967ea5fc74b781fa'},
+        'pwn (21).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': 'fdcfdd3af603be0e79963bcbfc925302'},
+        'pwn (22).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '23a39585f78225b36e149316daa2c754'},
+        'pwn (23).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': 'b54df483600503861156d39d24c7506b'},
+        'pwn (24).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '03ad535d68e82910913cda9458a6fc92'},
+        'pwn (25).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '3df2a1f63aff9c6b94e4bcfb524d54f6'},
+        'pwn (26).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': 'a5f0018e08394ace925324af0dbabc90'},
+        'pwn (27).txt': {'mode': '-rw-r--r--', 'size': 15, 'md5': '16cd80bdcb73f86e00cb626c41e44a91'},
+        'pwn (28).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '250592824467b1aaedd83e82ca5fb194'},
+        'pwn (29).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '35c6b99c7de34ada2e2cb80a84e40c33'},
+        'pwn (30).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '1badee133a149d1a46a673538e238e69'},
+        'pwn (31).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '2bfcd9de11861f7af0c01e3d91bd56dd'},
+        'pwn (32).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': '3e9fed35b8275175ae5841a24b3a5a2d'},
+        'pwn (33).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': 'a46776ca9d8e292b7cf4358c449d258b'},
+    }
+
+    MountArchiveAndCheckTree('deep.tar', want_tree, want_blocks=69, want_inodes=35, options = ['-o', 'nodirs'])
+
     want_tree = {
         '.': {'mode': 'drwxr-xr-x', 'nlink': 4},
         'Too Deep': {'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -1158,7 +1218,6 @@ def TestArchiveWithManyFiles():
     }
 
     MountArchiveAndCheckTree('deep.tar', want_tree, want_blocks=1759, want_inodes=1725, strict=False)
-
 
 
 # Tests that a big file can be accessed in random order.
@@ -1546,6 +1605,7 @@ TestExtendedAttributes(['-o', 'lazycache'])
 TestInvalidArchive()
 TestMasks()
 TestArchiveWithManyFiles()
+TestDirectories()
 TestBigArchiveRandomOrder(['-o', 'direct_io'])
 TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
 TestBigArchiveStreamed(['-o', 'nocache,direct_io'])

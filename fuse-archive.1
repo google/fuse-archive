@@ -39,7 +39,7 @@ can only mount read\-only, not read\-write.
 Print help
 .TP
 \f[B]\-\-version\f[R] or \f[B]\-V\f[R]
-Print version
+Print version info
 .TP
 \f[B]\-o quiet\f[R] or \f[B]\-q\f[R]
 Print fewer log messages
@@ -58,6 +58,13 @@ Incremental caching of uncompressed data
 .TP
 \f[B]\-o nocache\f[R]
 No caching of uncompressed data
+.TP
+\f[B]\-o nodirs\f[R]
+No directories.
+Flatten the archive structure by presenting all its files in its root
+directory.
+This might make sense if you\[cq]re not interested in the archive tree
+structure, but only in its file data, e.g.\ for malware scanning.
 .TP
 \f[B]\-o nospecials\f[R]
 Hide special files (FIFOs, sockets, devices)
@@ -129,6 +136,8 @@ Compression filters \f[CR]br\f[R], \f[CR]brotli\f[R], \f[CR]bz2\f[R],
 \f[CR]zst\f[R], \f[CR]zstd\f[R]
 .IP \[bu] 2
 ASCII encoding filters \f[CR]b64\f[R], \f[CR]base64\f[R], \f[CR]uu\f[R]
+.IP \[bu] 2
+Encryption filters \f[CR]asc\f[R], \f[CR]gpg\f[R], \f[CR]pgp\f[R]
 .PP
 If the filename extension is not recognized, then
 \f[B]fuse\-archive\f[R] determines the archive format by looking at its
@@ -138,8 +147,8 @@ cases for which it might get confused.
 .PP
 \f[B]fuse\-archive\f[R] relies on the availability of the following
 filter programs: \f[CR]base64\f[R], \f[CR]brotli\f[R],
-\f[CR]compress\f[R], \f[CR]lrzip\f[R], \f[CR]lzop\f[R] and
-\f[CR]grzip\f[R].
+\f[CR]compress\f[R], \f[CR]gpg\f[R], \f[CR]grzip\f[R], \f[CR]lrzip\f[R]
+and \f[CR]lzop\f[R].
 .SH CACHING
 By default, \f[B]fuse\-archive\f[R] decompresses and caches the whole
 archive before serving its contents.
