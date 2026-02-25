@@ -1714,30 +1714,41 @@ struct Node {
     return z;
   }
 
+  // Gets the full absolute path of this node.
   std::string GetPath() const {
+    if (!parent) {
+      assert(name == "/");
+      return "/";
+    }
+
     std::vector<const Node*> nodes;
-    nodes.reserve(10);
+    nodes.reserve(32);
 
     size_t n = 0;
     const Node* node = this;
-    while (node->parent) {
+    do {
+      assert(node->parent);
       nodes.push_back(node);
       n += node->name.size() + 1;
       node = node->parent;
-    }
+    } while (node->parent);
 
     assert(node);
     assert(!node->parent);
     assert(node->name == "/");
 
-    std::string path = node->name;
+    std::string path;
     path.reserve(n);
 
-    while (!nodes.empty()) {
-      Path::Append(&path, nodes.back()->name);
+    do {
+      assert(!nodes.empty());
+      path += '/';
+      path += nodes.back()->name;
       nodes.pop_back();
-    }
+    } while (!nodes.empty());
 
+    assert(nodes.empty());
+    assert(path.size() == n);
     return path;
   }
 
