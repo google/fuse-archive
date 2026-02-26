@@ -1757,6 +1757,20 @@ struct Node {
     return path;
   }
 
+  bool HasPath(std::string_view path) const {
+    const Node* node = this;
+
+    while (!node->IsRoot()) {
+      const auto [parent_path, name] = Path(path).Split();
+      if (node->name != name) return false;
+      path = parent_path;
+      node = node->parent;
+    }
+
+    assert(node->IsRoot());
+    return path == "/";
+  }
+
   void CacheUpTo(i64 const want_cached_size) {
     if (want_cached_size <= cached_size) {
       return;
