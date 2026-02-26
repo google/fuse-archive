@@ -55,6 +55,10 @@
 - [x] Add a rolling buffer of uncompressed data to each `Reader`.
 - [x] Handle extended attributes.
 - [x] Add a `-o noxattrs` option.
+- [x] Better handle long paths with many levels of directories (https://github.com/google/fuse-archive/issues/56).
+- [x] Add a test archive featuring deep paths.
+- [x] Add a `-o nodirs` option.
+- [x] Add a test archive containing many directories.
 - [ ] Detect "holes" in sparse files.
 - [ ] Add a `-o nosparse` option.
 - [ ] Add tests for sparse files.

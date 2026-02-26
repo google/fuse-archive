@@ -3,3 +3,4 @@ out
 test/data/big.zip
 test/data/collisions.zip
 test/data/deep.tar
+test/data/many_nodes.zip

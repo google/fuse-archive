@@ -71,7 +71,7 @@ def GetTree(root, use_md5=True):
         elif stat.S_ISBLK(mode) or stat.S_ISCHR(mode):
             line['rdev'] = st.st_rdev
         elif stat.S_ISDIR(mode):
-            for entry in os.scandir(path):
+            for entry in list(os.scandir(path)):
                 scan(entry.path, entry.stat(follow_symlinks=False))
 
         try:
@@ -1134,9 +1134,32 @@ def TestDirectories():
         'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
     }
 
-    MountArchiveAndCheckTree('archive.tar', want_tree, want_blocks=20, want_inodes=9, options = ['-o', 'nodirs'])
+    MountArchiveAndCheckTree(
+        'archive.tar',
+        want_tree,
+        want_blocks=20,
+        want_inodes=9,
+        options = ['-o', 'nodirs'],
+    )
 
     if is_fast: return
+
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x', 'nlink': 2},
+        'x': {'size': 10, 'md5': 'f192202e27e35693952bec301ecd523b'},
+        'x (1)': {'size': 10, 'md5': 'fb9113ba8af03b8576506d3bf2c5a585'},
+        'x (5000)': {'size': 10, 'md5': '2fffa4d82866abd83cb0ac8cd547cc2e'},
+        'x (9999)': {'size': 10, 'md5': 'b5d2189b64b868fa8d26dccb68c80cc8'},
+    }
+
+    MountArchiveAndCheckTree(
+        'many_nodes.zip',
+        want_tree,
+        want_blocks=20001,
+        want_inodes=10001,
+        options = ['-o', 'nodirs'],
+        strict=False,
+    )
 
     want_tree = {
         '.': {'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -1176,7 +1199,13 @@ def TestDirectories():
         'pwn (33).txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': 'a46776ca9d8e292b7cf4358c449d258b'},
     }
 
-    MountArchiveAndCheckTree('deep.tar', want_tree, want_blocks=69, want_inodes=35, options = ['-o', 'nodirs'])
+    MountArchiveAndCheckTree(
+        'deep.tar',
+        want_tree,
+        want_blocks=69,
+        want_inodes=35,
+        options = ['-o', 'nodirs'],
+    )
 
     want_tree = {
         '.': {'mode': 'drwxr-xr-x', 'nlink': 4},
@@ -1217,7 +1246,13 @@ def TestDirectories():
         'a/pwn.txt': {'mode': '-rw-r--r--', 'size': 14, 'md5': 'a46776ca9d8e292b7cf4358c449d258b'},
     }
 
-    MountArchiveAndCheckTree('deep.tar', want_tree, want_blocks=1759, want_inodes=1725, strict=False)
+    MountArchiveAndCheckTree(
+        'deep.tar',
+        want_tree,
+        want_blocks=1759,
+        want_inodes=1725,
+        strict=False,
+    )
 
 
 # Tests that a big file can be accessed in random order.

@@ -1676,6 +1676,8 @@ struct Node {
   using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<true>>;
   ByPath by_path;
 
+  bool IsRoot() const { return !parent; }
+
   FileType GetType() const { return GetFileType(mode); }
 
   bool IsDir() const { return S_ISDIR(mode); }
@@ -1719,7 +1721,7 @@ struct Node {
 
   // Gets the full absolute path of this node.
   std::string GetPath() const {
-    if (!parent) {
+    if (IsRoot()) {
       assert(name == "/");
       return "/";
     }
@@ -1730,14 +1732,14 @@ struct Node {
     size_t n = 0;
     const Node* node = this;
     do {
-      assert(node->parent);
+      assert(!node->IsRoot());
       nodes.push_back(node);
       n += node->name.size() + 1;
       node = node->parent;
-    } while (node->parent);
+    } while (!node->IsRoot());
 
     assert(node);
-    assert(!node->parent);
+    assert(node->IsRoot());
     assert(node->name == "/");
 
     std::string path;
