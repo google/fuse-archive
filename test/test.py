@@ -177,7 +177,7 @@ has_zstd = HasLib('libzstd')
 # - member 1 is the result of os.statvfs
 #
 # Throws subprocess.CalledProcessError if the archive cannot be mounted.
-def MountArchiveAndGetTree(zip_name, options=[], password='', use_md5=True):
+def MountArchiveAndGetTree(zip_name, options=[], password='', use_md5=True, get_tree=True):
     with tempfile.TemporaryDirectory() as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
@@ -190,7 +190,8 @@ def MountArchiveAndGetTree(zip_name, options=[], password='', use_md5=True):
         )
         try:
             logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
-            return GetTree(mount_point, use_md5=use_md5), os.statvfs(mount_point)
+            tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
+            return tree, os.statvfs(mount_point)
         finally:
             logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
             subprocess.run(['umount', '-l', mount_point], check=True)
@@ -215,7 +216,7 @@ def MountArchiveAndCheckTree(
     logging.info(s)
     try:
         got_tree, st = MountArchiveAndGetTree(
-            zip_name, options=options, password=password, use_md5=use_md5
+            zip_name, options=options, password=password, use_md5=use_md5, get_tree=want_tree is not None
         )
 
         want_block_size = 512
@@ -246,7 +247,7 @@ def MountArchiveAndCheckTree(
                 f'Mismatch for st.f_files: got: {st.f_files}, want: {want_inodes}'
             )
 
-        CheckTree(got_tree, want_tree, strict=strict)
+        if want_tree is not None: CheckTree(got_tree, want_tree, strict=strict)
     except subprocess.CalledProcessError as e:
         LogError(f'Cannot test {zip_name}: {e.stderr}')
 
@@ -1146,10 +1147,10 @@ def TestDirectories():
 
     want_tree = {
         '.': {'mode': 'drwxr-xr-x', 'nlink': 2},
-        'x': {'size': 10, 'md5': 'f192202e27e35693952bec301ecd523b'},
-        'x (1)': {'size': 10, 'md5': 'fb9113ba8af03b8576506d3bf2c5a585'},
-        'x (5000)': {'size': 10, 'md5': '2fffa4d82866abd83cb0ac8cd547cc2e'},
-        'x (9999)': {'size': 10, 'md5': 'b5d2189b64b868fa8d26dccb68c80cc8'},
+        'x': {'size': 11, 'md5': 'c35b0cc5c42889e0d73641ca9bba4a94'},
+        'x (1)': {'size': 11, 'md5': '195da93cb14caf19156fbed6ffbf67bd'},
+        'x (5000)': {'size': 11, 'md5': '6a4ccf8421aa25691785783138f79c19'},
+        'x (9999)': {'size': 11, 'md5': '016d3cf3f8a3a4951b2e20ca8e783d09'},
     }
 
     MountArchiveAndCheckTree(
@@ -1158,6 +1159,17 @@ def TestDirectories():
         want_blocks=20001,
         want_inodes=10001,
         options = ['-o', 'nodirs'],
+        strict=False,
+    )
+
+    # Too many directories to get the tree.
+    want_tree = None  
+
+    MountArchiveAndCheckTree(
+        'many_nodes.zip',
+        want_tree,
+        want_blocks=20020101,
+        want_inodes=20010101,
         strict=False,
     )
 

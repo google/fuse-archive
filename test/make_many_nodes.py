@@ -27,7 +27,7 @@ try:
     for i in range(100):
       print('\rWriting many_nodes.zip... %3d %%' % i, end='', flush=True)
       for j in range(100):
-        z.writestr('%02d/%02d' % (i, j) + '/x' * 2000, b'File %02d/%02d' % (i, j))
+        z.writestr('%02d/%02d' % (i, j) + '/x' * 2000, b'File %02d/%02d\n' % (i, j))
 
   print('\r\033[2KDone', flush=True)
   os.replace(tmp, os.path.join(dir, 'many_nodes.zip'))

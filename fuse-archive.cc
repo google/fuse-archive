@@ -60,6 +60,7 @@
 #include <utility>
 #include <vector>
 
+#include <boost/functional/hash.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/intrusive/unordered_set.hpp>
@@ -76,6 +77,13 @@ namespace {
 
 // Type alias for shorter code.
 using i64 = std::int64_t;
+
+template <typename... Args>
+std::string StrCat(Args&&... args) {
+  std::ostringstream out;
+  (out << ... << std::forward<Args>(args));
+  return std::move(out).str();
+}
 
 // Timer for debug logs.
 struct Timer {
@@ -415,19 +423,28 @@ gid_t const g_gid = getgid();
 using Clock = std::chrono::system_clock;
 time_t const g_now = Clock::to_time_t(Clock::now());
 
+size_t hash(std::string_view const s) {
+  size_t h = 0;
+
+  for (char const c : s) {
+    boost::hash_combine(h, c);
+  }
+
+  return h;
+}
+
 // A string view and its hashed value.
 struct HashedStringView {
   std::string_view string;
-  size_t hashed_value = std::hash<std::string_view>()(string);
-  explicit HashedStringView(std::string_view s) : string(s) {}
+  size_t string_hash = hash(string);
 };
 
 // A string and its hashed value.
 struct HashedString {
   std::string string;
-  size_t hashed_value;
+  size_t string_hash;
   HashedString(const HashedStringView& x)
-      : string(x.string), hashed_value(x.hashed_value) {}
+      : string(x.string), string_hash(x.string_hash) {}
 };
 
 // Function object that compares HashedStringView and HashedString objects for
@@ -435,7 +452,7 @@ struct HashedString {
 struct IsEqual {
   using is_transparent = std::true_type;
   bool operator()(const auto& a, const auto& b) const {
-    return a.hashed_value == b.hashed_value && a.string == b.string;
+    return a.string_hash == b.string_hash && a.string == b.string;
   }
 };
 
@@ -443,7 +460,7 @@ struct IsEqual {
 // HashedString objects.
 struct Hash {
   using is_transparent = std::true_type;
-  size_t operator()(const auto& x) const { return x.hashed_value; }
+  size_t operator()(const auto& x) const { return x.string_hash; }
 };
 
 // Set of unique (i.e. deduplicated) strings. Lazily constructed and populated.
@@ -681,17 +698,23 @@ class Path : public std::string_view {
   }
 
   // Gets normalized path.
-  std::string Normalized() const {
-    Path in = *this;
+  std::string Normalized(std::string prefix = "/") const {
+    NormalizeAppend(&prefix);
+    return prefix;
+  }
 
+  void NormalizeAppend(std::string* const to) const {
+    assert(to);
+    std::string& result = *to;
+
+    Path in = *this;
     if (in.empty()) {
-      return "/?";
+      Append(&result, "?");
+      return;
     }
 
-    std::string result = "/";
-
     if (in == ".") {
-      return result;
+      return;
     }
 
     do {
@@ -699,9 +722,15 @@ class Path : public std::string_view {
       }
     } while (in.Consume("./") || in.Consume("../"));
 
+    const size_t initial_size = result.size();
+
     // Extract part after part
-    size_type i;
-    while ((i = in.find_first_not_of('/')) != npos) {
+    while (true) {
+      size_type i = in.find_first_not_of('/');
+      if (i == npos) {
+        break;
+      }
+
       in.remove_prefix(i);
       assert(!in.empty());
 
@@ -710,22 +739,33 @@ class Path : public std::string_view {
       assert(!part.empty());
       in.remove_prefix(part.size());
 
-      part = part.substr(0, Path(part).TruncationPosition(NAME_MAX));
+      std::string_view extension;
+      if (i == npos) {
+        const size_type last_dot = Path(part).ExtensionPosition();
+        extension = part.substr(last_dot);
+        part.remove_suffix(extension.size());
+      }
+
+      part = part.substr(
+          0, Path(part).TruncationPosition(NAME_MAX - extension.size()));
 
       if (part.empty() || part == "." || part == "..") {
         part = "?";
       }
 
-      Append(&result, part);
+      if (extension.empty()) {
+        Append(&result, part);
+      } else {
+        Append(&result, StrCat(part, extension));
+      }
     }
 
     if (result.size() > PATH_MAX) {
       std::string last_part(Path(result).Split().second);
-      result = "/Too Deep";
+      result.resize(initial_size);
+      Append(&result, "Too Deep");
       Append(&result, last_part);
     }
-
-    return result;
   }
 };
 
@@ -1670,6 +1710,9 @@ struct Node {
   // root directory which has a null parent pointer.
   Node* parent = nullptr;
 
+  size_t path_length = 0;
+  size_t path_hash = 0;
+
   // Hook used to index Nodes by parent.
   using ByParent = bi::slist_member_hook<LinkMode>;
   ByParent by_parent;
@@ -1685,7 +1728,7 @@ struct Node {
   Children children;
 
   // Hooks used to index Nodes by full path.
-  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<true>>;
+  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<false>>;
   ByPath by_path;
 
   bool IsRoot() const { return !parent; }
@@ -1706,6 +1749,26 @@ struct Node {
     nlink += child->IsDir();
     child->parent = this;
     children.push_back(*child);
+  }
+
+  // Recomputes this Node's path length and hash.
+  void ComputePathHash() {
+    path_length = 0;
+    path_hash = 0;
+
+    if (!IsRoot()) {
+      path_length = parent->path_length;
+      path_hash = parent->path_hash;
+      if (!parent->IsRoot()) {
+        ++path_length;
+        boost::hash_combine(path_hash, '/');
+      }
+    }
+
+    path_length += name.size();
+    for (char const c : name) {
+      boost::hash_combine(path_hash, c);
+    }
   }
 
   i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
@@ -1772,18 +1835,28 @@ struct Node {
   bool HasPath(std::string_view path) const {
     const Node* node = this;
 
-    while (!node->IsRoot()) {
-      const auto [parent_path, name] = Path(path).Split();
-      if (node->name != name) {
-        return false;
-      }
+    if (!node->IsRoot()) {
+      while (true) {
+        if (!path.ends_with(node->name)) {
+          return false;
+        }
 
-      path = parent_path;
-      node = node->parent;
+        path.remove_suffix(node->name.size());
+        node = node->parent;
+        if (node->IsRoot()) {
+          break;
+        }
+
+        if (!path.ends_with('/')) {
+          return false;
+        }
+
+        path.remove_suffix(1);
+      }
     }
 
     assert(node->IsRoot());
-    return path == "/";
+    return path == node->name;
   }
 
   void CacheUpTo(i64 const want_cached_size) {
@@ -1871,10 +1944,24 @@ std::ostream& operator<<(std::ostream& out, const Node& n) {
 // .tar.gz that are compressed but also do not contain an explicit on-disk
 // directory of archive entries.
 
-// Path extractor for Node.
-struct GetPath {
-  using type = std::string;
-  std::string operator()(const Node& node) const { return node.GetPath(); }
+struct GetHash {
+  size_t operator()(const HashedStringView& hsv) const {
+    return hsv.string_hash;
+  }
+
+  size_t operator()(const Node& n) const { return n.path_hash; }
+};
+
+struct HasSamePath {
+  bool operator()(const Node& a, const Node& b) const {
+    return a.path_hash == b.path_hash && a.parent == b.parent &&
+           a.name == b.name;
+  }
+
+  bool operator()(const HashedStringView& hsv, const Node& n) const {
+    return hsv.string_hash == n.path_hash &&
+           hsv.string.size() == n.path_length && n.HasPath(hsv.string);
+  }
 };
 
 using NodesByPath =
@@ -1882,10 +1969,9 @@ using NodesByPath =
                       bi::member_hook<Node, Node::ByPath, &Node::by_path>,
                       bi::constant_time_size<true>,
                       bi::power_2_buckets<true>,
-                      bi::compare_hash<true>,
-                      bi::key_of_value<GetPath>,
-                      bi::equal<std::equal_to<std::string_view>>,
-                      bi::hash<std::hash<std::string_view>>>;
+                      bi::compare_hash<false>,
+                      bi::equal<HasSamePath>,
+                      bi::hash<GetHash>>;
 
 using Bucket = NodesByPath::bucket_type;
 using Buckets = std::vector<Bucket>;
@@ -1905,13 +1991,6 @@ struct Hardlink {
 
 // Hard links to resolve.
 std::vector<Hardlink> g_hardlinks_to_resolve;
-
-template <typename... Args>
-std::string StrCat(Args&&... args) {
-  std::ostringstream out;
-  (out << ... << std::forward<Args>(args));
-  return std::move(out).str();
-}
 
 std::string GetCacheDir() {
   const char* const val = std::getenv("TMPDIR");
@@ -2109,11 +2188,14 @@ void RemoveNumericSuffix(std::string& s) {
 }
 
 // Finds a node by full path.
-Node* FindNode(std::string_view const path) {
-  auto const it = g_nodes_by_path.find(Path(path).WithoutTrailingSeparator(),
-                                       g_nodes_by_path.hash_function(),
+Node* FindNode(const HashedStringView& path) {
+  auto const it = g_nodes_by_path.find(path, g_nodes_by_path.hash_function(),
                                        g_nodes_by_path.key_eq());
   return it == g_nodes_by_path.end() ? nullptr : &*it;
+}
+
+Node* FindNode(std::string_view const path) {
+  return FindNode(HashedStringView(Path(path).WithoutTrailingSeparator()));
 }
 
 void RehashIfNecessary() {
@@ -2150,6 +2232,8 @@ void RenameIfCollision(Node* const node) {
     f.assign(base, 0, Path(base).TruncationPosition(NAME_MAX - suffix.size()));
     f += suffix;
 
+    node->ComputePathHash();
+
     auto const [pos, ok] = g_nodes_by_path.insert(*node);
     if (ok) {
       LOG(DEBUG) << "Resolved conflict for " << *node;
@@ -2165,26 +2249,58 @@ void RenameIfCollision(Node* const node) {
 }
 
 Node* GetOrCreateDirNode(std::string_view path) {
-  if (!g_dirs) {
+  if (!g_dirs || path.size() <= 1) {
     return g_root_node;
   }
 
-  std::vector<std::string_view> names;
-  assert(!path.empty());
-  Node* node = FindNode(path);
-  while (!node) {
-    auto const [parent_path, name] = Path(path).Split();
-    assert(!name.empty());
-    assert(!parent_path.empty());
-    names.push_back(name);
-    path = parent_path;
-    node = FindNode(path);
+  struct Segment {
+    std::string_view name;
+    size_t begin;
+    size_t end;
+    size_t path_hash;
+  };
+
+  std::vector<Segment> segments;
+
+  {
+    segments.reserve(std::ranges::count(path, '/'));
+    size_t path_hash = 0;
+    assert(path.starts_with('/'));
+
+    size_t i = 0;
+    size_t segment_begin = i + 1;
+    boost::hash_combine(path_hash, path[i]);
+
+    while (++i < path.size()) {
+      char const c = path[i];
+      if (c == '/') {
+        assert(segment_begin < i);
+        segments.emplace_back(path.substr(segment_begin, i - segment_begin),
+                              segment_begin, i, path_hash);
+        segment_begin = i + 1;
+      }
+      boost::hash_combine(path_hash, c);
+    }
+
+    assert(segment_begin < i);
+    segments.emplace_back(path.substr(segment_begin, i - segment_begin),
+                          segment_begin, i, path_hash);
   }
 
-  assert(node);
-  Node* to_rename = nullptr;
+  Node* node = nullptr;
+  size_t i = segments.size();
+  while (!node && i > 0) {
+    const Segment& segment = segments[--i];
+    node = FindNode(
+        HashedStringView(path.substr(0, segment.end), segment.path_hash));
+  }
 
-  if (!node->IsDir()) {
+  Node* to_rename = nullptr;
+  if (!node) {
+    assert(i == 0);
+    node = g_root_node;
+    --i;
+  } else if (!node->IsDir()) {
     // There is an existing node with the given name, but it's not a
     // directory.
     LOG(DEBUG) << "Found conflicting " << *node << " while creating Dir "
@@ -2194,25 +2310,29 @@ Node* GetOrCreateDirNode(std::string_view path) {
     // different name.
     to_rename = node;
     g_nodes_by_path.erase(g_nodes_by_path.iterator_to(*node));
-    names.push_back(node->name);
     node = node->parent;
+    --i;
   }
 
   assert(node);
   assert(node->IsDir());
 
-  while (!names.empty()) {
+  while (++i < segments.size()) {
+    const Segment& segment = segments[i];
     // Create a Directory node.
     Node* const child = new Node{
-        .name = std::string(names.back()),
+        .name = std::string(segment.name),
         .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
-        .nlink = 2};
+        .nlink = 2,
+        .path_length = segment.end,
+        .path_hash = segment.path_hash,
+    };
+
     node->AddChild(child);
     node = child;
     [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
     assert(ok);
     RehashIfNecessary();
-    names.pop_back();
   }
 
   if (to_rename) {
@@ -2394,6 +2514,7 @@ void ProcessEntry(Reader& r) {
   }
 
   parent->AddChild(node);
+  node->ComputePathHash();
 
   // Add to g_nodes_by_path.
   RenameIfCollision(node);
@@ -2515,6 +2636,9 @@ void ResolveHardlinks() {
     };
 
     parent->AddChild(node);
+    node->ComputePathHash();
+
+    // Add to g_nodes_by_path.
     RenameIfCollision(node);
 
     LOG(DEBUG) << "Resolved hard link [" << entry.index_within_archive << "] "
@@ -2595,6 +2719,7 @@ void BuildTree() {
       new Node{.name = "/",
                .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
                .nlink = 2};
+  g_root_node->ComputePathHash();
   [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*g_root_node);
   assert(ok);
 
