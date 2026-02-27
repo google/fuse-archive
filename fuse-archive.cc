@@ -488,8 +488,9 @@ const HashedString* GetOrCreateUnique(std::string_view const s) {
 std::string ToLower(std::string_view const s) {
   std::string r(s);
   for (char& c : r) {
-    if ('A' <= c && c <= 'Z')
+    if ('A' <= c && c <= 'Z') {
       c += 'a' - 'A';
+    }
   }
 
   return r;
@@ -507,8 +508,9 @@ class Path : public std::string_view {
     Path path = *this;
 
     // Don't remove the first character, even if it is a '/'.
-    while (path.size() > 1 && path.back() == '/')
+    while (path.size() > 1 && path.back() == '/') {
       path.remove_suffix(1);
+    }
 
     return path;
   }
@@ -545,12 +547,14 @@ class Path : public std::string_view {
   size_type FinalExtensionPosition() const {
     size_type const last_dot = find_last_of("/. ");
     if (last_dot == npos || at(last_dot) != '.' || last_dot == 0 ||
-        last_dot == size() - 1 || size() - last_dot > 8)
+        last_dot == size() - 1 || size() - last_dot > 8) {
       return size();
+    }
 
     if (size_type const i = find_last_not_of('.', last_dot - 1);
-        i == npos || at(i) == '/')
+        i == npos || at(i) == '/') {
       return size();
+    }
 
     return last_dot;
   }
@@ -559,8 +563,9 @@ class Path : public std::string_view {
   // extensions such as ".tar.gz".
   size_type ExtensionPosition() const {
     size_type const last_dot = FinalExtensionPosition();
-    if (last_dot >= size())
+    if (last_dot >= size()) {
       return last_dot;
+    }
 
     // Extract extension without dot and in ASCII lowercase.
     assert(at(last_dot) == '.');
@@ -592,16 +597,19 @@ class Path : public std::string_view {
   // truncating in the middle of a multi-byte UTF-8 sequence. Returns `size()`
   // if `i >= size()`.
   size_type TruncationPosition(size_type i) const {
-    if (i >= size())
+    if (i >= size()) {
       return size();
+    }
 
     while (true) {
       // Avoid truncating at a UTF-8 trailing byte.
-      while (i > 0 && (at(i) & 0b1100'0000) == 0b1000'0000)
+      while (i > 0 && (at(i) & 0b1100'0000) == 0b1000'0000) {
         --i;
+      }
 
-      if (i == 0)
+      if (i == 0) {
         return i;
+      }
 
       std::string_view const zero_width_joiner = "\u200D";
 
@@ -637,8 +645,9 @@ class Path : public std::string_view {
   static void Append(std::string* const head, std::string_view const tail) {
     assert(head);
 
-    if (tail.empty())
+    if (tail.empty()) {
       return;
+    }
 
     if (head->empty() || tail.starts_with('/')) {
       *head = tail;
@@ -648,8 +657,9 @@ class Path : public std::string_view {
     assert(!head->empty());
     assert(!tail.empty());
 
-    if (!head->ends_with('/'))
+    if (!head->ends_with('/')) {
       *head += '/';
+    }
 
     *head += tail;
   }
@@ -702,8 +712,9 @@ class Path : public std::string_view {
 
       part = part.substr(0, Path(part).TruncationPosition(NAME_MAX));
 
-      if (part.empty() || part == "." || part == "..")
+      if (part.empty() || part == "." || part == "..") {
         part = "?";
+      }
 
       Append(&result, part);
     }
@@ -719,8 +730,9 @@ class Path : public std::string_view {
 };
 
 std::ostream& operator<<(std::ostream& out, Path const path) {
-  if (g_redact)
+  if (g_redact) {
     return out << "(redacted)";
+  }
 
   out.put('\'');
   for (char const c : path) {
@@ -1762,7 +1774,10 @@ struct Node {
 
     while (!node->IsRoot()) {
       const auto [parent_path, name] = Path(path).Split();
-      if (node->name != name) return false;
+      if (node->name != name) {
+        return false;
+      }
+
       path = parent_path;
       node = node->parent;
     }
@@ -2143,13 +2158,16 @@ void RenameIfCollision(Node* const node) {
     }
 
     LOG(DEBUG) << *node << " conflicts with " << *pos;
-    if (!i)
+    if (!i) {
       i = &pos->collision_count;
+    }
   }
 }
 
 Node* GetOrCreateDirNode(std::string_view path) {
-  if (!g_dirs) return g_root_node;
+  if (!g_dirs) {
+    return g_root_node;
+  }
 
   std::vector<std::string_view> names;
   assert(!path.empty());
@@ -2185,10 +2203,10 @@ Node* GetOrCreateDirNode(std::string_view path) {
 
   while (!names.empty()) {
     // Create a Directory node.
-    Node* const child =
-        new Node{.name = std::string(names.back()),
-                .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
-                .nlink = 2};
+    Node* const child = new Node{
+        .name = std::string(names.back()),
+        .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
+        .nlink = 2};
     node->AddChild(child);
     node = child;
     [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
@@ -3064,21 +3082,21 @@ void* Init(fuse_conn_info*, fuse_config* const cfg) {
 #endif
 
 fuse_operations const operations = {
-  .getattr = GetAttr,
-  .readlink = ReadLink,
-  .open = Open,
-  .read = Read,
-  .statfs = StatFs,
-  .release = Release,
-  .getxattr = GetXattr,
-  .listxattr = ListXattr,
-  .opendir = OpenDir,
-  .readdir = ReadDir,
+    .getattr = GetAttr,
+    .readlink = ReadLink,
+    .open = Open,
+    .read = Read,
+    .statfs = StatFs,
+    .release = Release,
+    .getxattr = GetXattr,
+    .listxattr = ListXattr,
+    .opendir = OpenDir,
+    .readdir = ReadDir,
 #if FUSE_USE_VERSION >= 30
-  .init = Init,
+    .init = Init,
 #else
-  .flag_nullpath_ok = true,
-  .flag_nopath = true,
+    .flag_nullpath_ok = true,
+    .flag_nopath = true,
 #endif
 };
 
@@ -3249,7 +3267,8 @@ general options:
                R"(
     -o direct_io           use direct I/O)"
 #endif
-      "\n\n" << std::flush;
+               "\n\n"
+            << std::flush;
 }
 
 }  // namespace
