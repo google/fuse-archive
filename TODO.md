@@ -59,6 +59,8 @@
 - [x] Add a test archive featuring deep paths.
 - [x] Add a `-o nodirs` option.
 - [x] Add a test archive containing many directories.
+- [x] Honor SGID, SUID and SVTX bits with `-o default_permissions` (https://github.com/google/fuse-archive/issues/57).
+- [ ] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
 - [ ] Detect "holes" in sparse files.
 - [ ] Add a `-o nosparse` option.
 - [ ] Add tests for sparse files.

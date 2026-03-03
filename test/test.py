@@ -1456,6 +1456,19 @@ def TestArchiveWithSpecialFiles():
     # Test -o default_permissions
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'block': {'mode': 'brw-r-----', 'uid': 0, 'gid': 6, 'rdev': 2049},
+        'char': {'mode': 'crw-------', 'uid': 0, 'gid': 5, 'rdev': 1024},
+        'fifo': {'mode': 'prw-r--r--', 'uid': 1000, 'gid': 1000},
+        'regular': {'mode': '-rw-r--r--', 'uid': 1000, 'gid': 1000, 'size': 32, 'md5': '456e611a5420b7dd09bae143a7b2deb0'},
+        'symlink': {'mode': 'lrwxr-xr-x', 'uid': 1000, 'gid': 1000, 'target': 'regular'},
+    }
+
+    MountArchiveAndCheckTree(
+        zip_name, want_tree, want_blocks=8, want_inodes=6, options=['-o', 'default_permissions'],)
+
+    # Test -o default_permissions,fmask=0
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
         'block': {'mode': 'brw-rw----', 'uid': 0, 'gid': 6, 'rdev': 2049},
         'char': {'mode': 'crw--w----', 'uid': 0, 'gid': 5, 'rdev': 1024},
         'fifo': {'mode': 'prw-r--r--', 'uid': 1000, 'gid': 1000},
@@ -1464,7 +1477,7 @@ def TestArchiveWithSpecialFiles():
     }
 
     MountArchiveAndCheckTree(
-        zip_name, want_tree, want_blocks=8, want_inodes=6, options=['-o', 'default_permissions'],)
+        zip_name, want_tree, want_blocks=8, want_inodes=6, options=['-o', 'default_permissions,fmask=0'],)
 
     # Test -o nosymlinks
     want_tree = {

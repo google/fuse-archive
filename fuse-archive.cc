@@ -2340,9 +2340,9 @@ void ProcessEntry(Reader& r) {
     if (g_default_permissions) {
       node->uid = archive_entry_uid(e);
       node->gid = archive_entry_gid(e);
-      mode_t const pbits = 0777;
+      mode_t const pbits = 07777;
       node->mode &= ~pbits;
-      node->mode |= mode & pbits;
+      node->mode |= mode & pbits & ~g_options.dmask;
     }
 
     return;
@@ -2367,9 +2367,9 @@ void ProcessEntry(Reader& r) {
   if (g_default_permissions) {
     node->uid = archive_entry_uid(e);
     node->gid = archive_entry_gid(e);
-    mode_t const pbits = 0777;
+    mode_t const pbits = 07777;
     node->mode &= ~pbits;
-    node->mode |= mode & pbits;
+    node->mode |= mode & pbits & ~g_options.fmask;
   } else if (mode_t const xbits = 0111; (mode & xbits) != 0) {
     // Adjust the access bits if the file is executable.
     node->mode |= xbits & ~g_options.fmask;
