@@ -3,20 +3,21 @@ title: fuse-archive
 section: 1
 header: User Manual
 footer: fuse-archive 1.19
-date: February 2026
+date: March 2026
 ---
 
 # NAME
 
-**fuse-archive** - Mount an archive or compressed file as a FUSE file system.
+**fuse-archive** - Mount archives as a read-only FUSE file system.
 
 # SYNOPSIS
 
-**fuse-archive** [*options*] *archive-file* [*mount-point*]
+* **fuse-archive** [*options*] *archive* [*mount_point*]
+* **fuse-archive** [*options*] *archive* ... *mount_point*
 
 # DESCRIPTION
 
-**fuse-archive** is a program that serves an archive or compressed file (e.g.
+**fuse-archive** serves one or several archives or compressed files (e.g.
 `foo.tar`, `foo.tar.gz`, `foo.xz` or `foo.zip`) as a read-only
 [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) file system.
 
@@ -97,7 +98,7 @@ mount read-only, not read-write.
 
 # ARCHIVE FORMATS
 
-**fuse-archive** determines the archive format from its filename extension. It
+**fuse-archive** determines an archive format from its filename extension. It
 recognizes the following extensions:
 
 *   Archive formats `7z`, `7zip`, `a`, `ar`, `cab`, `cpio`, `deb`, `iso`,

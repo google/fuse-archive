@@ -158,7 +158,7 @@ class Logger {
   }
 
   Logger&& operator<<(ProgressMessage const a) && {
-    oss_ << "Loading " << static_cast<int>(a) << "%";
+    oss_ << static_cast<int>(a) << "%";
     ephemeral_ = true;
     return std::move(*this);
   }
@@ -308,9 +308,6 @@ bool g_default_permissions = false;
 bool g_direct_io = false;
 #endif
 
-// Number of command line arguments seen so far.
-int g_arg_count = 0;
-
 // Path of the mount point.
 std::string g_mount_point;
 
@@ -391,26 +388,6 @@ std::ostream& operator<<(std::ostream& out, ArchiveFormat const f) {
   }
   return out << static_cast<int>(f);
 }
-
-struct ArchiveWithPath {
-  // Command line argument naming the archive file.
-  std::string path;
-
-  // File descriptor of the opened archive file.
-  int fd = -1;
-
-  // Size of this archive file.
-  i64 size = 0;
-
-  // Format of this archive.
-  ArchiveFormat format = ArchiveFormat::NONE;
-
-  // Number of decompression or decoding filters (e.g. `gz`, `bz2`, `br`, `uu`,
-  // `b64`).
-  int filter_count = 0;
-};
-
-ArchiveWithPath g_archive;
 
 // g_uid and g_gid are the user/group IDs for the files we serve. They're the
 // same as the current uid/gid.
@@ -797,8 +774,29 @@ std::ostream& operator<<(std::ostream& out, Path const path) {
   return out;
 }
 
-// Archive name without its extension.
-Path g_archive_name_without_extension;
+// An open archive file descriptor with other archive metadata.
+struct ArchiveDescriptor {
+  // Command line argument naming the archive file.
+  std::string path;
+
+  // Archive name without its extension.
+  Path name_without_extension;
+
+  // File descriptor of the opened archive file.
+  int fd = -1;
+
+  // Size of this archive file.
+  i64 size = 0;
+
+  // Format of this archive.
+  ArchiveFormat format = ArchiveFormat::NONE;
+
+  // Number of decompression or decoding filters (e.g. `gz`, `bz2`, `br`, `uu`,
+  // `b64`).
+  int filter_count = 0;
+};
+
+std::vector<ArchiveDescriptor> g_archives;
 
 enum class FileType : mode_t {
   BlockDevice = S_IFBLK,  // Block-oriented device
@@ -906,6 +904,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   static int count;
 
   int id = ++count;
+  ArchiveDescriptor* const descriptor;
   ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
   i64 index_within_archive = 0;
@@ -927,7 +926,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   ~Reader() { LOG(DEBUG) << "Deleted " << *this; }
 
-  Reader() {
+  Reader(ArchiveDescriptor* const descriptor) : descriptor(descriptor) {
     if (!archive) {
       LOG(ERROR) << "Out of memory";
       throw std::bad_alloc();
@@ -1223,7 +1222,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   // Returns a Reader positioned at the given offset of the given index'th entry
   // of the archive.
-  static Ptr ReuseOrCreate(i64 const want_index_within_archive,
+  static Ptr ReuseOrCreate(ArchiveDescriptor* const descriptor,
+                           i64 const want_index_within_archive,
                            i64 const want_offset_within_entry) {
     assert(want_index_within_archive > 0);
     assert(want_offset_within_entry >= 0);
@@ -1231,7 +1231,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // Find the closest warm Reader that is below or at the requested position.
     Reader* best = nullptr;
     for (Reader& r : recycled) {
-      if ((g_archive.filter_count > 0 ||
+      if (r.descriptor == descriptor &&
+          (r.descriptor->filter_count > 0 ||
            r.index_within_archive == want_index_within_archive) &&
           std::pair(r.index_within_archive, r.GetBufferOffset()) <=
               std::pair(want_index_within_archive, want_offset_within_entry) &&
@@ -1250,7 +1251,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
                  << r->offset_within_entry << " of entry "
                  << r->index_within_archive;
     } else {
-      r.reset(new Reader());
+      r.reset(new Reader(descriptor));
     }
 
     assert(r);
@@ -1261,71 +1262,79 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
  private:
-  static void Check(int const status, Archive* const a) {
+  void Check(int const status) const {
+    Archive* const a = archive.get();
+
     switch (status) {
       case ARCHIVE_OK:
         return;
+
       case ARCHIVE_WARN:
         LOG(WARNING) << GetErrorString(a);
         return;
+
       default:
         std::string_view const error = GetErrorString(a);
-        LOG(ERROR) << "Cannot open archive: " << error;
+        LOG(ERROR) << "Cannot open " << Path(descriptor->path) << ": " << error;
         ThrowExitCode(error);
         throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
     }
   }
 
-  void Check(int const status) const { Check(status, archive.get()); }
-
   // Special case for .tar files because they can be of two different formats:
   // TAR or EMPTY.
-  static void SetTarFormat(Archive* const a) {
-    Check(archive_read_support_format_empty(a), a);
-    Check(archive_read_support_format_tar(a), a);
+  void SetTarFormat() {
+    Archive* const a = archive.get();
+    Check(archive_read_support_format_empty(a));
+    Check(archive_read_support_format_tar(a));
   }
 
   // Some `.tar` archives are actually compressed TARs, even though they don't
   // have the compression extension. So, as a special case for `.tar`,
   // automatically recognize the possible compression filters.
-  static void SetPossiblyCompressedTarFormat(Archive* const a) {
-    Check(archive_read_support_filter_all(a), a);
-    SetTarFormat(a);
+  void SetPossiblyCompressedTarFormat() {
+    Archive* const a = archive.get();
+    Check(archive_read_support_filter_all(a));
+    SetTarFormat();
   }
 
   // Special case for .rar files because they can be of two different formats:
   // RAR or RAR5.
-  static void SetRarFormat(Archive* const a) {
-    Check(archive_read_support_format_rar(a), a);
-    Check(archive_read_support_format_rar5(a), a);
+  void SetRarFormat() {
+    Archive* const a = archive.get();
+    Check(archive_read_support_format_rar(a));
+    Check(archive_read_support_format_rar5(a));
   }
 
   // Special case for .rpm files.
   // https://en.wikipedia.org/wiki/RPM_Package_Manager#Binary_format
   // https://github.com/google/fuse-archive/issues/50
-  static void SetRpmFormat(Archive* const a) {
-    Check(archive_read_support_filter_rpm(a), a);
-    Check(archive_read_support_filter_gzip(a), a);
-    Check(archive_read_support_filter_lzip(a), a);
-    Check(archive_read_support_filter_lzma(a), a);
-    Check(archive_read_support_filter_xz(a), a);
-    Check(archive_read_support_filter_zstd(a), a);
-    Check(archive_read_support_format_cpio(a), a);
-    Check(archive_read_support_format_xar(a), a);
+  void SetRpmFormat() {
+    Archive* const a = archive.get();
+    Check(archive_read_support_filter_rpm(a));
+    Check(archive_read_support_filter_gzip(a));
+    Check(archive_read_support_filter_lzip(a));
+    Check(archive_read_support_filter_lzma(a));
+    Check(archive_read_support_filter_xz(a));
+    Check(archive_read_support_filter_zstd(a));
+    Check(archive_read_support_format_cpio(a));
+    Check(archive_read_support_format_xar(a));
   }
 
   bool SetFilter(std::string_view const ext) {
-#define SET_FILTER(s)                                            \
-  [](Archive* const a) {                                         \
-    Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s), a); \
+#define SET_FILTER(s)                                           \
+  [](Reader& r) {                                               \
+    Archive* const a = r.archive.get();                         \
+    r.Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s)); \
   }
-#define SET_FILTER_COMMAND(s)                                  \
-  [](Archive* const a) {                                       \
-    Check(archive_read_append_filter_program(a, #s " -d"), a); \
+#define SET_FILTER_COMMAND(s)                                 \
+  [](Reader& r) {                                             \
+    Archive* const a = r.archive.get();                       \
+    r.Check(archive_read_append_filter_program(a, #s " -d")); \
   }
 
     static std::unordered_map<
-        std::string_view, std::function<void(Archive*)>> const ext_to_filter = {
+        std::string_view, std::function<void(Reader&)>> const ext_to_filter = {
         {"asc", SET_FILTER_COMMAND(gpg)},
         {"gpg", SET_FILTER_COMMAND(gpg)},
         {"pgp", SET_FILTER_COMMAND(gpg)},
@@ -1370,26 +1379,31 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
-    it->second(archive.get());
+    it->second(*this);
     return true;
   }
 
   bool SetFormat(std::string_view const ext) {
-#define SET_COMPRESSED_TAR(s)                                    \
-  [](Archive* const a) {                                         \
-    Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s), a); \
-    SetTarFormat(a);                                             \
+#define SET_COMPRESSED_TAR(s)                                   \
+  [](Reader& r) {                                               \
+    Archive* const a = r.archive.get();                         \
+    r.Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s)); \
+    r.SetTarFormat();                                           \
   }
-#define SET_COMPRESSED_TAR_COMMAND(s)                          \
-  [](Archive* const a) {                                       \
-    Check(archive_read_append_filter_program(a, #s " -d"), a); \
-    SetTarFormat(a);                                           \
+#define SET_COMPRESSED_TAR_COMMAND(s)                         \
+  [](Reader& r) {                                             \
+    Archive* const a = r.archive.get();                       \
+    r.Check(archive_read_append_filter_program(a, #s " -d")); \
+    r.SetTarFormat();                                         \
   }
-#define SET_FORMAT(s) \
-  [](Archive* const a) { Check(archive_read_support_format_##s(a), a); }
+#define SET_FORMAT(s)                            \
+  [](Reader& r) {                                \
+    Archive* const a = r.archive.get();          \
+    r.Check(archive_read_support_format_##s(a)); \
+  }
 
     static std::unordered_map<
-        std::string_view, std::function<void(Archive*)>> const ext_to_format = {
+        std::string_view, std::function<void(Reader&)>> const ext_to_format = {
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"taz", SET_COMPRESSED_TAR(COMPRESS)},
         {"taz", SET_COMPRESSED_TAR_COMMAND(compress)},
@@ -1399,11 +1413,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"tbz2", SET_COMPRESSED_TAR(BZIP2)},
         {"tgz", SET_COMPRESSED_TAR(GZIP)},
         {"tlz",
-         [](Archive* const a) {
+         [](Reader& r) {
            // .tlz could mean .tar.lz or .tar.lzma
-           Check(archive_read_support_filter_lzip(a), a);
-           Check(archive_read_support_filter_lzma(a), a);
-           SetTarFormat(a);
+           Archive* const a = r.archive.get();
+           r.Check(archive_read_support_filter_lzip(a));
+           r.Check(archive_read_support_filter_lzma(a));
+           r.SetTarFormat();
          }},
         {"tlz4", SET_COMPRESSED_TAR(LZ4)},
         {"tlzip", SET_COMPRESSED_TAR(LZIP)},
@@ -1437,10 +1452,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"odt", SET_FORMAT(zip_seekable)},
         {"ppsx", SET_FORMAT(zip_seekable)},
         {"pptx", SET_FORMAT(zip_seekable)},
-        {"rar", SetRarFormat},
-        {"rpm", SetRpmFormat},
-        {"spm", SetRpmFormat},
-        {"tar", SetPossiblyCompressedTarFormat},
+        {"rar", &Reader::SetRarFormat},
+        {"rpm", &Reader::SetRpmFormat},
+        {"spm", &Reader::SetRpmFormat},
+        {"tar", &Reader::SetPossiblyCompressedTarFormat},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
         {"xlsx", SET_FORMAT(zip_seekable)},
@@ -1457,13 +1472,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return false;
     }
 
-    it->second(archive.get());
+    it->second(*this);
     return true;
   }
 
   // Determines the archive format from the filename extension.
   void SetFormat() {
-    Path p = Path(g_archive.path).Split().second;
+    Path p = Path(descriptor->path).Split().second;
 
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
@@ -1475,7 +1490,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       p = p.substr(0, i);
       if (id == 1) {
         LOG(DEBUG) << "Recognized format extension '" << ext << "'";
-        g_archive_name_without_extension = p;
+        descriptor->name_without_extension = p;
       }
 
       return;
@@ -1489,7 +1504,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       p = p.substr(0, i);
       if (id == 1) {
         LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
-        g_archive_name_without_extension = p;
+        descriptor->name_without_extension = p;
       }
 
       const size_t i = p.FinalExtensionPosition();
@@ -1497,9 +1512,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
         p = p.substr(0, i);
         if (id == 1) {
           LOG(DEBUG) << "Recognized format extension 'tar'";
-          g_archive_name_without_extension = p;
+          descriptor->name_without_extension = p;
         }
-        SetTarFormat(archive.get());
+        SetTarFormat();
       } else {
         Check(archive_read_support_format_raw(archive.get()));
       }
@@ -1519,7 +1534,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
           << "Cannot determine the archive format from its filename extension '"
           << ext << "'";
       LOG(WARNING) << "Trying to guess the format using the file contents...";
-      g_archive_name_without_extension = p;
+      descriptor->name_without_extension = p;
     }
 
     // Not a recognized extension. So we'll activate most of the possible
@@ -1567,11 +1582,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
                          void* const p,
                          const void** const out) {
     assert(p);
-    assert(g_archive.fd >= 0);
     Reader& r = *static_cast<Reader*>(p);
+    assert(r.descriptor);
+    assert(r.descriptor->fd >= 0);
     while (true) {
       ssize_t const n =
-          pread(g_archive.fd, r.raw_bytes, sizeof(r.raw_bytes), r.raw_pos);
+          pread(r.descriptor->fd, r.raw_bytes, sizeof(r.raw_bytes), r.raw_pos);
       if (n >= 0) {
         r.raw_pos += n;
         r.PrintProgress();
@@ -1595,6 +1611,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
                      int const whence) {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
+    assert(r.descriptor);
     switch (whence) {
       case SEEK_SET:
         r.raw_pos = offset;
@@ -1603,7 +1620,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         r.raw_pos += offset;
         return r.raw_pos;
       case SEEK_END:
-        r.raw_pos = g_archive.size + offset;
+        r.raw_pos = r.descriptor->size + offset;
         return r.raw_pos;
     }
     return ARCHIVE_FATAL;
@@ -1630,9 +1647,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     next = now + period;
-    assert(g_archive.size > 0);
-    LOG(INFO) << ProgressMessage(100 * std::min<i64>(raw_pos, g_archive.size) /
-                                 g_archive.size);
+    assert(descriptor->size > 0);
+    LOG(INFO) << "Loading " << Path(descriptor->path) << "... "
+              << ProgressMessage(100 *
+                                 std::min<i64>(raw_pos, descriptor->size) /
+                                 descriptor->size);
   }
 
   // A cache of warm Readers. Libarchive is designed for streaming access, not
@@ -1674,10 +1693,14 @@ struct Node {
   uid_t uid = g_uid;
   gid_t gid = g_gid;
 
+  // File descriptor of the archive holding the entry represented by this node,
+  // or nullptr if it is not directly represented in the archive (like any
+  // directory).
+  ArchiveDescriptor* const descriptor = nullptr;
+
   // Index of the entry represented by this node in the archive, or 0 if it is
-  // not directly represented in the archive (like the root directory, or any
-  // intermediate directory).
-  i64 index_within_archive = 0;
+  // not directly represented in the archive (like any directory).
+  i64 const index_within_archive = 0;
   i64 size = 0;
 
   // Where does the cached data start in the cache file?
@@ -1887,10 +1910,12 @@ struct Node {
     assert(cache_offset >= 0);
 
     if (!reader) {
-      reader = Reader::ReuseOrCreate(index_within_archive, cached_size);
+      reader =
+          Reader::ReuseOrCreate(descriptor, index_within_archive, cached_size);
     }
 
     assert(reader);
+    assert(reader->descriptor == descriptor);
     assert(reader->index_within_archive == index_within_archive);
 
     i64 const old_cached_size = cached_size;
@@ -2135,17 +2160,18 @@ struct FileHandle {
 
 // Validates, normalizes and returns e's path, prepending a leading "/" if it
 // doesn't already have one.
-std::string GetNormalizedPath(Entry* const e) {
+std::string GetNormalizedEntryPath(const Reader& r) {
+  Entry* const e = r.entry;
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
-  Path const path = s && *s ? s : "data";
+  Path path = s && *s ? s : "data";
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (g_archive.format == ArchiveFormat::RAW && path == "data") {
-    return g_archive_name_without_extension.Normalized();
+  if (r.descriptor->format == ArchiveFormat::RAW && path == "data") {
+    path = r.descriptor->name_without_extension;
   }
 
   return path.Normalized();
@@ -2442,7 +2468,7 @@ void ProcessEntry(Reader& r) {
   mode_t mode = archive_entry_mode(e);
   FileType const ft = GetFileType(mode);
 
-  std::string path = GetNormalizedPath(e);
+  std::string path = GetNormalizedEntryPath(r);
   if (path.empty()) {
     LOG(DEBUG) << "Skipped " << ft << " [" << i << "]: Invalid path";
     return;
@@ -2489,7 +2515,7 @@ void ProcessEntry(Reader& r) {
   // This entry is not a directory.
   auto const [parent_path, name] = Path(path).Split();
 
-  // Get or create the parent node.
+  // Get or create the parent directory node.
   Node* const parent = GetOrCreateDirNode(parent_path);
   assert(parent);
   assert(parent->IsDir());
@@ -2499,6 +2525,7 @@ void ProcessEntry(Reader& r) {
       new Node{.name = std::string(name.empty() ? "data" : name),
                .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
                                            (0666 & ~g_options.fmask)),
+               .descriptor = r.descriptor,
                .index_within_archive = i,
                .mtime = archive_entry_mtime(e)};
 
@@ -2626,6 +2653,7 @@ void ResolveHardlinks() {
         .ino = g_hardlinks ? target->ino : ++Node::count,
         .uid = target->uid,
         .gid = target->gid,
+        .descriptor = target->descriptor,
         .index_within_archive = target->index_within_archive,
         .size = target->size,
         .cache_offset = target->cache_offset,
@@ -2648,21 +2676,22 @@ void ResolveHardlinks() {
   g_hardlinks_to_resolve.clear();
 }
 
-void CheckRawArchive(Archive* const a) {
-  if (g_archive.format != ArchiveFormat::NONE) {
+void CheckRawArchive(Reader& r) {
+  if (r.descriptor->format != ArchiveFormat::NONE) {
     // Already checked.
     return;
   }
 
-  g_archive.format = ArchiveFormat(archive_format(a));
+  Archive* const a = r.archive.get();
+  r.descriptor->format = ArchiveFormat(archive_format(a));
   LOG(DEBUG) << "Archive format is " << archive_format_name(a) << " ("
-             << g_archive.format << ")";
+             << r.descriptor->format << ")";
 
-  assert(g_archive.filter_count == 0);
+  assert(r.descriptor->filter_count == 0);
   for (int i = archive_filter_count(a); i > 0;) {
     if (archive_filter_code(a, --i) != ARCHIVE_FILTER_NONE) {
-      ++g_archive.filter_count;
-      LOG(DEBUG) << "Filter #" << g_archive.filter_count << " is "
+      ++r.descriptor->filter_count;
+      LOG(DEBUG) << "Filter #" << r.descriptor->filter_count << " is "
                  << archive_filter_name(a, i);
     }
   }
@@ -2670,12 +2699,13 @@ void CheckRawArchive(Archive* const a) {
   // For 'raw' archives, check that at least one of the compression filters
   // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
   // data (e.g. foo.jpeg).
-  if (g_archive.format == ArchiveFormat::RAW && g_archive.filter_count == 0) {
+  if (r.descriptor->format == ArchiveFormat::RAW &&
+      r.descriptor->filter_count == 0) {
     LOG(ERROR) << "Cannot recognize the archive format";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
   }
 
-  if (g_archive.filter_count > 0 && g_cache != Cache::Full) {
+  if (r.descriptor->filter_count > 0 && g_cache != Cache::Full) {
     LOG(WARNING) << "Using the lazycache or the nocache option with this kind "
                     "of archive can result in poor performance";
   }
@@ -2684,34 +2714,45 @@ void CheckRawArchive(Archive* const a) {
 // Opens the archive file, scans it and builds the tree representing the files
 // and directories contained in this archive.
 void BuildTree() {
-  if (g_archive.path.empty()) {
-    LOG(ERROR) << "Missing archive_filename argument";
-    throw ExitCode::GENERIC_FAILURE;
-  }
+  for (ArchiveDescriptor& archive : g_archives) {
+    try {
+      if (archive.path.empty()) {
+        LOG(ERROR) << "Empty archive file name";
+        throw ExitCode::GENERIC_FAILURE;
+      }
 
-  // Open archive file.
-  g_archive.fd = open(g_archive.path.c_str(), O_RDONLY);
-  if (g_archive.fd < 0) {
-    PLOG(ERROR) << "Cannot open " << Path(g_archive.path);
-    throw ExitCode::CANNOT_OPEN_ARCHIVE;
-  }
+      // Open archive file.
+      archive.fd = open(archive.path.c_str(), O_RDONLY);
+      if (archive.fd < 0) {
+        PLOG(ERROR) << "Cannot open " << Path(archive.path);
+        throw ExitCode::CANNOT_OPEN_ARCHIVE;
+      }
 
-  // Check archive file size and type.
-  if (struct stat z; fstat(g_archive.fd, &z) != 0) {
-    PLOG(ERROR) << "Cannot stat " << Path(g_archive.path);
-    throw ExitCode::CANNOT_OPEN_ARCHIVE;
-  } else if (FileType const ft = GetFileType(z.st_mode); ft != FileType::File) {
-    LOG(ERROR) << "Archive " << Path(g_archive.path)
-               << " is not a regular file: It is a " << ft;
-    throw ExitCode::CANNOT_OPEN_ARCHIVE;
-  } else {
-    g_archive.size = z.st_size;
-    LOG(DEBUG) << "Archive file size is " << g_archive.size << " bytes";
-  }
+      // Check archive file size and type.
+      if (struct stat z; fstat(archive.fd, &z) != 0) {
+        PLOG(ERROR) << "Cannot stat " << Path(archive.path);
+        throw ExitCode::CANNOT_OPEN_ARCHIVE;
+      } else if (FileType const ft = GetFileType(z.st_mode);
+                 ft != FileType::File) {
+        LOG(ERROR) << "Archive " << Path(archive.path)
+                   << " is not a regular file: It is a " << ft;
+        throw ExitCode::CANNOT_OPEN_ARCHIVE;
+      } else {
+        archive.size = z.st_size;
+        LOG(DEBUG) << "File size of " << Path(archive.path) << " is "
+                   << archive.size << " bytes";
+      }
+    } catch (ExitCode const error) {
+      if (!g_force) {
+        throw;
+      }
 
-  // Prepare a Reader to read the archive.
-  Reader r;
-  r.should_print_progress = LOG_IS_ON(INFO) && g_archive.size > 0;
+      LOG(DEBUG) << "Suppressed error " << error << " because of -o force";
+      if (archive.fd >= 0 && close(std::exchange(archive.fd, -1)) < 0) {
+        PLOG(ERROR) << "Cannot close " << Path(archive.path);
+      }
+    }
+  }
 
   // Create root node.
   assert(!g_root_node);
@@ -2723,39 +2764,52 @@ void BuildTree() {
   [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*g_root_node);
   assert(ok);
 
-  // Read and process every entry of the archive.
-  try {
-    while (r.NextEntry()) {
-      CheckRawArchive(r.archive.get());
+  for (ArchiveDescriptor& archive : g_archives) {
+    if (archive.fd < 0) {
+      continue;
+    }
 
-      try {
-        ProcessEntry(r);
-      } catch (ExitCode const error) {
-        if (!g_force) {
-          throw;
+    LOG(DEBUG) << "Loading " << Path(archive.path) << "...";
+
+    try {
+      // Prepare a Reader to read the archive.
+      Reader r(&archive);
+      r.should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
+
+      // Read and process every entry of the archive.
+      while (r.NextEntry()) {
+        CheckRawArchive(r);
+
+        try {
+          ProcessEntry(r);
+        } catch (ExitCode const error) {
+          if (!g_force) {
+            throw;
+          }
+
+          LOG(DEBUG) << "Suppressed error " << error << " because of -o force";
         }
-
-        LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
       }
+
+      // Resolve hard links.
+      ResolveHardlinks();
+
+      if (g_latest_log_is_ephemeral) {
+        LOG(INFO) << "Loading " << Path(r.descriptor->path) << "... "
+                  << ProgressMessage(100);
+      }
+    } catch (ExitCode const error) {
+      if (!g_force) {
+        throw;
+      }
+
+      LOG(DEBUG) << "Suppressed error " << error << " because of -o force";
     }
 
-    // Resolve hard links.
-    ResolveHardlinks();
-
-    if (g_latest_log_is_ephemeral) {
-      LOG(INFO) << ProgressMessage(100);
+    // Close archive file if decompressed data is already cached.
+    if (g_cache == Cache::Full && close(std::exchange(archive.fd, -1)) < 0) {
+      PLOG(ERROR) << "Cannot close " << Path(archive.path);
     }
-  } catch (ExitCode const error) {
-    if (!g_force || g_nodes_by_path.size() <= 1) {
-      throw;
-    }
-
-    LOG(DEBUG) << "Suppressing error " << error << " because of -o force";
-  }
-
-  // Close archive file if decompressed data is already cached.
-  if (g_cache == Cache::Full && close(std::exchange(g_archive.fd, -1)) < 0) {
-    PLOG(ERROR) << "Cannot close archive file";
   }
 }
 
@@ -3036,6 +3090,7 @@ int Read(const char*,
 
   Reader::Ptr& r = h->reader;
   if (r) {
+    assert(r->descriptor == t->descriptor);
     assert(r->index_within_archive == t->index_within_archive);
     if (offset < r->GetBufferOffset()) {
       // libarchive is designed for streaming access, not random access. If we
@@ -3054,7 +3109,7 @@ int Read(const char*,
   }
 
   if (!r) {
-    r = Reader::ReuseOrCreate(t->index_within_archive, offset);
+    r = Reader::ReuseOrCreate(t->descriptor, t->index_within_archive, offset);
   }
 
   assert(r);
@@ -3230,23 +3285,11 @@ fuse_operations const operations = {
 int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
   constexpr int KEEP = 1;
   constexpr int DISCARD = 0;
-  constexpr int ERROR = -1;
 
   switch (key) {
     case FUSE_OPT_KEY_NONOPT:
-      switch (++g_arg_count) {
-        case 1:
-          g_archive.path = arg;
-          return DISCARD;
-
-        case 2:
-          g_mount_point = arg;
-          return DISCARD;
-
-        default:
-          LOG(ERROR) << "Too many arguments";
-          return ERROR;
-      }
+      g_archives.push_back({.path = arg});
+      return DISCARD;
 
     case KEY_HELP:
       g_help = true;
@@ -3366,8 +3409,14 @@ class NumPunct : public std::numpunct<char> {
 };
 
 void PrintUsage() {
-  std::cout << "usage: " PROGRAM_NAME
-               R"( [options] <archive_file> [mount_point]
+  std::cout
+      << R"(Mount one or several archives or compressed files as a read-only FUSE file system.
+
+Usage:
+    )" PROGRAM_NAME
+         R"( [options] archive [mount_point]
+    )" PROGRAM_NAME
+         R"( [options] archive... mount_point
 
 general options:
     -o opt,[opt...]        mount options
@@ -3389,11 +3438,11 @@ general options:
     -o dmask=M             directory permission mask in octal (default 0022)
     -o fmask=M             file permission mask in octal (default 0022))"
 #if FUSE_USE_VERSION >= 30
-               R"(
+         R"(
     -o direct_io           use direct I/O)"
 #endif
-               "\n\n"
-            << std::flush;
+         "\n\n"
+      << std::flush;
 }
 
 }  // namespace
@@ -3447,21 +3496,24 @@ int main(int const argc, char** const argv) try {
     return EXIT_SUCCESS;
   }
 
-  if (g_archive.path.empty()) {
+  if (g_archives.empty()) {
     PrintUsage();
     return EXIT_FAILURE;
   }
 
   // Determine where the mount point should be.
-  std::string mount_point_parent, mount_point_basename;
-  bool const mount_point_specified_by_user = !g_mount_point.empty();
-  if (!mount_point_specified_by_user) {
-    g_mount_point = Path(g_archive.path)
+  bool const mount_point_specified_by_user = g_archives.size() > 1;
+  if (mount_point_specified_by_user) {
+    g_mount_point = std::move(g_archives.back().path);
+    g_archives.pop_back();
+  } else {
+    g_mount_point = Path(g_archives.front().path)
                         .WithoutTrailingSeparator()
                         .Split()
                         .second.WithoutExtension();
   }
 
+  std::string mount_point_parent, mount_point_basename;
   std::tie(mount_point_parent, mount_point_basename) =
       Path(g_mount_point).WithoutTrailingSeparator().Split();
 
@@ -3510,8 +3562,13 @@ int main(int const argc, char** const argv) try {
 
   // Log some debug messages.
   if (LOG_IS_ON(DEBUG)) {
-    LOG(DEBUG) << "Loaded " << Path(g_archive.path) << " in " << timer;
-    LOG(DEBUG) << "The archive contains " << g_nodes_by_path.size() - 1
+    if (g_archives.size() > 1) {
+      LOG(DEBUG) << "Loaded " << g_archives.size() << " archives in " << timer;
+    } else {
+      LOG(DEBUG) << "Loaded " << Path(g_archives.front().path) << " in "
+                 << timer;
+    }
+    LOG(DEBUG) << "The file system contains " << g_nodes_by_path.size() - 1
                << " items totalling " << i64(g_block_count) * block_size
                << " bytes";
     if (struct stat z; g_cache == Cache::Full && fstat(g_cache_fd, &z) == 0) {
