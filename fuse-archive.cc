@@ -3345,7 +3345,7 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
 
     case KEY_DEFAULT_PERMISSIONS:
       g_default_permissions = true;
-      return KEEP;
+      return DISCARD;
 
 #if FUSE_USE_VERSION >= 30
     case KEY_DIRECT_IO:
@@ -3553,8 +3553,14 @@ int main(int const argc, char** const argv) try {
 
 #if FUSE_USE_VERSION < 30
   // Respect inode numbers.
-  fuse_opt_add_arg(&args, "-ouse_ino");
+  fuse_opt_add_arg(&args, "-o");
+  fuse_opt_add_arg(&args, "use_ino");
 #endif
+
+  if (g_default_permissions) {
+    fuse_opt_add_arg(&args, "-o");
+    fuse_opt_add_arg(&args, "default_permissions");
+  }
 
   // Read archive and build tree.
   Timer timer;

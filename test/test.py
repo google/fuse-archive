@@ -182,7 +182,7 @@ def MountArchiveAndGetTree(zip_name, options=[], password='', use_md5=True, get_
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program, *options, zip_path, mount_point],
+            [mount_program, *options, '--', zip_path, mount_point],
             check=True,
             capture_output=True,
             input=password,
@@ -303,7 +303,7 @@ def TestArchiveWithOptions(options=[]):
     zip_names = [
         'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.gz',
         'archive.tar.lz', 'archive.tar.uu', 'archive.tgz', 'archive.tlzip',
-        'archive.zip', 'lz_is_lzip.tlz']
+        'archive.zip', 'lz_is_lzip.tlz', '--help']
 
     if has_bz2:
         zip_names += ['archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2', 'archive.tz2']
@@ -1278,7 +1278,7 @@ def TestBigArchiveRandomOrder(options=[]):
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program] + options + [zip_path, mount_point],
+            [mount_program, *options, '--', zip_path, mount_point],
             check=True,
             capture_output=True,
             input='',
@@ -1340,7 +1340,7 @@ def TestBigArchiveStreamed(options=[]):
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program] + options + [zip_path, mount_point],
+            [mount_program, *options, '--', zip_path, mount_point],
             check=True,
             capture_output=True,
             input='',
