@@ -3625,7 +3625,12 @@ int main(int const argc, char** const argv) try {
   }
 
   // The mount point is in place.
-  fuse_opt_add_arg(&args, g_mount_point.c_str());
+  if (g_mount_point.starts_with('-')) {
+    // To prevent the mount point from being mistaken as a command line option.
+    fuse_opt_add_arg(&args, StrCat("./", g_mount_point).c_str());
+  } else {
+    fuse_opt_add_arg(&args, g_mount_point.c_str());
+  }
 
   // Start serving the filesystem.
   LOG(DEBUG) << "Calling fuse_main() with " << args;
