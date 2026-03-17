@@ -61,11 +61,14 @@
 - [x] Add a test archive containing many directories.
 - [x] Honor SGID, SUID and SVTX bits with `-o default_permissions` (https://github.com/google/fuse-archive/issues/57).
 - [x] Add the ability to mount several archives in the same mount point.
+- [x] Add a `-o nomerge` option to mount several archives next to each other in the same mount point.
 - [ ] Add test for mounting several archives in the same mount point.
 - [ ] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
-- [ ] Detect "holes" in sparse files.
-- [ ] Add a `-o nosparse` option.
+- [ ] Detect "holes" in sparse files (https://github.com/google/fuse-archive/issues/41).
+- [ ] Add a `-o nosparse` or `-o noholes` option.
 - [ ] Add tests for sparse files.
-- [ ] Add a `-o nomerge` option to mount several archives next to each other in the same mount point.
 - [ ] Automatically trim the top of the tree.
 - [ ] Add a `-o notrim` option to prevent trimming the tree.
+- [ ] Add a `-o memcache` option.
+- [ ] Add the ability to cache filtered ZIP and 7Z archives.
+- [ ] Add the ability to handle several filters for each archive.

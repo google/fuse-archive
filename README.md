@@ -55,6 +55,10 @@ mount read-only, not read-write.
 **-o nocache**
 :   No caching of uncompressed data
 
+**-o nomerge**
+:   Do not merge multiple archives on top of each other. Instead, create a
+    subdirectory for each archive inside the mount point.
+
 **-o nodirs**
 :   No directories. Flatten the archive structure by presenting all its files in
     its root directory. This might make sense if you're not interested in the

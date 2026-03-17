@@ -245,6 +245,7 @@ enum {
   KEY_FORCE,
   KEY_LAZY_CACHE,
   KEY_NO_CACHE,
+  KEY_NO_MERGE,
   KEY_NO_DIRS,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
@@ -279,6 +280,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("force", KEY_FORCE),
     FUSE_OPT_KEY("lazycache", KEY_LAZY_CACHE),
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
+    FUSE_OPT_KEY("nomerge", KEY_NO_MERGE),
     FUSE_OPT_KEY("nodirs", KEY_NO_DIRS),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
@@ -298,6 +300,7 @@ bool g_help = false;
 bool g_version = false;
 bool g_redact = false;
 bool g_force = false;
+bool g_merge = true;
 bool g_dirs = true;
 bool g_specials = true;
 bool g_symlinks = true;
@@ -780,7 +783,7 @@ struct ArchiveDescriptor {
   std::string path;
 
   // Archive name without its extension.
-  Path name_without_extension;
+  std::string name_without_extension;
 
   // File descriptor of the opened archive file.
   int fd = -1;
@@ -1485,10 +1488,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
     const size_t i = p.FinalExtensionPosition();
     const std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
 
+    const bool first_time = descriptor->name_without_extension.empty();
     // Does this extension signal a recognized archive format?
     if (SetFormat(ext)) {
       p = p.substr(0, i);
-      if (id == 1) {
+      if (first_time) {
         LOG(DEBUG) << "Recognized format extension '" << ext << "'";
         descriptor->name_without_extension = p;
       }
@@ -1502,7 +1506,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       // after a compression filter are TAR and RAW. Check if there is a .tar
       // extension before the compression extension.
       p = p.substr(0, i);
-      if (id == 1) {
+      if (first_time) {
         LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
         descriptor->name_without_extension = p;
       }
@@ -1510,7 +1514,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
       const size_t i = p.FinalExtensionPosition();
       if (ToLower(p.substr(std::min(i + 1, p.size()))) == "tar") {
         p = p.substr(0, i);
-        if (id == 1) {
+        if (first_time) {
           LOG(DEBUG) << "Recognized format extension 'tar'";
           descriptor->name_without_extension = p;
         }
@@ -1529,7 +1533,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
 #else
     p = p.substr(0, i);
-    if (id == 1) {
+    if (first_time) {
       LOG(WARNING)
           << "Cannot determine the archive format from its filename extension '"
           << ext << "'";
@@ -2158,23 +2162,22 @@ struct FileHandle {
 
 // ---- In-Memory Directory Tree
 
-// Validates, normalizes and returns e's path, prepending a leading "/" if it
-// doesn't already have one.
-std::string GetNormalizedEntryPath(const Reader& r) {
+// Validates and normalizes the current entry's path, and appends it to `*path`.
+void GetNormalizedEntryPath(const Reader& r, std::string* const path) {
   Entry* const e = r.entry;
   const char* const s =
       archive_entry_pathname_utf8(e) ?: archive_entry_pathname(e);
-  Path path = s && *s ? s : "data";
+  Path name = s && *s ? s : "data";
 
   // For 'raw' archives, libarchive defaults to "data" when the compression file
   // format doesn't contain the original file's name. For fuse-archive, we use
   // the archive filename's innername instead. Given an archive filename of
   // "/foo/bar.txt.bz2", the sole file within will be served as "bar.txt".
-  if (r.descriptor->format == ArchiveFormat::RAW && path == "data") {
-    path = r.descriptor->name_without_extension;
+  if (r.descriptor->format == ArchiveFormat::RAW && name == "data") {
+    name = Path(r.descriptor->name_without_extension);
   }
 
-  return path.Normalized();
+  name.NormalizeAppend(path);
 }
 
 // Checks if the given character is an ASCII digit.
@@ -2245,7 +2248,8 @@ void RenameIfCollision(Node* const node) {
 
   // Extract filename extension
   std::string& f = node->name;
-  std::string::size_type const e = Path(f).ExtensionPosition();
+  std::string::size_type const e =
+      node->IsDir() ? f.size() : Path(f).ExtensionPosition();
   std::string const ext(f, e);
   f.resize(e);
   RemoveNumericSuffix(f);
@@ -2461,27 +2465,28 @@ void CacheEntryData(Archive* const a) {
   }
 }
 
-void ProcessEntry(Reader& r) {
+void ProcessEntry(Reader& r, std::string& path) {
   Archive* const a = r.archive.get();
   Entry* const e = r.entry;
   i64 const i = r.index_within_archive;
   mode_t mode = archive_entry_mode(e);
   FileType const ft = GetFileType(mode);
 
-  std::string path = GetNormalizedEntryPath(r);
-  if (path.empty()) {
-    LOG(DEBUG) << "Skipped " << ft << " [" << i << "]: Invalid path";
-    return;
-  }
+  assert(path.starts_with('/'));
+  size_t const original_path_size = path.size();
+  GetNormalizedEntryPath(r, &path);
+  assert(path.starts_with('/'));
 
   if (const char* const s =
           archive_entry_hardlink_utf8(e) ?: archive_entry_hardlink(e)) {
     // Entry is a hard link.
     if (g_hardlinks) {
       // Save it for further resolution.
-      g_hardlinks_to_resolve.push_back({.index_within_archive = i,
-                                        .source_path = std::move(path),
-                                        .target_path = Path(s).Normalized()});
+      g_hardlinks_to_resolve.push_back({
+          .index_within_archive = i,
+          .source_path = path,
+          .target_path = Path(s).Normalized(path.substr(0, original_path_size)),
+      });
     } else {
       LOG(DEBUG) << "Skipped hard link "
                  << " [" << i << "] " << Path(path) << " -> " << Path(s);
@@ -2513,6 +2518,10 @@ void ProcessEntry(Reader& r) {
   }
 
   // This entry is not a directory.
+  if (path.size() == original_path_size) {
+    Path::Append(&path, "data");
+  }
+
   auto const [parent_path, name] = Path(path).Split();
 
   // Get or create the parent directory node.
@@ -2522,7 +2531,7 @@ void ProcessEntry(Reader& r) {
 
   // Create the node for this entry.
   Node* const node =
-      new Node{.name = std::string(name.empty() ? "data" : name),
+      new Node{.name = std::string(name),
                .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
                                            (0666 & ~g_options.fmask)),
                .descriptor = r.descriptor,
@@ -2764,6 +2773,10 @@ void BuildTree() {
   [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*g_root_node);
   assert(ok);
 
+  // Declare this variable outside of the following loop in order to keep its
+  // internal buffer.
+  std::string path;
+
   for (ArchiveDescriptor& archive : g_archives) {
     if (archive.fd < 0) {
       continue;
@@ -2776,12 +2789,35 @@ void BuildTree() {
       Reader r(&archive);
       r.should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
 
+      path = "/";
+
+      if (!g_merge) {
+        // Create a Directory node for the archive.
+        Node* const dir = new Node{
+            .name = std::string(
+                Path(archive.path).WithoutTrailingSeparator().Split().second),
+            .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
+            .nlink = 2,
+        };
+
+        g_root_node->AddChild(dir);
+        dir->ComputePathHash();
+        RenameIfCollision(dir);
+        path += dir->name;
+        assert(dir->GetPath() == path);
+
+        LOG(DEBUG) << "Created " << *dir;
+      }
+
+      size_t const original_path_size = path.size();
+
       // Read and process every entry of the archive.
       while (r.NextEntry()) {
         CheckRawArchive(r);
 
         try {
-          ProcessEntry(r);
+          path.resize(original_path_size);
+          ProcessEntry(r, path);
         } catch (ExitCode const error) {
           if (!g_force) {
             throw;
@@ -3323,6 +3359,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_cache = Cache::None;
       return DISCARD;
 
+    case KEY_NO_MERGE:
+      g_merge = false;
+      return DISCARD;
+
     case KEY_NO_DIRS:
       g_dirs = false;
       return DISCARD;
@@ -3430,6 +3470,7 @@ general options:
     -o force               continue despite errors
     -o lazycache           incremental caching of uncompressed data
     -o nocache             no caching of uncompressed data
+    -o nomerge             don't merge multiple archives in the same directory
     -o nodirs              no directories
     -o nospecials          no special files (FIFOs, sockets, devices)
     -o nosymlinks          no symlinks
