@@ -59,6 +59,10 @@ mount read-only, not read-write.
 :   Do not merge multiple archives on top of each other. Instead, create a
     subdirectory for each archive inside the mount point.
 
+**-o notrim**
+:   Do not trim the base of the tree. Keep all the intermediate directories as
+    specified in the archive(s).
+
 **-o nodirs**
 :   No directories. Flatten the archive structure by presenting all its files in
     its root directory. This might make sense if you're not interested in the

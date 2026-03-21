@@ -171,37 +171,40 @@ has_lzma = HasLib('liblzma')
 has_zlib = HasLib('zlib')
 has_zstd = HasLib('libzstd')
 
-# Mounts the given archive, walks the mounted archive and unmounts.
+# Mounts the given archive(s), walks the mounted archive and unmounts.
 # Returns a pair where:
 # - member 0 is a dict representing the mounted archive.
 # - member 1 is the result of os.statvfs
 #
 # Throws subprocess.CalledProcessError if the archive cannot be mounted.
-def MountArchiveAndGetTree(zip_name, options=[], password='', use_md5=True, get_tree=True):
+def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get_tree=True):
     with tempfile.TemporaryDirectory() as mount_point:
-        zip_path = os.path.join(script_dir, 'data', zip_name)
-        logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
+        if type(zip_names) is not list: zip_names = [zip_names]
+        zip_paths = [
+            os.path.join(script_dir, 'data', zip_name) for zip_name in zip_names
+        ]
+        logging.debug(f'Mounting {zip_paths!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program, *options, '--', zip_path, mount_point],
+            [mount_program, *options, '--', *zip_paths, mount_point],
             check=True,
             capture_output=True,
             input=password,
             encoding='UTF-8',
         )
         try:
-            logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
+            logging.debug(f'Mounted archive {zip_paths!r} on {mount_point!r}')
             tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
             return tree, os.statvfs(mount_point)
         finally:
-            logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
+            logging.debug(f'Unmounting {zip_paths!r} from {mount_point!r}...')
             subprocess.run(['umount', '-l', mount_point], check=True)
-            logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
+            logging.debug(f'Unmounted {zip_paths!r} from {mount_point!r}')
 
 
-# Mounts the given archive, checks the mounted archive tree and unmounts.
+# Mounts the given archive(s), checks the mounted archive tree and unmounts.
 # Logs an error if the archive cannot be mounted.
 def MountArchiveAndCheckTree(
-    zip_name,
+    zip_names,
     want_tree,
     want_blocks=None,
     want_inodes=None,
@@ -210,13 +213,13 @@ def MountArchiveAndCheckTree(
     strict=True,
     use_md5=True,
 ):
-    s = f'Test {zip_name!r}'
+    s = f'Test {zip_names!r}'
     if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
     logging.info(s)
     try:
         got_tree, st = MountArchiveAndGetTree(
-            zip_name, options=options, password=password, use_md5=use_md5, get_tree=want_tree is not None
+            zip_names, options=options, password=password, use_md5=use_md5, get_tree=want_tree is not None
         )
 
         want_block_size = 512
@@ -249,19 +252,19 @@ def MountArchiveAndCheckTree(
 
         if want_tree is not None: CheckTree(got_tree, want_tree, strict=strict)
     except subprocess.CalledProcessError as e:
-        LogError(f'Cannot test {zip_name}: {e.stderr}')
+        LogError(f'Cannot test {zip_names}: {e.stderr}')
 
 
-# Try to mount the given archive, and expects an error.
+# Try to mount the given archive(s), and expects an error.
 # Logs an error if the archive can be mounted, or if the returned error code doesn't match.
-def CheckArchiveMountingError(zip_name, want_error_code, options=[], password=''):
-    s = f'Test {zip_name!r}'
+def CheckArchiveMountingError(zip_names, want_error_code, options=[], password=''):
+    s = f'Test {zip_names!r}'
     if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
     logging.info(s)
     try:
         got_tree, _ = MountArchiveAndGetTree(
-            zip_name, options=options, password=password
+            zip_names, options=options, password=password
         )
         LogError(f'Want error, Got tree: {got_tree}')
     except subprocess.CalledProcessError as e:
@@ -829,6 +832,40 @@ def TestHardlinks(options=[]):
     MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=15, want_inodes=5, options=options)
 
     want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
+        'hardlinks.tgz': {'ino': 2, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
+        'hardlinks.tgz/Dir1': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
+        'hardlinks.tgz/Dir1': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
+        'hardlinks.tgz/Dir1/Dir2': {'ino': 5, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
+        'hardlinks.tgz/Dir1/Dir2/File': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/Dir1/File': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/File1': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/File2': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/File3': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/File4': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/File5': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/Symlink1': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks.tgz/Symlink2': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks.tgz/Symlink3': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks.tgz (1)': {'ino': 7, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
+        'hardlinks.tgz (1)/Dir1': {'ino': 9, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
+        'hardlinks.tgz (1)/Dir1': {'ino': 9, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
+        'hardlinks.tgz (1)/Dir1/Dir2': {'ino': 10, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
+        'hardlinks.tgz (1)/Dir1/Dir2/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/Dir1/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/File1': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/File2': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/File3': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/File4': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/File5': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/Symlink1': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks.tgz (1)/Symlink2': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks.tgz (1)/Symlink3': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+    }
+
+    MountArchiveAndCheckTree([zip_name, zip_name], want_tree, want_blocks=31, want_inodes=11, options=[*options, '-o', 'nomerge'])
+
+    want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
         'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
         'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
@@ -836,7 +873,7 @@ def TestHardlinks(options=[]):
         'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
     }
 
-    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=7, want_inodes=5, options=options + ['-o', 'nohardlinks'])
+    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=7, want_inodes=5, options=[*options, '-o', 'nohardlinks'])
 
 
 # Tests dmask and fmask.
@@ -1075,39 +1112,17 @@ def TestArchiveWithManyFiles():
     )
 
     want_tree = {
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (1)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (2)': {
-            'size': 18,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (3)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (4)': {
-            'size': 19,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (5)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (50000)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (99999)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (100000)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (100001)': {
-            'size': 0,
-        },
-        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (100002)': {
-            'size': 8,
-        },
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (1)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (2)': {'size': 18},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (3)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (4)': {'size': 19},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (5)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (50000)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (99999)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (100000)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (100001)': {'size': 0},
+        'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (100002)': {'size': 8},
     }
 
     MountArchiveAndCheckTree(
@@ -1117,10 +1132,34 @@ def TestArchiveWithManyFiles():
         want_inodes=100014,
         strict=False,
         use_md5=False,
+        options=['-o', 'notrim'],
+    )
+
+    want_tree = {
+        'There are many versions of this file': {'size': 0},
+        'There are many versions of this file (1)': {'size': 0},
+        'There are many versions of this file (2)': {'size': 18},
+        'There are many versions of this file (3)': {'size': 0},
+        'There are many versions of this file (4)': {'size': 19},
+        'There are many versions of this file (5)': {'size': 0},
+        'There are many versions of this file (50000)': {'size': 0},
+        'There are many versions of this file (99999)': {'size': 0},
+        'There are many versions of this file (100000)': {'size': 0},
+        'There are many versions of this file (100001)': {'size': 0},
+        'There are many versions of this file (100002)': {'size': 8},
+    }
+
+    MountArchiveAndCheckTree(
+        'collisions.zip',
+        want_tree,
+        want_blocks=100007,
+        want_inodes=100004,
+        strict=False,
+        use_md5=False,
     )
 
 
-# Tests archives with lots of directories or with the `nodir` option.
+# Tests archives with lots of directories or with the `nodirs` option.
 def TestDirectories():
 
     want_tree = {

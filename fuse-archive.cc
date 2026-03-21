@@ -246,6 +246,7 @@ enum {
   KEY_LAZY_CACHE,
   KEY_NO_CACHE,
   KEY_NO_MERGE,
+  KEY_NO_TRIM,
   KEY_NO_DIRS,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
@@ -281,6 +282,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("lazycache", KEY_LAZY_CACHE),
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nomerge", KEY_NO_MERGE),
+    FUSE_OPT_KEY("notrim", KEY_NO_TRIM),
     FUSE_OPT_KEY("nodirs", KEY_NO_DIRS),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
@@ -301,6 +303,7 @@ bool g_version = false;
 bool g_redact = false;
 bool g_force = false;
 bool g_merge = true;
+bool g_trim = true;
 bool g_dirs = true;
 bool g_specials = true;
 bool g_symlinks = true;
@@ -843,6 +846,10 @@ constexpr blksize_t block_size = 512;
 
 // Total number of blocks taken by the tree of nodes.
 blkcnt_t g_block_count = 1;
+
+// Total number of original inodes (i.e. not counting hard links) taken by the
+// tree of nodes.
+fsfilcnt_t g_inode_count = 1;
 
 using Archive = struct archive;
 using Entry = struct archive_entry;
@@ -1886,6 +1893,34 @@ struct Node {
     return path == node->name;
   }
 
+  // If this node is a directory which only has one child which is a directory
+  // as well, then this method returns a pointer to this child. Otherwise it
+  // returns a null pointer.
+  Node* GetUniqueChildDirectory() {
+    if (!IsDir()) {
+      // LOG(DEBUG) << *this << " is not a dir";
+      return nullptr;
+    }
+
+    Node::Children::iterator const it = children.begin();
+    if (it == children.end()) {
+      // LOG(DEBUG) << *this << " has no children";
+      return nullptr;
+    }
+
+    if (std::next(it) != children.end()) {
+      // LOG(DEBUG) << *this << " has more than one child";
+      return nullptr;
+    }
+
+    if (!it->IsDir()) {
+      // LOG(DEBUG) << *it << " is not a dir";
+      return nullptr;
+    }
+
+    return &*it;
+  }
+
   void CacheUpTo(i64 const want_cached_size) {
     if (want_cached_size <= cached_size) {
       return;
@@ -1963,8 +1998,11 @@ struct Node {
 ino_t Node::count = 0;
 
 std::ostream& operator<<(std::ostream& out, const Node& n) {
-  return out << n.GetType() << " [" << n.index_within_archive << "] "
-             << Path(n.GetPath());
+  out << n.GetType();
+  if (n.index_within_archive > 0) {
+    out << " [" << n.index_within_archive << "]";
+  }
+  return out << " " << Path(n.GetPath());
 }
 
 // These global variables are the in-memory directory tree of nodes.
@@ -2358,6 +2396,7 @@ Node* GetOrCreateDirNode(std::string_view path) {
         .path_hash = segment.path_hash,
     };
 
+    g_inode_count += 1;
     node->AddChild(child);
     node = child;
     [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
@@ -2465,7 +2504,7 @@ void CacheEntryData(Archive* const a) {
   }
 }
 
-void ProcessEntry(Reader& r, std::string& path) {
+void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   Archive* const a = r.archive.get();
   Entry* const e = r.entry;
   i64 const i = r.index_within_archive;
@@ -2501,6 +2540,7 @@ void ProcessEntry(Reader& r, std::string& path) {
 
   // Is this entry a directory?
   if (ft == FileType::Directory) {
+    assert(g_dirs);
     Node* const node = GetOrCreateDirNode(path);
     assert(node);
 
@@ -2525,7 +2565,7 @@ void ProcessEntry(Reader& r, std::string& path) {
   auto const [parent_path, name] = Path(path).Split();
 
   // Get or create the parent directory node.
-  Node* const parent = GetOrCreateDirNode(parent_path);
+  Node* const parent = g_dirs ? GetOrCreateDirNode(parent_path) : local_root;
   assert(parent);
   assert(parent->IsDir());
 
@@ -2537,6 +2577,8 @@ void ProcessEntry(Reader& r, std::string& path) {
                .descriptor = r.descriptor,
                .index_within_archive = i,
                .mtime = archive_entry_mtime(e)};
+
+  g_inode_count += 1;
 
   if (g_default_permissions) {
     node->uid = archive_entry_uid(e);
@@ -2672,6 +2714,11 @@ void ResolveHardlinks() {
         .hardlink_target = g_hardlinks ? target : nullptr,
     };
 
+    if (!g_hardlinks) {
+      g_inode_count += 1;
+      g_block_count += node->GetBlockCount();
+    }
+
     parent->AddChild(node);
     node->ComputePathHash();
 
@@ -2717,6 +2764,72 @@ void CheckRawArchive(Reader& r) {
   if (r.descriptor->filter_count > 0 && g_cache != Cache::Full) {
     LOG(WARNING) << "Using the lazycache or the nocache option with this kind "
                     "of archive can result in poor performance";
+  }
+}
+
+void Deindex(Node& node) {
+  for (Node& c : node.children) {
+    Deindex(c);
+  }
+  g_nodes_by_path.erase(g_nodes_by_path.iterator_to(node));
+}
+
+void Reindex(Node& node) {
+  node.ComputePathHash();
+  [[maybe_unused]] bool const ok = g_nodes_by_path.insert(node).second;
+  assert(ok);
+
+  for (Node& c : node.children) {
+    Reindex(c);
+  }
+}
+
+void Trim(Node& a) {
+  Node* p = a.GetUniqueChildDirectory();
+  if (!p) {
+    return;
+  }
+
+  Deindex(*p);
+  a.children.clear();
+
+  while (Node* const q = p->GetUniqueChildDirectory()) {
+    p->children.clear();
+    p = q;
+  }
+
+  LOG(DEBUG) << "Collapsing " << *p << " into " << a;
+
+  assert(a.IsDir());
+  assert(p->IsDir());
+  a.ino = p->ino;
+  a.uid = p->uid;
+  a.gid = p->gid;
+  a.mode = p->mode;
+  a.size = p->size;
+  a.mtime = p->mtime;
+  a.nlink = p->nlink;
+  assert(!a.hardlink_target);
+  assert(!p->hardlink_target);
+  a.children = std::move(p->children);
+  assert(p->children.empty());
+
+  for (Node& c : a.children) {
+    assert(c.parent == p);
+    c.parent = &a;
+    Reindex(c);
+  }
+
+  LOG(INFO) << "Collapsed " << *p << " into " << a;
+  LOG(INFO)
+      << "Use `-o notrim` if you want to keep these intermediate directories";
+
+  while (p != &a) {
+    g_block_count -= 1;
+    g_inode_count -= 1;
+    Node* const q = p->parent;
+    delete p;
+    p = q;
   }
 }
 
@@ -2790,23 +2903,24 @@ void BuildTree() {
       r.should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
 
       path = "/";
-
+      Node* local_root = g_root_node;
       if (!g_merge) {
         // Create a Directory node for the archive.
-        Node* const dir = new Node{
+        local_root = new Node{
             .name = std::string(
                 Path(archive.path).WithoutTrailingSeparator().Split().second),
             .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
             .nlink = 2,
         };
 
-        g_root_node->AddChild(dir);
-        dir->ComputePathHash();
-        RenameIfCollision(dir);
-        path += dir->name;
-        assert(dir->GetPath() == path);
+        g_inode_count += 1;
+        g_root_node->AddChild(local_root);
+        local_root->ComputePathHash();
+        RenameIfCollision(local_root);
+        path += local_root->name;
+        assert(local_root->GetPath() == path);
 
-        LOG(DEBUG) << "Created " << *dir;
+        LOG(DEBUG) << "Created " << *local_root;
       }
 
       size_t const original_path_size = path.size();
@@ -2817,7 +2931,7 @@ void BuildTree() {
 
         try {
           path.resize(original_path_size);
-          ProcessEntry(r, path);
+          ProcessEntry(r, path, local_root);
         } catch (ExitCode const error) {
           if (!g_force) {
             throw;
@@ -2845,6 +2959,17 @@ void BuildTree() {
     // Close archive file if decompressed data is already cached.
     if (g_cache == Cache::Full && close(std::exchange(archive.fd, -1)) < 0) {
       PLOG(ERROR) << "Cannot close " << Path(archive.path);
+    }
+  }
+
+  // Trim the top level if necessary.
+  if (g_trim) {
+    if (g_merge) {
+      Trim(*g_root_node);
+    } else {
+      for (Node& c : g_root_node->children) {
+        Trim(c);
+      }
     }
   }
 }
@@ -3276,7 +3401,7 @@ int StatFs(const char*, struct statvfs* const z) {
   z->f_blocks = g_block_count;
   z->f_bfree = 0;
   z->f_bavail = 0;
-  z->f_files = Node::count;
+  z->f_files = g_inode_count;
   z->f_ffree = 0;
   z->f_favail = 0;
   z->f_flag = ST_RDONLY;
@@ -3361,6 +3486,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
 
     case KEY_NO_MERGE:
       g_merge = false;
+      return DISCARD;
+
+    case KEY_NO_TRIM:
+      g_trim = false;
       return DISCARD;
 
     case KEY_NO_DIRS:
@@ -3471,6 +3600,7 @@ general options:
     -o lazycache           incremental caching of uncompressed data
     -o nocache             no caching of uncompressed data
     -o nomerge             don't merge multiple archives in the same directory
+    -o notrim              don't trim the base of the tree
     -o nodirs              no directories
     -o nospecials          no special files (FIFOs, sockets, devices)
     -o nosymlinks          no symlinks
