@@ -875,6 +875,26 @@ def TestHardlinks(options=[]):
 
     MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=7, want_inodes=5, options=[*options, '-o', 'nohardlinks'])
 
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Symlink2': {'ino': 3, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+    }
+
+    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=5, want_inodes=3, options=[*options, '-o', 'nodirs'])
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
+        'hardlinks.tgz': {'ino': 2, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'hardlinks.tgz/File4': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz/Symlink2': {'ino': 4, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks.tgz (1)': {'ino': 5, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'hardlinks.tgz (1)/File4': {'ino': 6, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks.tgz (1)/Symlink2': {'ino': 7, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+    }
+
+    MountArchiveAndCheckTree([zip_name, zip_name], want_tree, want_blocks=11, want_inodes=7, options=[*options, '-o', 'nomerge,nodirs'])
+
 
 # Tests dmask and fmask.
 def TestMasks():

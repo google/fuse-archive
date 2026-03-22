@@ -3494,6 +3494,7 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
 
     case KEY_NO_DIRS:
       g_dirs = false;
+      g_hardlinks = false;
       return DISCARD;
 
     case KEY_NO_SPECIALS:
