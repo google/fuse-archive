@@ -304,7 +304,7 @@ def TestArchiveWithOptions(options=[]):
     }
 
     zip_names = [
-        'archive.7z', 'archive.rar', 'archive.tar', 'archive.tar.gz',
+        'archive.rar', 'archive.tar', 'archive.tar.gz',
         'archive.tar.lz', 'archive.tar.uu', 'archive.tgz', 'archive.tlzip',
         'archive.zip', 'lz_is_lzip.tlz', '--help']
 
@@ -316,9 +316,8 @@ def TestArchiveWithOptions(options=[]):
 
     if has_lzma:
         zip_names += [
-            'archive.tar.lzma', 'archive.tlz', 'archive.tlzma',
-            'lz_is_lzma.tlz', 'archive.tar.xz', 'archive.txz',
-            'compressed.tar']
+            'archive.7z', 'archive.tar.lzma', 'archive.tlz', 'archive.tlzma',
+            'lz_is_lzma.tlz', 'archive.tar.xz', 'archive.txz', 'compressed.tar']
 
     if has_zstd:
         zip_names += ['archive.tar.zst', 'archive.tzs', 'archive.tzst', 'archive.tzstd']
@@ -1611,7 +1610,7 @@ def TestInvalidArchive():
     CheckArchiveMountingError('truncated.7z', 32)
 
     # 7Z encryption is not supported
-    CheckArchiveMountingError("encrypted.7z", 22, password='password')
+    if has_lzma: CheckArchiveMountingError("encrypted.7z", 22, password='password')
     CheckArchiveMountingError("encrypted-solidly.7z", 22, password='password')
 
     if os.getuid() != 0:
