@@ -2907,8 +2907,7 @@ void BuildTree() {
       if (!g_merge) {
         // Create a Directory node for the archive.
         local_root = new Node{
-            .name = std::string(
-                Path(archive.path).WithoutTrailingSeparator().Split().second),
+            .name = archive.name_without_extension,
             .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
             .nlink = 2,
         };
