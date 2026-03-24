@@ -151,10 +151,12 @@ def CanRun(args):
 
 has_base64 = CanRun(['base64', '--version'])
 has_brotli = CanRun(['brotli', '--version'])
+has_bzip2 = CanRun(['bzip2', '--version'])
 has_compress = CanRun(['compress', '-V'])
 has_gpg = CanRun(['gpg', '--version'])
 has_gzip = CanRun(['gzip', '--version'])
 has_lrzip = CanRun(['lrzip', '--version'])
+has_lzip = CanRun(['lzip', '--version'])
 has_lzop = CanRun(['lzop', '--version'])
 
 sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
@@ -165,7 +167,7 @@ def HasLib(name):
     logging.info(f'Will skip tests relying on {name}')
     return False
 
-has_bz2 = HasLib('bz2lib')
+has_bz2lib = HasLib('bz2lib')
 has_lz4 = HasLib('liblz4')
 has_lzma = HasLib('liblzma')
 has_zlib = HasLib('zlib')
@@ -286,7 +288,12 @@ def GenerateReferenceData():
 def TestArchiveWithOptions(options=[]):
     want_tree = {'.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2}}
 
-    for zip_name in ['empty.tar', 'empty.tar.gz', 'empty.tgz']:
+    zip_names = ['empty.tar']
+
+    if has_gzip or has_zlib:
+        zip_names += ['empty.tar.gz', 'empty.tgz']
+
+    for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     want_tree = {
@@ -304,11 +311,16 @@ def TestArchiveWithOptions(options=[]):
     }
 
     zip_names = [
-        'archive.rar', 'archive.tar', 'archive.tar.gz',
-        'archive.tar.lz', 'archive.tar.uu', 'archive.tgz', 'archive.tlzip',
-        'archive.zip', 'lz_is_lzip.tlz', '--help']
+        'archive.rar', 'archive.tar', 'archive.tar.lz', 'archive.tar.uu', 'archive.tlzip',
+        'lz_is_lzip.tlz', '--help']
 
-    if has_bz2:
+    if has_gzip or has_zlib:
+        zip_names += ['archive.tar.gz', 'archive.tgz']
+
+    if has_zlib:
+        zip_names += ['archive.zip']
+
+    if has_bzip2 or has_bz2lib:
         zip_names += ['archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2', 'archive.tz2']
 
     if has_lz4:
@@ -348,10 +360,16 @@ def TestArchiveWithOptions(options=[]):
         'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
     }
 
-    zip_names = ['romeo.txt.gz', 'romeo.txt.gzip', 'romeo.txt.lz', 'romeo.txt.lzip', 'romeo.txt.uu']
+    zip_names = ['romeo.txt.lz', 'romeo.txt.lzip', 'romeo.txt.uu']
 
-    if has_bz2:
-        zip_names += ['romeo.txt.bz2', 'romeo.txt.bzip2', 'romeo.bzip2.zip', ]
+    if has_gzip or has_zlib:
+        zip_names += ['romeo.txt.gz', 'romeo.txt.gzip']
+
+    if has_bzip2 or has_bz2lib:
+        zip_names += ['romeo.txt.bz2', 'romeo.txt.bzip2']
+
+    if has_bz2lib:
+        zip_names += ['romeo.bzip2.zip', ]
 
     if has_lz4:
         zip_names += ['romeo.txt.lz4']
@@ -401,6 +419,21 @@ def TestArchiveWithOptions(options=[]):
     for zip_name in ['archive.iso', 'archive.iso9660']:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
+    if has_zlib:
+        want_tree = {
+            '.': {'mode': 'drwxr-xr-x'},
+            '-': {'mode': '-rw-r--r--', 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
+            'second.txt': {'mode': '-rw-r--r--', 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'},
+            }
+        MountArchiveAndCheckTree('data_descriptor.zip', want_tree, options=options, use_md5=True)
+    else:
+        want_tree = {
+            '.': {'mode': 'drwxr-xr-x'},
+            '-': {'mode': '-rw-r--r--', 'size': 305},
+            'second.txt': {'mode': '-rw-r--r--', 'size': 320},
+            }
+        MountArchiveAndCheckTree('data_descriptor.zip', want_tree, options=[*options, '-o', 'nocache'], use_md5=False)
+
     if has_gpg:
         want_tree = {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -409,17 +442,38 @@ def TestArchiveWithOptions(options=[]):
         for zip_name in ['archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc']:
             MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
+    if has_zlib:
+        want_trees = {
+            # This should not be mistaken for an mtree archive.
+            # https://github.com/google/fuse-archive/issues/43
+            'test.csv.gz': {
+                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+                'test.csv': {'mode': '-rw-r--r--', 'mtime': 1739773077000000000, 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'}
+            },
+            'archive.zip.gz': {
+                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+                'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1701219888000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
+            },
+        }
+        for zip_name, want_tree in want_trees.items():
+            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+    elif has_gzip:
+        want_trees = {
+            # This should not be mistaken for an mtree archive.
+            # https://github.com/google/fuse-archive/issues/43
+            'test.csv.gz': {
+                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+                'test.csv': {'mode': '-rw-r--r--', 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'}
+            },
+            'archive.zip.gz': {
+                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+                'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
+            },
+        }
+        for zip_name, want_tree in want_trees.items():
+            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
     want_trees = {
-        # This should not be mistaken for an mtree archive.
-        # https://github.com/google/fuse-archive/issues/43
-        'test.csv.gz': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-            'test.csv': {'mode': '-rw-r--r--', 'mtime': 1739773077000000000, 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'}
-        },
-        'archive.zip.gz': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-            'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1701219888000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
-        },
         # This should be handled as a RAR, and not as a ZIP.
         # https://github.com/libarchive/libarchive/issues/2249
         'archive.zip.rar': {
@@ -457,11 +511,6 @@ def TestArchiveWithOptions(options=[]):
         'archive.tar.gz.uu': {
             '.': {'mode': 'drwxr-xr-x', 'nlink': 2},
             'archive.tar.gz': {'mode': '-rw-r--r--', 'size': 2672, 'md5': '76e1a227c44858cb0e05969b89f03987'},
-        },
-        'data_descriptor.zip': {
-            '.': {'mode': 'drwxr-xr-x'},
-            '-': {'mode': '-rw-r--r--', 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
-            'second.txt': {'mode': '-rw-r--r--', 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'}
         },
         'mixed-paths.zip': {
             '.': {'mode': 'drwxr-xr-x'},
@@ -792,6 +841,7 @@ def TestArchiveWithOptions(options=[]):
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     if is_fast: return
+    if not has_zlib and not has_gzip: return
 
     want_trees = {
         'zeroes-256mib.tar.gz': {
@@ -810,7 +860,7 @@ def TestArchiveWithOptions(options=[]):
 
 
 def TestHardlinks(options=[]):
-    zip_name = 'hardlinks.tgz'
+    zip_name = 'hardlinks.tar'
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
@@ -945,7 +995,7 @@ def TestMasks():
         'File700': {'mode': '-rwxr-xr-x'},
     }
 
-    MountArchiveAndCheckTree('permissions.tgz', want_tree, use_md5=False)
+    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False)
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwx------', 'nlink': 24},
@@ -995,7 +1045,7 @@ def TestMasks():
         'File700': {'mode': '-rwxr-xr-x'},
     }
 
-    MountArchiveAndCheckTree('permissions.tgz', want_tree, use_md5=False, options=['-o', 'dmask=077'])
+    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False, options=['-o', 'dmask=077'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 24},
@@ -1045,7 +1095,7 @@ def TestMasks():
         'File700': {'mode': '-rwx------'},
     }
 
-    MountArchiveAndCheckTree('permissions.tgz', want_tree, use_md5=False, options=['-o', 'fmask=077'])
+    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False, options=['-o', 'fmask=077'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxrwxrwx', 'nlink': 24},
@@ -1095,7 +1145,7 @@ def TestMasks():
         'File700': {'mode': '-rwxrwxrwx'},
     }
 
-    MountArchiveAndCheckTree('permissions.tgz', want_tree, use_md5=False, options=['-o', 'dmask=0,fmask=0'])
+    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False, options=['-o', 'dmask=0,fmask=0'])
 
 
 # Tests the archive with lots of files.
@@ -1510,7 +1560,7 @@ def TestEncryptedArchive(options=[]):
 
 # Tests the default_permissions, nosymlinks and nospecials mount options.
 def TestArchiveWithSpecialFiles():
-    zip_name = 'specials.tar.gz'
+    zip_name = 'specials.tar'
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -1621,7 +1671,7 @@ def TestInvalidArchive():
 # Tests extended attributes functionality
 def TestExtendedAttributes(options=[]):
     # Test normal xattr archive
-    zip_name = 'many-xattrs.tar.gz'
+    zip_name = 'many-xattrs.tar'
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {
@@ -1639,7 +1689,7 @@ def TestExtendedAttributes(options=[]):
     MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
     # Test very long name xattr cases
-    zip_name = 'long-xattr-name.tar.gz'
+    zip_name = 'long-xattr-name.tar'
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {
@@ -1658,7 +1708,7 @@ def TestExtendedAttributes(options=[]):
     MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
     # Test xattr error cases
-    zip_name = 'xattr-errors.tar.gz'
+    zip_name = 'xattr-errors.tar'
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {

@@ -17,13 +17,13 @@
 import os
 import os.path
 import warnings
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZipFile
 
 dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 tmp = os.path.join(dir, 'collisions.zip~')
 
 try:
-  with ZipFile(tmp, 'w', compression=ZIP_DEFLATED, allowZip64=True) as z:
+  with ZipFile(tmp, 'w') as z:
     z.writestr(
         'a/b/c/d/e/f/g/h/i/j/There are many versions of this file (2)',
         b'This should be two',
