@@ -156,8 +156,12 @@ has_compress = CanRun(['compress', '-V'])
 has_gpg = CanRun(['gpg', '--version'])
 has_gzip = CanRun(['gzip', '--version'])
 has_lrzip = CanRun(['lrzip', '--version'])
+has_lz4 = CanRun(['lz4', '--version'])
 has_lzip = CanRun(['lzip', '--version'])
+has_lzma = CanRun(['lzma', '--version'])
 has_lzop = CanRun(['lzop', '--version'])
+has_xz = CanRun(['xz', '--version'])
+has_zstd = CanRun(['zstd', '--version'])
 
 sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
 
@@ -168,10 +172,12 @@ def HasLib(name):
     return False
 
 has_bz2lib = HasLib('bz2lib')
-has_lz4 = HasLib('liblz4')
-has_lzma = HasLib('liblzma')
+has_liblz4 = HasLib('liblz4')
+has_liblzma = HasLib('liblzma')
+has_libzstd = HasLib('libzstd')
 has_zlib = HasLib('zlib')
-has_zstd = HasLib('libzstd')
+has_nettle = HasLib('nettle')
+has_openssl = HasLib('openssl')
 
 # Mounts the given archive(s), walks the mounted archive and unmounts.
 # Returns a pair where:
@@ -323,15 +329,19 @@ def TestArchiveWithOptions(options=[]):
     if has_bzip2 or has_bz2lib:
         zip_names += ['archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2', 'archive.tz2']
 
-    if has_lz4:
+    if has_liblz4 or has_lz4:
         zip_names += ['archive.tar.lz4', 'archive.tlz4']
 
-    if has_lzma:
-        zip_names += [
-            'archive.7z', 'archive.tar.lzma', 'archive.tlz', 'archive.tlzma',
-            'lz_is_lzma.tlz', 'archive.tar.xz', 'archive.txz', 'compressed.tar']
+    if has_liblzma:
+        zip_names += ['archive.7z']
 
-    if has_zstd:
+    if has_liblzma or has_lzma:
+        zip_names += ['archive.tar.lzma', 'archive.tlz', 'archive.tlzma', 'lz_is_lzma.tlz']
+
+    if has_liblzma or has_xz:
+        zip_names += ['archive.tar.xz', 'archive.txz', 'compressed.tar']
+
+    if has_libzstd or has_zstd:
         zip_names += ['archive.tar.zst', 'archive.tzs', 'archive.tzst', 'archive.tzstd']
 
     if has_base64:
@@ -371,13 +381,19 @@ def TestArchiveWithOptions(options=[]):
     if has_bz2lib:
         zip_names += ['romeo.bzip2.zip', ]
 
-    if has_lz4:
+    if has_liblz4 or has_lz4:
         zip_names += ['romeo.txt.lz4']
 
-    if has_lzma:
-        zip_names += ['romeo.txt.lzma', 'romeo.txt.xz', 'romeo.lzma.zip', 'romeo.xz.zip']
+    if has_liblzma:
+        zip_names += ['romeo.lzma.zip', 'romeo.xz.zip']
 
-    if has_zstd:
+    if has_liblzma or has_lzma:
+        zip_names += ['romeo.txt.lzma']
+
+    if has_liblzma or has_xz:
+        zip_names += ['romeo.txt.xz']
+
+    if has_libzstd or has_zstd:
         zip_names += ['romeo.txt.zst', 'romeo.txt.zstd']
 
     if has_base64:
@@ -1481,6 +1497,8 @@ def TestBigArchiveStreamed(options=[]):
 
 # Tests encrypted archive.
 def TestEncryptedArchive(options=[]):
+    if not has_openssl and not has_nettle: return
+    
     zip_name = 'different-encryptions.zip'
 
     # With correct password.
@@ -1660,7 +1678,7 @@ def TestInvalidArchive():
     CheckArchiveMountingError('truncated.7z', 32)
 
     # 7Z encryption is not supported
-    if has_lzma: CheckArchiveMountingError("encrypted.7z", 22, password='password')
+    if has_liblzma: CheckArchiveMountingError("encrypted.7z", 22, password='password')
     CheckArchiveMountingError("encrypted-solidly.7z", 22, password='password')
 
     if os.getuid() != 0:
