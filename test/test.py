@@ -321,7 +321,7 @@ def TestArchiveWithOptions(options=[]):
         'lz_is_lzip.tlz', '--help']
 
     if has_gzip or has_zlib:
-        zip_names += ['archive.tar.gz', 'archive.tgz']
+        zip_names += ['archive.rar.gz', 'archive.tar.gz', 'archive.tgz']
 
     if has_zlib:
         zip_names += ['archive.zip']
@@ -432,7 +432,12 @@ def TestArchiveWithOptions(options=[]):
         'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
     }
 
-    for zip_name in ['archive.iso', 'archive.iso9660']:
+    zip_names = ['archive.iso', 'archive.iso9660']
+
+    if has_gzip or has_zlib:
+        zip_names += ['archive.iso.gz']
+
+    for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     if has_zlib:
@@ -489,40 +494,59 @@ def TestArchiveWithOptions(options=[]):
         for zip_name, want_tree in want_trees.items():
             MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        # Mysterious extra file
+        # https://github.com/libarchive/libarchive/issues/2524
+        'data': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+        '0.bytes': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+        'github-tags.json': {'mode': '-rw-r--r--', 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
+        'hello.sh': {'mode': '-rw-r--r--', 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
+        'αβ.txt': {'mode': '-rw-r--r--', 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
+        '😻.txt': {'mode': '-rw-r--r--', 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
+        'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
+        'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+    }
+
+    zip_names = ['archive.a', 'archive.ar']
+
+    if has_gzip or has_zlib:
+        zip_names += ['archive.a.gz', 'archive.ar.gz']
+
+    for zip_name in zip_names:
+        MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
+
+    want_tree = {
+        # Don't check mtime for this archive.
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
+        'artificial': {'mode': 'drwxr-xr-x'},
+        'artificial/0.bytes': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+        'github-tags.json': {'mode': '-rw-r--r--', 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
+        'hello.sh': {'mode': '-rw-r--r--', 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
+        'non-ascii': {'mode': 'drwxr-xr-x'},
+        'non-ascii/αβ.txt': {'mode': '-rw-r--r--', 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
+        'non-ascii/😻.txt': {'mode': '-rw-r--r--', 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
+        'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
+        'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+    }
+
+    zip_names = ['archive.cab']
+
+    if has_gzip or has_zlib:
+        zip_names += ['archive.cab.gz']
+
+    for zip_name in zip_names:
+        MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
     want_trees = {
         # This should be handled as a RAR, and not as a ZIP.
         # https://github.com/libarchive/libarchive/issues/2249
         'archive.zip.rar': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1739230765000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
-        },
-        'archive.ar': {
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-            # Mysterious extra file
-            # https://github.com/libarchive/libarchive/issues/2524
-            'data': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
-            '0.bytes': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
-            'github-tags.json': {'mode': '-rw-r--r--', 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
-            'hello.sh': {'mode': '-rw-r--r--', 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
-            'αβ.txt': {'mode': '-rw-r--r--', 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
-            '😻.txt': {'mode': '-rw-r--r--', 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
-            'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
-            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
-            'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
-        },
-        'archive.cab': {
-            # Don't check mtime for this archive.
-            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
-            'artificial': {'mode': 'drwxr-xr-x'},
-            'artificial/0.bytes': {'mode': '-rw-r--r--', 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
-            'github-tags.json': {'mode': '-rw-r--r--', 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
-            'hello.sh': {'mode': '-rw-r--r--', 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
-            'non-ascii': {'mode': 'drwxr-xr-x'},
-            'non-ascii/αβ.txt': {'mode': '-rw-r--r--', 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
-            'non-ascii/😻.txt': {'mode': '-rw-r--r--', 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
-            'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
-            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
-            'romeo.txt.gz': {'mode': '-rw-r--r--', 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
         },
         'archive.tar.gz.uu': {
             '.': {'mode': 'drwxr-xr-x', 'nlink': 2},

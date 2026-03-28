@@ -1393,7 +1393,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return true;
   }
 
-  bool SetFormat(std::string_view const ext) {
+  bool SetFormatBeforeExtraFilter(std::string_view const ext) {
 #define SET_COMPRESSED_TAR(s)                                   \
   [](Reader& r) {                                               \
     Archive* const a = r.archive.get();                         \
@@ -1466,6 +1466,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"rpm", &Reader::SetRpmFormat},
         {"spm", &Reader::SetRpmFormat},
         {"tar", &Reader::SetPossiblyCompressedTarFormat},
+        {"war", SET_FORMAT(zip_seekable)},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
         {"xlsx", SET_FORMAT(zip_seekable)},
@@ -1486,6 +1487,41 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return true;
   }
 
+  bool SetFormatAfterExtraFilter(std::string_view const ext) {
+#define SET_FORMAT(s)                            \
+  [](Reader& r) {                                \
+    Archive* const a = r.archive.get();          \
+    r.Check(archive_read_support_format_##s(a)); \
+  }
+
+    static std::unordered_map<
+        std::string_view, std::function<void(Reader&)>> const ext_to_format = {
+        {"a", SET_FORMAT(ar)},
+        {"ar", SET_FORMAT(ar)},
+        {"cab", SET_FORMAT(cab)},
+        {"cpio", SET_FORMAT(cpio)},
+        {"deb", SET_FORMAT(ar)},
+        {"iso", SET_FORMAT(iso9660)},
+        {"iso9660", SET_FORMAT(iso9660)},
+        {"lha", SET_FORMAT(lha)},
+        {"mtree", SET_FORMAT(mtree)},
+        {"rar", &Reader::SetRarFormat},
+        {"tar", &Reader::SetTarFormat},
+        {"warc", SET_FORMAT(warc)},
+        {"xar", SET_FORMAT(xar)},
+    };
+
+#undef SET_FORMAT
+
+    const auto it = ext_to_format.find(ext);
+    if (it == ext_to_format.end()) {
+      return false;
+    }
+
+    it->second(*this);
+    return true;
+  }
+
   // Determines the archive format from the filename extension.
   void SetFormat() {
     Path p = Path(descriptor->path).Split().second;
@@ -1493,11 +1529,11 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
     const size_t i = p.FinalExtensionPosition();
-    const std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
+    std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
 
     const bool first_time = descriptor->name_without_extension.empty();
     // Does this extension signal a recognized archive format?
-    if (SetFormat(ext)) {
+    if (SetFormatBeforeExtraFilter(ext)) {
       p = p.substr(0, i);
       if (first_time) {
         LOG(DEBUG) << "Recognized format extension '" << ext << "'";
@@ -1509,9 +1545,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Does this extension signal a filter?
     if (SetFilter(ext)) {
-      // There is a compression filter. The only two formats that are recognized
-      // after a compression filter are TAR and RAW. Check if there is a .tar
-      // extension before the compression extension.
+      // There is a compression filter. Only specific formats are recognized
+      // after a compression filter.
       p = p.substr(0, i);
       if (first_time) {
         LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
@@ -1519,13 +1554,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
       }
 
       const size_t i = p.FinalExtensionPosition();
-      if (ToLower(p.substr(std::min(i + 1, p.size()))) == "tar") {
+      ext = ToLower(p.substr(std::min(i + 1, p.size())));
+      if (SetFormatAfterExtraFilter(ext)) {
         p = p.substr(0, i);
         if (first_time) {
-          LOG(DEBUG) << "Recognized format extension 'tar'";
+          LOG(DEBUG) << "Recognized format extension '" << ext << "'";
           descriptor->name_without_extension = p;
         }
-        SetTarFormat();
       } else {
         Check(archive_read_support_format_raw(archive.get()));
       }
@@ -1558,8 +1593,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // subsequent testers will do nothing.
     Check(archive_read_support_format_tar(archive.get()));
 
-    // The following archive formats are supported by libarchive, but they
-    // haven't been tested by fuse-archive's authors.
+    // The following archive formats are supported by libarchive, but some of
+    // them haven't been tested by fuse-archive's authors.
     Check(archive_read_support_format_ar(archive.get()));
     Check(archive_read_support_format_cpio(archive.get()));
     Check(archive_read_support_format_lha(archive.get()));
