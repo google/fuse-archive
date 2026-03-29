@@ -64,11 +64,11 @@
 - [x] Add a `-o nomerge` option to mount several archives next to each other in the same mount point.
 - [x] Automatically trim the top of the tree.
 - [x] Add a `-o notrim` option to prevent trimming the tree.
+- [x] Add the ability to cache filtered ZIP and 7Z archives.
 - [ ] Add test for mounting several archives in the same mount point.
 - [ ] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
 - [ ] Detect "holes" in sparse files (https://github.com/google/fuse-archive/issues/41).
 - [ ] Add a `-o nosparse` or `-o noholes` option.
 - [ ] Add tests for sparse files.
 - [ ] Add a `-o memcache` option.
-- [ ] Add the ability to cache filtered ZIP and 7Z archives.
 - [ ] Add the ability to handle several filters for each archive.

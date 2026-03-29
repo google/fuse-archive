@@ -455,44 +455,22 @@ def TestArchiveWithOptions(options=[]):
             }
         MountArchiveAndCheckTree('data_descriptor.zip', want_tree, options=[*options, '-o', 'nocache'], use_md5=False)
 
-    if has_gpg:
+    if has_zlib:
+        # This should not be mistaken for an mtree archive.
+        # https://github.com/google/fuse-archive/issues/43
         want_tree = {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-            'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
+            'test.csv': {'mode': '-rw-r--r--', 'mtime': 1739773077000000000, 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'},
         }
-        for zip_name in ['archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc']:
-            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
-
-    if has_zlib:
-        want_trees = {
-            # This should not be mistaken for an mtree archive.
-            # https://github.com/google/fuse-archive/issues/43
-            'test.csv.gz': {
-                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-                'test.csv': {'mode': '-rw-r--r--', 'mtime': 1739773077000000000, 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'}
-            },
-            'archive.zip.gz': {
-                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-                'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'mtime': 1701219888000000000, 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
-            },
-        }
-        for zip_name, want_tree in want_trees.items():
-            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+        MountArchiveAndCheckTree('test.csv.gz', want_tree, options=options)
     elif has_gzip:
-        want_trees = {
-            # This should not be mistaken for an mtree archive.
-            # https://github.com/google/fuse-archive/issues/43
-            'test.csv.gz': {
-                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-                'test.csv': {'mode': '-rw-r--r--', 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'}
-            },
-            'archive.zip.gz': {
-                '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-                'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
-            },
+        # This should not be mistaken for an mtree archive.
+        # https://github.com/google/fuse-archive/issues/43
+        want_tree = {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'test.csv': {'mode': '-rw-r--r--', 'size': 88, 'md5': '9359ea183fa52719372753e6ca34e3b1'},
         }
-        for zip_name, want_tree in want_trees.items():
-            MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+        MountArchiveAndCheckTree('test.csv.gz', want_tree, options=options)
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -897,6 +875,72 @@ def TestArchiveWithOptions(options=[]):
 
     for zip_name, want_tree in want_trees.items():
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
+
+def TestFilteredZip():
+    zip_names = []
+    if has_gpg:
+        zip_names += ['archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc']
+
+    if has_gzip or has_zlib:
+        zip_names += ['archive.zip.gz']
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'archive.zip': {'ino': 2, 'mode': '-rw-r--r--', 'size': 3480, 'md5': 'e43a4ee1eb970d00b6c0ebf6e25347d5'},
+    }
+
+    for zip_name in zip_names:
+        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'lazycache'])
+        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'nocache'])
+
+    zip_names = []
+    if has_gpg:
+        zip_names += ['archive.7z.gpg']
+
+    if has_gzip or has_zlib:
+        zip_names += ['archive.7z.gz']
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'archive.7z': {'ino': 2, 'mode': '-rw-r--r--', 'size': 2486, 'md5': '168baf5e253d792233880badd945c1de'},
+    }
+
+    for zip_name in zip_names:
+        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'lazycache'])
+        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'nocache'])
+
+    zip_names = []
+    if has_gpg:
+        if has_zlib:
+            zip_names += ['archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc']
+
+        if has_liblzma:
+            zip_names += ['archive.7z.gpg']
+
+    if has_gzip or has_zlib:
+        if has_zlib:
+            zip_names += ['archive.zip.gz']
+
+        if has_liblzma:
+            zip_names += ['archive.7z.gz']
+
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
+        'artificial': {'mode': 'drwxr-xr-x'},
+        'artificial/0.bytes': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
+        'github-tags.json': {'mode': '-rw-r--r--', 'mtime': 1597241062000000000, 'size': 853, 'md5': 'b2d7993ed99c65296bf95824c57b4fdc'},
+        'hello.sh': {'mode': '-rwxr-xr-x', 'mtime': 1620022795000000000, 'size': 693, 'md5': '72d710dd3766a67401a79f8d3df3114c'},
+        'non-ascii': {'mode': 'drwxr-xr-x'},
+        'non-ascii/αβ.txt': {'mode': '-rw-r--r--', 'mtime': 1620022605000000000, 'size': 104, 'md5': '3369a4163a436de59e23daedd371b5f0'},
+        'non-ascii/😻.txt': {'mode': '-rw-r--r--', 'mtime': 1620022983000000000, 'size': 151, 'md5': '5d18e0e461374191825c6e7898af5634'},
+        'pjw-thumbnail.png': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 208, 'md5': 'f7017e60a0af6d7ad3128c149624aac5'},
+        'romeo.txt': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        'romeo.txt.gz': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 558, 'md5': 'f261bc929b34f58d8138413ed6252f2d'},
+    }
+
+    for zip_name in zip_names:
+        MountArchiveAndCheckTree(zip_name, want_tree)
 
 
 def TestHardlinks(options=[]):
@@ -1798,6 +1842,7 @@ try:
     TestArchiveWithOptions()
     TestArchiveWithOptions(['-o', 'nocache'])
     TestArchiveWithOptions(['-o', 'lazycache'])
+    TestFilteredZip()
 finally:
     if has_gpg:
         subprocess.run(['gpg', '--batch', '--yes', '--delete-secret-and-public-key', '7D74961702BCAD35D591BB896EC5AAD2CC5FEC0E'])

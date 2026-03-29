@@ -800,6 +800,10 @@ struct ArchiveDescriptor {
   // Number of decompression or decoding filters (e.g. `gz`, `bz2`, `br`, `uu`,
   // `b64`).
   int filter_count = 0;
+
+  // Is there an archive format that requires caching and random access to the
+  // decompressed data?
+  bool filtered_zip = false;
 };
 
 std::vector<ArchiveDescriptor> g_archives;
@@ -1563,6 +1567,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
         }
       } else {
         Check(archive_read_support_format_raw(archive.get()));
+        static const std::unordered_set<std::string_view> zip_exts = {
+            "7z", "7zip", "zip", "zipx"};
+        descriptor->filtered_zip = zip_exts.contains(ext);
       }
 
       return;
@@ -2099,17 +2106,16 @@ std::string GetCacheDir() {
   return val && *val ? val : "/tmp";
 }
 
-void CreateCacheFile() {
-  assert(g_cache_fd < 0);
-  assert(g_cache_size == 0);
-
+// Creates a hidden temp file. Returns a file descriptor to this temp file.
+int CreateCacheFile() {
+  int fd = -1;
   std::string const cache_dir = GetCacheDir();
 
 #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__APPLE__)
-  g_cache_fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
-  if (g_cache_fd >= 0) {
+  fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
+  if (fd >= 0) {
     LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
-    return;
+    return fd;
   }
 
   if (errno != ENOTSUP) {
@@ -2128,9 +2134,9 @@ void CreateCacheFile() {
 
   std::string path = cache_dir;
   Path::Append(&path, "XXXXXX");
-  g_cache_fd = mkstemp(path.data());
+  fd = mkstemp(path.data());
 
-  if (g_cache_fd < 0) {
+  if (fd < 0) {
     PLOG(ERROR) << "Cannot create named cache file in " << Path(cache_dir);
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
@@ -2139,14 +2145,17 @@ void CreateCacheFile() {
 
   if (unlink(path.c_str()) < 0) {
     PLOG(ERROR) << "Cannot unlink cache file " << Path(path);
+    close(fd);
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
+
+  return fd;
 }
 
-// Checks that the cache file is open and empty.
-void CheckCacheFile() {
+// Checks that the cache file specified by `fd` is open and empty.
+void CheckCacheFile(int const fd) {
   struct stat z;
-  if (fstat(g_cache_fd, &z) != 0) {
+  if (fstat(fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat cache file";
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
@@ -2467,14 +2476,14 @@ bool ShouldSkip(FileType const ft) {
   return true;
 }
 
-void CacheEntryData(Archive* const a) {
-  assert(g_cache_size >= 0);
-  i64 const file_start_offset = g_cache_size;
+off_t CacheEntryData(Archive* const a, int const dest_fd, off_t dest_offset) {
+  assert(dest_offset >= 0);
+  off_t const file_start_offset = dest_offset;
 
   while (true) {
     const void* buff = nullptr;
     size_t len = 0;
-    off_t offset = g_cache_size - file_start_offset;
+    off_t offset = dest_offset - file_start_offset;
 
     switch (archive_read_data_block(a, &buff, &len, &offset)) {
       case ARCHIVE_RETRY:
@@ -2486,13 +2495,12 @@ void CacheEntryData(Archive* const a) {
 
       case ARCHIVE_OK:
         assert(offset >= 0);
-        assert(g_cache_size <= file_start_offset + offset);
-        g_cache_size = file_start_offset + offset;
+        assert(dest_offset <= file_start_offset + offset);
+        dest_offset = file_start_offset + offset;
 
         for (std::string_view s(static_cast<const char*>(buff), len);
              !s.empty();) {
-          ssize_t const n =
-              pwrite(g_cache_fd, s.data(), s.size(), g_cache_size);
+          ssize_t const n = pwrite(dest_fd, s.data(), s.size(), dest_offset);
           if (n < 0) {
             if (errno == EINTR) {
               continue;
@@ -2502,7 +2510,7 @@ void CacheEntryData(Archive* const a) {
             throw ExitCode::CANNOT_WRITE_CACHE;
           }
 
-          g_cache_size += n;
+          dest_offset += n;
           s.remove_prefix(n);
         }
 
@@ -2511,23 +2519,23 @@ void CacheEntryData(Archive* const a) {
       case ARCHIVE_EOF:
         assert(len == 0);
         assert(offset >= 0);
-        assert(g_cache_size <= file_start_offset + offset);
+        assert(dest_offset <= file_start_offset + offset);
 
         // Adjust the cache size if there is a final "hole".
         // See https://github.com/google/fuse-archive/issues/40
-        if (i64 const cache_size = file_start_offset + offset;
-            g_cache_size < cache_size) {
-          g_cache_size = cache_size;
-          while (ftruncate(g_cache_fd, g_cache_size) < 0) {
+        if (off_t const cache_size = file_start_offset + offset;
+            dest_offset < cache_size) {
+          dest_offset = cache_size;
+          while (ftruncate(dest_fd, dest_offset) < 0) {
             if (errno != EINTR) {
-              PLOG(ERROR) << "Cannot resize cache to " << g_cache_size
+              PLOG(ERROR) << "Cannot resize cache to " << dest_offset
                           << " bytes";
               throw ExitCode::CANNOT_WRITE_CACHE;
             }
           }
         }
 
-        return;
+        return dest_offset;
 
       case ARCHIVE_FAILED:
       case ARCHIVE_FATAL:
@@ -2659,7 +2667,7 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     // Cache file data.
     node->size = archive_entry_size(e);
     i64 const offset = g_cache_size;
-    CacheEntryData(a);
+    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size);
     node->cache_offset = offset;
     node->cached_size = node->size = g_cache_size - offset;
   } else {
@@ -2934,8 +2942,29 @@ void BuildTree() {
 
     try {
       // Prepare a Reader to read the archive.
-      Reader r(&archive);
-      r.should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
+      std::unique_ptr<Reader> r = std::make_unique<Reader>(&archive);
+      r->should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
+
+      if (g_cache == Cache::Full && archive.filtered_zip) {
+        // Cache full ZIP file.
+        if (!r->NextEntry()) {
+          LOG(ERROR) << "Reached EOF while expecting a unique entry";
+          throw ExitCode::INVALID_ARCHIVE_HEADER;
+        }
+        int const fd = CreateCacheFile();
+        CheckCacheFile(fd);
+        off_t const size = CacheEntryData(r->archive.get(), fd, 0);
+
+        r.reset();
+
+        if (close(archive.fd) < 0) {
+          PLOG(ERROR) << "Cannot close " << Path(archive.path);
+        }
+
+        archive = ArchiveDescriptor{.path = std::move(archive.name_without_extension), .fd = fd, .size = size};
+        r = std::make_unique<Reader>(&archive);
+        r->should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
+      }
 
       path = "/";
       Node* local_root = g_root_node;
@@ -2960,12 +2989,12 @@ void BuildTree() {
       size_t const original_path_size = path.size();
 
       // Read and process every entry of the archive.
-      while (r.NextEntry()) {
-        CheckRawArchive(r);
+      while (r->NextEntry()) {
+        CheckRawArchive(*r);
 
         try {
           path.resize(original_path_size);
-          ProcessEntry(r, path, local_root);
+          ProcessEntry(*r, path, local_root);
         } catch (ExitCode const error) {
           if (!g_force) {
             throw;
@@ -2979,7 +3008,7 @@ void BuildTree() {
       ResolveHardlinks();
 
       if (g_latest_log_is_ephemeral) {
-        LOG(INFO) << "Loading " << Path(r.descriptor->path) << "... "
+        LOG(INFO) << "Loading " << Path(r->descriptor->path) << "... "
                   << ProgressMessage(100);
       }
     } catch (ExitCode const error) {
@@ -3745,8 +3774,10 @@ int main(int const argc, char** const argv) try {
 
   // Create cache file if necessary.
   if (g_cache != Cache::None) {
-    CreateCacheFile();
-    CheckCacheFile();
+    assert(g_cache_fd < 0);
+    assert(g_cache_size == 0);
+    g_cache_fd = CreateCacheFile();
+    CheckCacheFile(g_cache_fd);
   }
 
   // Force single-threading if not fully cached.
