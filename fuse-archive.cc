@@ -1346,6 +1346,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Archive* const a = r.archive.get();                       \
     r.Check(archive_read_append_filter_program(a, #s " -d")); \
   }
+#define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3009000
 
     static std::unordered_map<
         std::string_view, std::function<void(Reader&)>> const ext_to_filter = {
@@ -1358,11 +1359,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"brotli", SET_FILTER_COMMAND(brotli)},
         {"bz2", SET_FILTER(BZIP2)},
         {"bzip2", SET_FILTER(BZIP2)},
+#if WORK_AROUND_ISSUE_2513
         // Work around https://github.com/libarchive/libarchive/issues/2513
-        // {"grz", SET_FILTER(GRZIP)},
-        // {"grzip", SET_FILTER(GRZIP)},
         {"grz", SET_FILTER_COMMAND(grzip)},
         {"grzip", SET_FILTER_COMMAND(grzip)},
+#else
+        {"grz", SET_FILTER(GRZIP)},
+        {"grzip", SET_FILTER(GRZIP)},
+#endif
         {"gz", SET_FILTER(GZIP)},
         {"gzip", SET_FILTER(GZIP)},
         {"lrz", SET_FILTER(LRZIP)},
@@ -1371,11 +1375,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"lzip", SET_FILTER(LZIP)},
         {"lz4", SET_FILTER(LZ4)},
         {"lzma", SET_FILTER(LZMA)},
+#if WORK_AROUND_ISSUE_2513
         // Work around https://github.com/libarchive/libarchive/issues/2513
-        // {"lzo", SET_FILTER(LZOP)},
-        // {"lzop", SET_FILTER(LZOP)},
         {"lzo", SET_FILTER_COMMAND(lzop)},
         {"lzop", SET_FILTER_COMMAND(lzop)},
+#else
+        {"lzo", SET_FILTER(LZOP)},
+        {"lzop", SET_FILTER(LZOP)},
+#endif
         {"uu", SET_FILTER(UU)},
         {"xz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
@@ -1385,6 +1392,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"zstd", SET_FILTER(ZSTD)},
     };
 
+#undef WORK_AROUND_ISSUE_2513
 #undef SET_FILTER
 #undef SET_FILTER_COMMAND
 
