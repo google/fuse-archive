@@ -3346,7 +3346,6 @@ int Read(const char*,
 
   assert(r);
   assert(r->index_within_archive == t->index_within_archive);
-  assert(r->offset_within_entry >= offset);
   assert(r->offset_within_entry <= offset + r->rolling_buffer_size);
 
   ssize_t n = r->Read(offset, dst);
