@@ -178,6 +178,51 @@ class Logger {
   if (LogLevel::level <= g_log_level) \
   Logger(LogLevel::level, errno)
 
+// A scoped file descriptor.
+class ScopedFile {
+ public:
+  // Closes this file descriptor if it is valid.
+  ~ScopedFile() {
+    if (IsValid() && close(fd_) < 0) {
+      PLOG(ERROR) << "Cannot close file";
+    }
+  }
+
+  // Creates an invalid file descriptor.
+  ScopedFile() noexcept : fd_(-1) {}
+
+  // Takes ownership of the given file descriptor, if it is valid.
+  explicit ScopedFile(int fd) noexcept : fd_(fd) {}
+
+  // Move constructor.
+  ScopedFile(ScopedFile&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+
+  // Swaps this file descriptor with the other one.
+  void SwapWith(ScopedFile& other) noexcept { std::swap(fd_, other.fd_); }
+
+  // Closes this file descriptor if it is valid.
+  void Close() noexcept {
+    ScopedFile other;
+    SwapWith(other);
+  }
+
+  // Universal assignment operator.
+  ScopedFile& operator=(ScopedFile other) noexcept {
+    SwapWith(other);
+    return *this;
+  }
+
+  // Is this file descriptor valid?
+  bool IsValid() const noexcept { return fd_ >= 0; }
+
+  // Gets the underlying raw file descriptor.
+  operator int() const noexcept { return fd_; }
+
+ private:
+  // Raw file descriptor.
+  int fd_;
+};
+
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -328,7 +373,7 @@ enum class Cache {
 Cache g_cache = Cache::Full;
 
 // File descriptor of the cache file.
-int g_cache_fd = -1;
+ScopedFile g_cache_fd;
 
 // Size of the cache file.
 i64 g_cache_size = 0;
@@ -789,7 +834,7 @@ struct ArchiveDescriptor {
   std::string name_without_extension;
 
   // File descriptor of the opened archive file.
-  int fd = -1;
+  ScopedFile fd;
 
   // Size of this archive file.
   i64 size = 0;
@@ -1645,7 +1690,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     assert(p);
     Reader& r = *static_cast<Reader*>(p);
     assert(r.descriptor);
-    assert(r.descriptor->fd >= 0);
+    assert(r.descriptor->fd.IsValid());
     while (true) {
       ssize_t const n =
           pread(r.descriptor->fd, r.raw_bytes, sizeof(r.raw_bytes), r.raw_pos);
@@ -2115,13 +2160,13 @@ std::string GetCacheDir() {
 }
 
 // Creates a hidden temp file. Returns a file descriptor to this temp file.
-int CreateCacheFile() {
-  int fd = -1;
+ScopedFile CreateCacheFile() {
+  ScopedFile fd;
   std::string const cache_dir = GetCacheDir();
 
 #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__APPLE__)
-  fd = open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0);
-  if (fd >= 0) {
+  fd = ScopedFile(open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0));
+  if (fd.IsValid()) {
     LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
     return fd;
   }
@@ -2142,9 +2187,9 @@ int CreateCacheFile() {
 
   std::string path = cache_dir;
   Path::Append(&path, "XXXXXX");
-  fd = mkstemp(path.data());
+  fd = ScopedFile(mkstemp(path.data()));
 
-  if (fd < 0) {
+  if (!fd.IsValid()) {
     PLOG(ERROR) << "Cannot create named cache file in " << Path(cache_dir);
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
@@ -2153,7 +2198,6 @@ int CreateCacheFile() {
 
   if (unlink(path.c_str()) < 0) {
     PLOG(ERROR) << "Cannot unlink cache file " << Path(path);
-    close(fd);
     throw ExitCode::CANNOT_CREATE_CACHE;
   }
 
@@ -2161,7 +2205,7 @@ int CreateCacheFile() {
 }
 
 // Checks that the cache file specified by `fd` is open and empty.
-void CheckCacheFile(int const fd) {
+void CheckCacheFile(const ScopedFile& fd) {
   struct stat z;
   if (fstat(fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat cache file";
@@ -2895,8 +2939,9 @@ void BuildTree() {
       }
 
       // Open archive file.
-      archive.fd = open(archive.path.c_str(), O_RDONLY);
-      if (archive.fd < 0) {
+      assert(!archive.fd.IsValid());
+      archive.fd = ScopedFile(open(archive.path.c_str(), O_RDONLY));
+      if (!archive.fd.IsValid()) {
         PLOG(ERROR) << "Cannot open " << Path(archive.path);
         throw ExitCode::CANNOT_OPEN_ARCHIVE;
       }
@@ -2916,14 +2961,13 @@ void BuildTree() {
                    << archive.size << " bytes";
       }
     } catch (ExitCode const error) {
+      archive.fd.Close();
+
       if (!g_force) {
         throw;
       }
 
       LOG(DEBUG) << "Suppressed error " << error << " because of -o force";
-      if (archive.fd >= 0 && close(std::exchange(archive.fd, -1)) < 0) {
-        PLOG(ERROR) << "Cannot close " << Path(archive.path);
-      }
     }
   }
 
@@ -2942,7 +2986,7 @@ void BuildTree() {
   std::string path;
 
   for (ArchiveDescriptor& archive : g_archives) {
-    if (archive.fd < 0) {
+    if (!archive.fd.IsValid()) {
       continue;
     }
 
@@ -2959,17 +3003,15 @@ void BuildTree() {
           LOG(ERROR) << "Reached EOF while expecting a unique entry";
           throw ExitCode::INVALID_ARCHIVE_HEADER;
         }
-        int const fd = CreateCacheFile();
+
+        ScopedFile fd = CreateCacheFile();
         CheckCacheFile(fd);
         off_t const size = CacheEntryData(r->archive.get(), fd, 0);
-
         r.reset();
-
-        if (close(archive.fd) < 0) {
-          PLOG(ERROR) << "Cannot close " << Path(archive.path);
-        }
-
-        archive = ArchiveDescriptor{.path = std::move(archive.name_without_extension), .fd = fd, .size = size};
+        archive =
+            ArchiveDescriptor{.path = std::move(archive.name_without_extension),
+                              .fd = std::move(fd),
+                              .size = size};
         r = std::make_unique<Reader>(&archive);
         r->should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
       }
@@ -3028,8 +3070,8 @@ void BuildTree() {
     }
 
     // Close archive file if decompressed data is already cached.
-    if (g_cache == Cache::Full && close(std::exchange(archive.fd, -1)) < 0) {
-      PLOG(ERROR) << "Cannot close " << Path(archive.path);
+    if (g_cache == Cache::Full) {
+      archive.fd.Close();
     }
   }
 
@@ -3781,7 +3823,7 @@ int main(int const argc, char** const argv) try {
 
   // Create cache file if necessary.
   if (g_cache != Cache::None) {
-    assert(g_cache_fd < 0);
+    assert(!g_cache_fd.IsValid());
     assert(g_cache_size == 0);
     g_cache_fd = CreateCacheFile();
     CheckCacheFile(g_cache_fd);
