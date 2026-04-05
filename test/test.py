@@ -162,6 +162,7 @@ has_lzma = CanRun(['lzma', '--version'])
 has_lzop = CanRun(['lzop', '--version'])
 has_xz = CanRun(['xz', '--version'])
 has_zstd = CanRun(['zstd', '--version'])
+has_tar = CanRun(['tar', '--version'])
 
 sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
 
@@ -1563,6 +1564,53 @@ def TestBigArchiveStreamed(options=[]):
             logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
 
 
+# Regression test for sparse short reads in nocache mode.
+def TestNocacheSparseReadIsZeroFilled():
+    if is_fast or not has_tar: return
+    logging.info('Test sparse short read zero-fill in nocache mode')
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        payload_dir = os.path.join(temp_dir, 'payload')
+        os.mkdir(payload_dir)
+
+        with open(os.path.join(payload_dir, 'big.bin'), 'wb') as f:
+            f.write((b'SECRETSECRET|' * 90000)[:1024 * 1024])
+
+        with open(os.path.join(payload_dir, 'hole.bin'), 'wb') as f:
+            f.truncate(1024 * 1024)
+
+        archive_path = os.path.join(temp_dir, 'attack.tar')
+        subprocess.run(['tar', '--sparse', '-cf', archive_path, '-C', payload_dir, '.'], check=True)
+
+        mount_point = os.path.join(temp_dir, 'mnt')
+        os.mkdir(mount_point)
+        env = os.environ.copy()
+        env['MALLOC_PERTURB_'] = '170'
+        subprocess.run(
+            [mount_program, '-o', 'nocache,direct_io', '--', archive_path, mount_point],
+            check=True,
+            capture_output=True,
+            input='',
+            encoding='UTF-8',
+            env=env,
+        )
+        try:
+            fd = os.open(os.path.join(mount_point, 'hole.bin'), os.O_RDONLY)
+            try:
+                for offset in [0, 65536, 524288]:
+                    for size in [4096, 8192, 32768, 98304]:
+                        got = os.pread(fd, size, offset)
+                        if any(got):
+                            LogError(
+                                f'Expected only NUL bytes for hole.bin, got non-zero bytes '
+                                f'for size={size} offset={offset}'
+                            )
+            finally:
+                os.close(fd)
+        finally:
+            subprocess.run(['umount', '-l', mount_point], check=True)
+
+
 # Tests encrypted archive.
 def TestEncryptedArchive(options=[]):
     if not has_openssl and not has_nettle: return
@@ -1864,6 +1912,7 @@ TestDirectories()
 TestBigArchiveRandomOrder(['-o', 'direct_io'])
 TestBigArchiveRandomOrder(['-o', 'lazycache,direct_io'])
 TestBigArchiveStreamed(['-o', 'nocache,direct_io'])
+TestNocacheSparseReadIsZeroFilled()
 
 if error_count:
     LogError(f'FAIL: There were {error_count} errors')
