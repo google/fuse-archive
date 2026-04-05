@@ -306,6 +306,7 @@ enum {
 struct Options {
   unsigned int dmask = 0022;
   unsigned int fmask = 0022;
+  int max_filter_count = 1;
 };
 
 Options g_options;
@@ -339,6 +340,7 @@ fuse_opt const g_fuse_opts[] = {
 #endif
     {"dmask=%o", offsetof(Options, dmask)},
     {"fmask=%o", offsetof(Options, fmask)},
+    {"maxfilters=%d", offsetof(Options, max_filter_count)},
     FUSE_OPT_END,
 };
 
@@ -1348,15 +1350,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_tar(a));
   }
 
-  // Some `.tar` archives are actually compressed TARs, even though they don't
-  // have the compression extension. So, as a special case for `.tar`,
-  // automatically recognize the possible compression filters.
-  void SetPossiblyCompressedTarFormat() {
-    Archive* const a = archive.get();
-    Check(archive_read_support_filter_all(a));
-    SetTarFormat();
-  }
-
   // Special case for .rar files because they can be of two different formats:
   // RAR or RAR5.
   void SetRarFormat() {
@@ -1380,19 +1373,21 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_xar(a));
   }
 
-  bool SetFilter(std::string_view const ext) {
 #define SET_FILTER(s)                                           \
   [](Reader& r) {                                               \
     Archive* const a = r.archive.get();                         \
     r.Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s)); \
   }
+
 #define SET_FILTER_COMMAND(s)                                 \
   [](Reader& r) {                                             \
     Archive* const a = r.archive.get();                       \
     r.Check(archive_read_append_filter_program(a, #s " -d")); \
   }
+
 #define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3009000
 
+  bool SetFilter(std::string_view const ext) {
     static std::unordered_map<
         std::string_view, std::function<void(Reader&)>> const ext_to_filter = {
         {"asc", SET_FILTER_COMMAND(gpg)},
@@ -1437,10 +1432,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"zstd", SET_FILTER(ZSTD)},
     };
 
-#undef WORK_AROUND_ISSUE_2513
-#undef SET_FILTER
-#undef SET_FILTER_COMMAND
-
     const auto it = ext_to_filter.find(ext);
     if (it == ext_to_filter.end()) {
       return false;
@@ -1450,54 +1441,65 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return true;
   }
 
-  bool SetFormatBeforeExtraFilter(std::string_view const ext) {
-#define SET_COMPRESSED_TAR(s)                                   \
-  [](Reader& r) {                                               \
-    Archive* const a = r.archive.get();                         \
-    r.Check(archive_read_append_filter(a, ARCHIVE_FILTER_##s)); \
-    r.SetTarFormat();                                           \
-  }
-#define SET_COMPRESSED_TAR_COMMAND(s)                         \
-  [](Reader& r) {                                             \
-    Archive* const a = r.archive.get();                       \
-    r.Check(archive_read_append_filter_program(a, #s " -d")); \
-    r.SetTarFormat();                                         \
-  }
-#define SET_FORMAT(s)                            \
-  [](Reader& r) {                                \
-    Archive* const a = r.archive.get();          \
-    r.Check(archive_read_support_format_##s(a)); \
-  }
-
+  bool SetCompressedTarFormat(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<void(Reader&)>> const ext_to_format = {
+        std::string_view, std::function<void(Reader&)>> const ext_to_filter = {
         // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"taz", SET_COMPRESSED_TAR(COMPRESS)},
-        {"taz", SET_COMPRESSED_TAR_COMMAND(compress)},
-        {"tbr", SET_COMPRESSED_TAR_COMMAND(brotli)},
-        {"tb2", SET_COMPRESSED_TAR(BZIP2)},
-        {"tbz", SET_COMPRESSED_TAR(BZIP2)},
-        {"tbz2", SET_COMPRESSED_TAR(BZIP2)},
-        {"tgz", SET_COMPRESSED_TAR(GZIP)},
+        // {"taz", SET_FILTER(COMPRESS)},
+        {"taz", SET_FILTER_COMMAND(compress)},
+        {"tbr", SET_FILTER_COMMAND(brotli)},
+        {"tb2", SET_FILTER(BZIP2)},
+        {"tbz", SET_FILTER(BZIP2)},
+        {"tbz2", SET_FILTER(BZIP2)},
+        {"tgz", SET_FILTER(GZIP)},
         {"tlz",
          [](Reader& r) {
            // .tlz could mean .tar.lz or .tar.lzma
            Archive* const a = r.archive.get();
            r.Check(archive_read_support_filter_lzip(a));
            r.Check(archive_read_support_filter_lzma(a));
-           r.SetTarFormat();
          }},
-        {"tlz4", SET_COMPRESSED_TAR(LZ4)},
-        {"tlzip", SET_COMPRESSED_TAR(LZIP)},
-        {"tlzma", SET_COMPRESSED_TAR(LZMA)},
-        {"txz", SET_COMPRESSED_TAR(XZ)},
+        {"tlz4", SET_FILTER(LZ4)},
+        {"tlzip", SET_FILTER(LZIP)},
+        {"tlzma", SET_FILTER(LZMA)},
+        {"txz", SET_FILTER(XZ)},
         // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"tz", SET_COMPRESSED_TAR(COMPRESS)},
-        {"tz", SET_COMPRESSED_TAR_COMMAND(compress)},
-        {"tz2", SET_COMPRESSED_TAR(BZIP2)},
-        {"tzs", SET_COMPRESSED_TAR(ZSTD)},
-        {"tzst", SET_COMPRESSED_TAR(ZSTD)},
-        {"tzstd", SET_COMPRESSED_TAR(ZSTD)},
+        // {"tz", SET_FILTER(COMPRESS)},
+        {"tz", SET_FILTER_COMMAND(compress)},
+        {"tz2", SET_FILTER(BZIP2)},
+        {"tzs", SET_FILTER(ZSTD)},
+        {"tzst", SET_FILTER(ZSTD)},
+        {"tzstd", SET_FILTER(ZSTD)},
+        {"tar",
+         [](Reader& r) {
+           // Some `.tar` archives are actually compressed TARs, even though
+           // they don't have the compression extension. So, as a special case
+           // for `.tar`, automatically recognize the possible compression
+           // filters.
+           Archive* const a = r.archive.get();
+           r.Check(archive_read_support_filter_all(a));
+         }},
+    };
+
+    const auto it = ext_to_filter.find(ext);
+    if (it == ext_to_filter.end()) {
+      return false;
+    }
+
+    it->second(*this);
+    SetTarFormat();
+    return true;
+  }
+
+#define SET_FORMAT(s)                            \
+  [](Reader& r) {                                \
+    Archive* const a = r.archive.get();          \
+    r.Check(archive_read_support_format_##s(a)); \
+  }
+
+  bool SetFormatBeforeExtraFilter(std::string_view const ext) {
+    static std::unordered_map<
+        std::string_view, std::function<void(Reader&)>> const ext_to_format = {
         {"7z", SET_FORMAT(7zip)},
         {"7zip", SET_FORMAT(7zip)},
         {"a", SET_FORMAT(ar)},
@@ -1522,7 +1524,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"rar", &Reader::SetRarFormat},
         {"rpm", &Reader::SetRpmFormat},
         {"spm", &Reader::SetRpmFormat},
-        {"tar", &Reader::SetPossiblyCompressedTarFormat},
+        {"tar", &Reader::SetTarFormat},
         {"war", SET_FORMAT(zip_seekable)},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
@@ -1530,10 +1532,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"zip", SET_FORMAT(zip_seekable)},
         {"zipx", SET_FORMAT(zip_seekable)},
     };
-
-#undef SET_COMPRESSED_TAR
-#undef SET_COMPRESSED_TAR_COMMAND
-#undef SET_FORMAT
 
     const auto it = ext_to_format.find(ext);
     if (it == ext_to_format.end()) {
@@ -1545,12 +1543,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
   bool SetFormatAfterExtraFilter(std::string_view const ext) {
-#define SET_FORMAT(s)                            \
-  [](Reader& r) {                                \
-    Archive* const a = r.archive.get();          \
-    r.Check(archive_read_support_format_##s(a)); \
-  }
-
     static std::unordered_map<
         std::string_view, std::function<void(Reader&)>> const ext_to_format = {
         {"a", SET_FORMAT(ar)},
@@ -1568,8 +1560,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"xar", SET_FORMAT(xar)},
     };
 
-#undef SET_FORMAT
-
     const auto it = ext_to_format.find(ext);
     if (it == ext_to_format.end()) {
       return false;
@@ -1585,12 +1575,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Get the final filename extension in lower case and without the dot.
     // Eg "gz", "tar"...
-    const size_t i = p.FinalExtensionPosition();
+    size_t i = p.FinalExtensionPosition();
     std::string ext = ToLower(p.substr(std::min(i + 1, p.size())));
 
     const bool first_time = descriptor->name_without_extension.empty();
     // Does this extension signal a recognized archive format?
-    if (SetFormatBeforeExtraFilter(ext)) {
+    if ((g_options.max_filter_count > 0 && SetCompressedTarFormat(ext)) ||
+        SetFormatBeforeExtraFilter(ext)) {
       p = p.substr(0, i);
       if (first_time) {
         LOG(DEBUG) << "Recognized format extension '" << ext << "'";
@@ -1601,7 +1592,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
     }
 
     // Does this extension signal a filter?
-    if (SetFilter(ext)) {
+    if (g_options.max_filter_count > 0 && SetFilter(ext)) {
       // There is a compression filter. Only specific formats are recognized
       // after a compression filter.
       p = p.substr(0, i);
@@ -1610,8 +1601,33 @@ struct Reader : bi::list_base_hook<LinkMode> {
         descriptor->name_without_extension = p;
       }
 
-      const size_t i = p.FinalExtensionPosition();
+      i = p.FinalExtensionPosition();
       ext = ToLower(p.substr(std::min(i + 1, p.size())));
+
+      int filter_count = 1;
+      while (filter_count < g_options.max_filter_count && SetFilter(ext)) {
+        filter_count++;
+        // There are several filters.
+        p = p.substr(0, i);
+        if (first_time) {
+          LOG(DEBUG) << "Recognized filter extension '" << ext << "'";
+          descriptor->name_without_extension = p;
+        }
+
+        i = p.FinalExtensionPosition();
+        ext = ToLower(p.substr(std::min(i + 1, p.size())));
+      }
+
+      if (filter_count > 1 && first_time &&
+          archive_version_number() < 3'008'002) {
+        LOG(WARNING) << "Simultaneous use of two or more filters with "
+                     << archive_version_string()
+                     << " can result in blockage due to libarchive issue 2520";
+        LOG(WARNING)
+            << "See https://github.com/libarchive/libarchive/issues/2520";
+      }
+
+      // Only specific formats are recognized after a compression filter.
       if (SetFormatAfterExtraFilter(ext)) {
         p = p.substr(0, i);
         if (first_time) {
@@ -1645,7 +1661,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
     // Not a recognized extension. So we'll activate most of the possible
     // formats, and let libarchive's bidding system do its job.
-    Check(archive_read_support_filter_all(archive.get()));
+    if (g_options.max_filter_count > 0) {
+      Check(archive_read_support_filter_all(archive.get()));
+    }
 
     // Prepare the handlers for the recognized archive formats. We first install
     // handlers whose heuristic format identification tests are the fastest and
@@ -1658,7 +1676,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
     Check(archive_read_support_format_ar(archive.get()));
     Check(archive_read_support_format_cpio(archive.get()));
     Check(archive_read_support_format_lha(archive.get()));
-    Check(archive_read_support_format_mtree(archive.get()));
     Check(archive_read_support_format_xar(archive.get()));
     Check(archive_read_support_format_warc(archive.get()));
 
@@ -3710,6 +3727,7 @@ general options:
     -v   -o verbose        print more log messages
     -o redact              redact paths from log messages
     -o force               continue despite errors
+    -o maxfilters=N        maximum number of filters per archive (default 1)
     -o lazycache           incremental caching of uncompressed data
     -o nocache             no caching of uncompressed data
     -o nomerge             don't merge multiple archives in the same directory

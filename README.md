@@ -49,6 +49,9 @@ mount read-only, not read-write.
 **-o force**
 :   Continue despite errors
 
+**-o maxfilters=N**
+:   Maximum number of filters per archive (default is 1)
+
 **-o lazycache**
 :   Incremental caching of uncompressed data
 
