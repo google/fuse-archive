@@ -3398,7 +3398,7 @@ int Read(const char*,
   // Pad the buffer with NUL bytes. This is a workaround for
   // https://github.com/libarchive/libarchive/issues/1194.
   // See https://github.com/google/fuse-archive/issues/40.
-  // std::ranges::fill(dst, '\0');
+  std::ranges::fill(dst, '\0');
   assert(std::ranges::all_of(dst, [](char const c) { return c == '\0'; }));
   n += dst.size();
 
