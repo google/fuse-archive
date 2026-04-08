@@ -194,7 +194,7 @@ def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get
         ]
         logging.debug(f'Mounting {zip_paths!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program, *options, '--', *zip_paths, mount_point],
+            [mount_program, *options, *zip_paths, mount_point],
             check=True,
             capture_output=True,
             input=password,
@@ -1471,7 +1471,7 @@ def TestBigArchiveRandomOrder(options=[]):
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program, *options, '--', zip_path, mount_point],
+            [mount_program, *options, zip_path, mount_point],
             check=True,
             capture_output=True,
             input='',
@@ -1533,7 +1533,7 @@ def TestBigArchiveStreamed(options=[]):
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         subprocess.run(
-            [mount_program, *options, '--', zip_path, mount_point],
+            [mount_program, *options, zip_path, mount_point],
             check=True,
             capture_output=True,
             input='',
@@ -1587,7 +1587,7 @@ def TestNocacheSparseReadIsZeroFilled():
         env = os.environ.copy()
         env['MALLOC_PERTURB_'] = '170'
         subprocess.run(
-            [mount_program, '-o', 'nocache,direct_io', '--', archive_path, mount_point],
+            [mount_program, '-o', 'nocache,direct_io', archive_path, mount_point],
             check=True,
             capture_output=True,
             input='',
