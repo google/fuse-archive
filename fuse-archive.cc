@@ -3416,7 +3416,6 @@ int Read(const char*,
   // https://github.com/libarchive/libarchive/issues/1194.
   // See https://github.com/google/fuse-archive/issues/40.
   std::ranges::fill(dst, '\0');
-  assert(std::ranges::all_of(dst, [](char const c) { return c == '\0'; }));
   n += dst.size();
 
   return static_cast<int>(n);
