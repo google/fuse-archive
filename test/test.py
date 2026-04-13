@@ -266,7 +266,7 @@ def MountArchiveAndCheckTree(
 
         if want_tree is not None: CheckTree(got_tree, want_tree, strict=strict)
     except subprocess.CalledProcessError as e:
-        LogError(f'Cannot test {zip_names}: {e.stderr}')
+        LogError(f'Cannot test {zip_names!r}: {e.stderr}')
 
 
 # Try to mount the given archive(s), and expects an error.
@@ -1476,56 +1476,59 @@ def TestBigArchiveRandomOrder(options=[]):
     with tempfile.TemporaryDirectory() as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
-        subprocess.run(
-            [mount_program, *options, zip_path, mount_point],
-            check=True,
-            capture_output=True,
-            input='',
-            encoding='UTF-8',
-            env = env,
-        )
         try:
-            logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
-
-            GetTree(mount_point, use_md5=False)
-            st = os.statvfs(mount_point)
-
-            want_blocks = 10546877
-            if st.f_blocks != want_blocks:
-                LogError(
-                    f'Mismatch for st.f_blocks: got: {st.f_blocks}, want: {want_blocks}'
-                )
-
-            want_inodes = 2
-            if st.f_files != want_inodes:
-                LogError(
-                    f'Mismatch for st.f_files: got: {st.f_files}, want: {want_inodes}'
-                )
-
-            fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
+            subprocess.run(
+                [mount_program, *options, zip_path, mount_point],
+                check=True,
+                capture_output=True,
+                input='',
+                encoding='UTF-8',
+                env = env,
+            )
             try:
-                random.seed()
-                n = 100000000
-                for j in [random.randrange(n) for i in range(100)] + [n - 1, 0, n - 1]:
-                    logging.debug(f'Getting line {j}...')
-                    want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
-                    got_line = os.pread(fd, len(want_line), j * len(want_line))
+                logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
+
+                GetTree(mount_point, use_md5=False)
+                st = os.statvfs(mount_point)
+
+                want_blocks = 10546877
+                if st.f_blocks != want_blocks:
+                    LogError(
+                        f'Mismatch for st.f_blocks: got: {st.f_blocks}, want: {want_blocks}'
+                    )
+
+                want_inodes = 2
+                if st.f_files != want_inodes:
+                    LogError(
+                        f'Mismatch for st.f_files: got: {st.f_files}, want: {want_inodes}'
+                    )
+
+                fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
+                try:
+                    random.seed()
+                    n = 100000000
+                    for j in [random.randrange(n) for i in range(100)] + [n - 1, 0, n - 1]:
+                        logging.debug(f'Getting line {j}...')
+                        want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
+                        got_line = os.pread(fd, len(want_line), j * len(want_line))
+                        if got_line != want_line:
+                            LogError(
+                                f'Want line: {want_line!r}, Got line: {got_line!r}')
+                    got_line = os.pread(fd, 100, j * len(want_line))
                     if got_line != want_line:
                         LogError(
                             f'Want line: {want_line!r}, Got line: {got_line!r}')
-                got_line = os.pread(fd, 100, j * len(want_line))
-                if got_line != want_line:
-                    LogError(
-                        f'Want line: {want_line!r}, Got line: {got_line!r}')
-                got_line = os.pread(fd, 100, n * len(want_line))
-                if got_line:
-                    LogError(f'Want empty line, Got line: {got_line!r}')
+                    got_line = os.pread(fd, 100, n * len(want_line))
+                    if got_line:
+                        LogError(f'Want empty line, Got line: {got_line!r}')
+                finally:
+                    os.close(fd)
             finally:
-                os.close(fd)
-        finally:
-            logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-            subprocess.run(['umount', '-l', mount_point], check=True)
-            logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
+                logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
+                subprocess.run(['umount', '-l', mount_point], check=True)
+                logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
+        except subprocess.CalledProcessError as e:
+            LogError(f'Cannot test {zip_name!r}: {e.stderr}')
 
 
 # Tests that a big file can be accessed in somewhat globally increasing order
@@ -1539,37 +1542,40 @@ def TestBigArchiveStreamed(options=[]):
     with tempfile.TemporaryDirectory() as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
-        subprocess.run(
-            [mount_program, *options, zip_path, mount_point],
-            check=True,
-            capture_output=True,
-            input='',
-            encoding='UTF-8',
-            env = env,
-        )
         try:
-            logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
-            GetTree(mount_point, use_md5=False)
-            fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
+            subprocess.run(
+                [mount_program, *options, zip_path, mount_point],
+                check=True,
+                capture_output=True,
+                input='',
+                encoding='UTF-8',
+                env = env,
+            )
             try:
-                random.seed()
-                n = 100000000
-                for i in [(r * 2 + 1) * n // 20 for r in range(10)] + [n - 1]:
-                    for k in range(3):
-                        j = i - k * 1000000
-                        if j < 0: continue
-                        logging.debug(f'Getting line {j}...')
-                        want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
-                        got_line = os.pread(fd, len(want_line), j * len(want_line))
-                        if got_line != want_line:
-                            LogError(
-                                f'Want line: {want_line!r}, Got line: {got_line!r}')
+                logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
+                GetTree(mount_point, use_md5=False)
+                fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
+                try:
+                    random.seed()
+                    n = 100000000
+                    for i in [(r * 2 + 1) * n // 20 for r in range(10)] + [n - 1]:
+                        for k in range(3):
+                            j = i - k * 1000000
+                            if j < 0: continue
+                            logging.debug(f'Getting line {j}...')
+                            want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
+                            got_line = os.pread(fd, len(want_line), j * len(want_line))
+                            if got_line != want_line:
+                                LogError(
+                                    f'Want line: {want_line!r}, Got line: {got_line!r}')
+                finally:
+                    os.close(fd)
             finally:
-                os.close(fd)
-        finally:
-            logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-            subprocess.run(['umount', '-l', mount_point], check=True)
-            logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
+                logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
+                subprocess.run(['umount', '-l', mount_point], check=True)
+                logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
+        except subprocess.CalledProcessError as e:
+            LogError(f'Cannot test {zip_name!r}: {e.stderr}')
 
 
 # Tests encrypted archive.
