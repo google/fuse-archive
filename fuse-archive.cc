@@ -178,51 +178,6 @@ class Logger {
   if (LogLevel::level <= g_log_level) \
   Logger(LogLevel::level, errno)
 
-// A scoped file descriptor.
-class ScopedFile {
- public:
-  // Closes this file descriptor if it is valid.
-  ~ScopedFile() {
-    if (IsValid() && close(fd_) < 0) {
-      PLOG(ERROR) << "Cannot close file";
-    }
-  }
-
-  // Creates an invalid file descriptor.
-  ScopedFile() noexcept : fd_(-1) {}
-
-  // Takes ownership of the given file descriptor, if it is valid.
-  explicit ScopedFile(int fd) noexcept : fd_(fd) {}
-
-  // Move constructor.
-  ScopedFile(ScopedFile&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
-
-  // Swaps this file descriptor with the other one.
-  void SwapWith(ScopedFile& other) noexcept { std::swap(fd_, other.fd_); }
-
-  // Closes this file descriptor if it is valid.
-  void Close() noexcept {
-    ScopedFile other;
-    SwapWith(other);
-  }
-
-  // Universal assignment operator.
-  ScopedFile& operator=(ScopedFile other) noexcept {
-    SwapWith(other);
-    return *this;
-  }
-
-  // Is this file descriptor valid?
-  bool IsValid() const noexcept { return fd_ >= 0; }
-
-  // Gets the underlying raw file descriptor.
-  operator int() const noexcept { return fd_; }
-
- private:
-  // Raw file descriptor.
-  int fd_;
-};
-
 // ---- Exit Codes
 
 // These are values passed to the exit function, or returned by main. These are
@@ -278,6 +233,71 @@ std::string_view GetErrorString(archive* const a) {
 #if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
 #define lseek64 lseek
 #endif
+
+// A scoped file descriptor.
+class ScopedFile {
+ public:
+  // Closes this file descriptor if it is valid.
+  ~ScopedFile() {
+    if (IsValid() && close(fd_) < 0) {
+      PLOG(ERROR) << "Cannot close file";
+    }
+  }
+
+  // Creates an invalid file descriptor.
+  ScopedFile() noexcept : fd_(-1) {}
+
+  // Takes ownership of the given file descriptor, if it is valid.
+  explicit ScopedFile(int fd) noexcept : fd_(fd) {}
+
+  // Move constructor.
+  ScopedFile(ScopedFile&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+
+  // Swaps this file descriptor with the other one.
+  void SwapWith(ScopedFile& other) noexcept { std::swap(fd_, other.fd_); }
+
+  // Closes this file descriptor if it is valid.
+  void Close() noexcept {
+    ScopedFile other;
+    SwapWith(other);
+  }
+
+  // Universal assignment operator.
+  ScopedFile& operator=(ScopedFile other) noexcept {
+    SwapWith(other);
+    return *this;
+  }
+
+  // Is this file descriptor valid?
+  bool IsValid() const noexcept { return fd_ >= 0; }
+
+  // Gets the underlying raw file descriptor.
+  operator int() const noexcept { return fd_; }
+
+  // Writes the given bytes into this file at the given position.
+  // Throws ExitCode::CANNOT_WRITE_CACHE in case of error.
+  void Write(std::string_view b, i64 pos) const {
+    while (!b.empty()) {
+      ssize_t const r = pwrite(fd_, b.data(), b.size(), pos);
+      if (r < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+
+        PLOG(ERROR) << "Cannot write to cache";
+        throw ExitCode::CANNOT_WRITE_CACHE;
+      }
+
+      assert(r <= b.size());
+      b.remove_prefix(r);
+      pos += r;
+    }
+  }
+
+ private:
+  // Raw file descriptor.
+  int fd_;
+};
 
 // ---- Globals
 
@@ -1803,6 +1823,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 int Reader::count = 0;
 bi::list<Reader> Reader::recycled;
 
+// A node of the virtual file system: either a directory or a file.
 struct Node {
   // Name of this node in the context of its parent. This name should be a valid
   // and non-empty filename, and it shouldn't contain any '/' separator. The
@@ -1824,11 +1845,18 @@ struct Node {
   // Index of the entry represented by this node in the archive, or 0 if it is
   // not directly represented in the archive (like any directory).
   i64 const index_within_archive = 0;
+
+  // Number of bytes of this file.
   i64 size = 0;
 
   // Where does the cached data start in the cache file?
   i64 cache_offset = std::numeric_limits<i64>::min();
+
+  // How many bytes have been cached so far for this file?
   i64 cached_size = 0;
+
+  i64 last_hole_start = 0;
+
   Reader::Ptr reader;
 
   time_t mtime = 0;
@@ -2044,6 +2072,8 @@ struct Node {
 
     Timer const timer;
     if (cache_offset < 0) {
+      // No data in cache for this file yet.
+      // Reserve a range of bytes in the cache file.
       assert(cached_size == 0);
       cache_offset = g_cache_size;
       g_cache_size += size;
@@ -2072,34 +2102,17 @@ struct Node {
     i64 const old_cached_size = cached_size;
     while (cached_size < want_cached_size) {
       char buff[64 * 1024];
-      std::span<char> b(buff);
 
-      ssize_t const n = reader->Read(cached_size, b);
+      ssize_t const n = reader->Read(cached_size, buff);
       assert(n >= 0);
       if (n == 0) {
         LOG(ERROR) << "Unexpected EOF while caching " << *this;
         break;
       }
 
-      assert(n <= b.size());
-      b = b.first(n);
-      while (!b.empty()) {
-        ssize_t const r =
-            pwrite(g_cache_fd, b.data(), b.size(), cache_offset + cached_size);
-        if (r < 0) {
-          if (errno == EINTR) {
-            continue;
-          }
-
-          PLOG(ERROR) << "Cannot write to cache";
-          throw ExitCode::CANNOT_WRITE_CACHE;
-        }
-
-        assert(r <= b.size());
-        b = b.subspan(r);
-        cached_size += r;
-        assert(reader->offset_within_entry == cached_size);
-      }
+      g_cache_fd.Write(std::string_view(buff, n), cache_offset + cached_size);
+      cached_size += n;
+      assert(reader->offset_within_entry == cached_size);
     }
 
     LOG(DEBUG) << "Cached " << cached_size - old_cached_size << " bytes of "
@@ -2545,7 +2558,9 @@ bool ShouldSkip(FileType const ft) {
   return true;
 }
 
-off_t CacheEntryData(Archive* const a, int const dest_fd, off_t dest_offset) {
+off_t CacheEntryData(Archive* const a,
+                     const ScopedFile& dest_fd,
+                     off_t dest_offset) {
   assert(dest_offset >= 0);
   off_t const file_start_offset = dest_offset;
 
@@ -2566,22 +2581,9 @@ off_t CacheEntryData(Archive* const a, int const dest_fd, off_t dest_offset) {
         assert(offset >= 0);
         assert(dest_offset <= file_start_offset + offset);
         dest_offset = file_start_offset + offset;
-
-        for (std::string_view s(static_cast<const char*>(buff), len);
-             !s.empty();) {
-          ssize_t const n = pwrite(dest_fd, s.data(), s.size(), dest_offset);
-          if (n < 0) {
-            if (errno == EINTR) {
-              continue;
-            }
-
-            PLOG(ERROR) << "Cannot write to cache";
-            throw ExitCode::CANNOT_WRITE_CACHE;
-          }
-
-          dest_offset += n;
-          s.remove_prefix(n);
-        }
+        dest_fd.Write(std::string_view(static_cast<const char*>(buff), len),
+                      dest_offset);
+        dest_offset += len;
 
         continue;
 
