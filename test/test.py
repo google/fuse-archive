@@ -182,7 +182,10 @@ has_openssl = HasLib('openssl')
 
 # https://github.com/google/fuse-archive/issues/59
 env = os.environ.copy()
-env['MALLOC_PERTURB_'] = '170'
+# MALLOC_PERTURB_ makes lrzip much slower
+# https://github.com/ckolivas/lrzip/issues/266
+if not is_fast:
+    env['MALLOC_PERTURB_'] = '170'
 
 # Mounts the given archive(s), walks the mounted archive and unmounts.
 # Returns a pair where:
