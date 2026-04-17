@@ -278,6 +278,8 @@ class ScopedFile {
   operator int() const noexcept { return fd_; }
 
   // Writes the given bytes into this file at the given position.
+  // Returns `pos + b.size()`, which is the position immediately following the
+  // written bytes.
   //
   // Preconditions:
   // - `this` must be a valid, writable file descriptor.
@@ -287,7 +289,7 @@ class ScopedFile {
   // - The data in `b` is fully written to the file at `pos`.
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
-  void Write(std::string_view b, i64 pos) const {
+  i64 Write(std::string_view b, i64 pos) const {
     while (!b.empty()) {
       ssize_t const r = pwrite(fd_, b.data(), b.size(), pos);
       if (r < 0) {
@@ -302,6 +304,64 @@ class ScopedFile {
       assert(r <= b.size());
       b.remove_prefix(r);
       pos += r;
+    }
+
+    return pos;
+  }
+
+  // Writes the given bytes into this file at the given position.
+  // While doing so, it detects and skips "holes" (sparse regions).
+  // A "hole" is defined as a sequence of 1024 or more consecutive NUL bytes.
+  // Returns the position immediately following the last written bytes,
+  // or `last_hole_start` if nothing was written.
+  //
+  // Preconditions:
+  // - `this` must be a valid, writable file descriptor.
+  // - `pos >= 0`.
+  //
+  // Postconditions:
+  // - The data in `b` is written to the file at `pos`, except for holes.
+  //
+  // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
+  i64 WriteBytesAndSkipHoles(std::string_view b,
+                             i64 pos,
+                             i64 last_hole_start) const {
+    constexpr size_t npos = std::string_view::npos;
+    constexpr size_t min_hole_size = 1024;
+
+    size_t i = b.find_first_not_of('\0');
+    if (i == npos) {
+      return last_hole_start;
+    }
+
+    while (true) {
+      assert(i < b.size());
+      b.remove_prefix(i);
+      pos += i;
+      i = 0;
+
+      size_t j;
+      do {
+        assert(!b.empty());
+        assert(!b.starts_with('\0'));
+
+        j = b.find_first_of('\0', i);
+        if (j == npos) {
+          return Write(b, pos);
+        }
+
+        assert(i < j && j < b.size());
+
+        i = b.find_first_not_of('\0', j);
+        if (i == npos) {
+          return Write(b.substr(0, j), pos);
+        }
+
+        assert(j < i && i < b.size());
+      } while (i - j < min_hole_size);
+
+      // Found a sequence of NUL bytes long enough to be considered a "hole".
+      last_hole_start = Write(b.substr(0, j), pos);
     }
   }
 
@@ -2120,6 +2180,8 @@ struct Node {
       // Reserve a range of bytes in the cache file.
       assert(cached_size == 0);
       cache_offset = g_cache_size;
+      assert(last_hole_start == 0);
+      last_hole_start = cache_offset;
       g_cache_size += size;
       while (ftruncate(g_cache_fd, g_cache_size) < 0) {
         if (errno != EINTR) {
@@ -2154,7 +2216,9 @@ struct Node {
         break;
       }
 
-      g_cache_fd.Write(std::string_view(buff, n), cache_offset + cached_size);
+      last_hole_start = g_cache_fd.WriteBytesAndSkipHoles(
+          std::string_view(buff, n), cache_offset + cached_size,
+          last_hole_start);
       cached_size += n;
       assert(reader->offset_within_entry == cached_size);
     }
@@ -2634,10 +2698,12 @@ bool ShouldSkip(FileType const ft) {
 //   at the beginning of an entry's data blocks.
 // - `dest_fd` must be a valid, writable file descriptor for the cache file.
 // - `dest_offset >= 0`, representing the logical starting position in the
-// cache.
+//   cache.
 //
 // Postconditions:
 // - The entry's data is fully written to `dest_fd`.
+// - Sparse "holes" (long sequences of NUL bytes) are skipped to save disk
+//   space.
 // - The cache file is truncated to the correct length to ensure trailing holes
 //   are reflected in the file size.
 // - Returns the new cache file size.
@@ -2645,11 +2711,12 @@ bool ShouldSkip(FileType const ft) {
 // Throws:
 // - ExitCode::CANNOT_WRITE_CACHE in case of an I/O error when writing.
 // - ExitCode::INVALID_ARCHIVE_CONTENTS if libarchive fails to read the data.
-off_t CacheEntryData(Archive* const a,
-                     const ScopedFile& dest_fd,
-                     off_t dest_offset) {
+i64 CacheEntryData(Archive* const a,
+                   const ScopedFile& dest_fd,
+                   i64 dest_offset) {
   assert(dest_offset >= 0);
-  off_t const file_start_offset = dest_offset;
+  i64 const file_start_offset = dest_offset;
+  i64 last_hole_start = file_start_offset;
 
   while (true) {
     const void* buff = nullptr;
@@ -2668,8 +2735,9 @@ off_t CacheEntryData(Archive* const a,
         assert(offset >= 0);
         assert(dest_offset <= file_start_offset + offset);
         dest_offset = file_start_offset + offset;
-        dest_fd.Write(std::string_view(static_cast<const char*>(buff), len),
-                      dest_offset);
+        last_hole_start = dest_fd.WriteBytesAndSkipHoles(
+            std::string_view(static_cast<const char*>(buff), len), dest_offset,
+            last_hole_start);
         dest_offset += len;
 
         continue;
@@ -2681,9 +2749,8 @@ off_t CacheEntryData(Archive* const a,
 
         // Adjust the cache size if there is a final "hole".
         // See https://github.com/google/fuse-archive/issues/40
-        if (off_t const cache_size = file_start_offset + offset;
-            dest_offset < cache_size) {
-          dest_offset = cache_size;
+        dest_offset = file_start_offset + offset;
+        if (last_hole_start < dest_offset) {
           while (ftruncate(dest_fd, dest_offset) < 0) {
             if (errno != EINTR) {
               PLOG(ERROR) << "Cannot resize cache to " << dest_offset
@@ -3134,7 +3201,7 @@ void BuildTree() {
 
         ScopedFile fd = CreateCacheFile();
         CheckCacheFile(fd);
-        off_t const size = CacheEntryData(r->archive.get(), fd, 0);
+        i64 const size = CacheEntryData(r->archive.get(), fd, 0);
         r.reset();
         archive =
             ArchiveDescriptor{.path = std::move(archive.name_without_extension),
