@@ -374,6 +374,9 @@ def TestArchiveWithOptions(options=[]):
     for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
+    if has_zlib:
+        MountArchiveAndCheckTree('archive.tar.gz.uu', want_tree, options=[*options, '-o', 'maxfilters=2'])
+
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
         'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
@@ -425,6 +428,9 @@ def TestArchiveWithOptions(options=[]):
 
     for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+
+    if has_zlib:
+        MountArchiveAndCheckTree('romeo.txt.gz.uu', want_tree, options=[*options, '-o', 'maxfilters=2'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
