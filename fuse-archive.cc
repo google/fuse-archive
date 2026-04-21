@@ -1412,7 +1412,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   bool SetFilter(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<void(Reader&)>> const ext_to_filter = {
+        std::string_view, void (*)(Reader&)> const ext_to_filter = {
         {"asc", SET_FILTER_COMMAND(gpg)},
         {"gpg", SET_FILTER_COMMAND(gpg)},
         {"pgp", SET_FILTER_COMMAND(gpg)},
@@ -1466,7 +1466,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   bool SetCompressedTarFormat(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<void(Reader&)>> const ext_to_filter = {
+        std::string_view, void (*)(Reader&)> const ext_to_filter = {
         // Work around https://github.com/libarchive/libarchive/issues/2514
         // {"taz", SET_FILTER(COMPRESS)},
         {"taz", SET_FILTER_COMMAND(compress)},
@@ -1522,7 +1522,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   bool SetFormatBeforeExtraFilter(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<void(Reader&)>> const ext_to_format = {
+        std::string_view, void (*)(Reader&)> const ext_to_format = {
         {"7z", SET_FORMAT(7zip)},
         {"7zip", SET_FORMAT(7zip)},
         {"a", SET_FORMAT(ar)},
@@ -1544,10 +1544,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"odt", SET_FORMAT(zip_seekable)},
         {"ppsx", SET_FORMAT(zip_seekable)},
         {"pptx", SET_FORMAT(zip_seekable)},
-        {"rar", &Reader::SetRarFormat},
-        {"rpm", &Reader::SetRpmFormat},
-        {"spm", &Reader::SetRpmFormat},
-        {"tar", &Reader::SetTarFormat},
+        {"rar", [](Reader& r) { r.SetRarFormat(); }},
+        {"rpm", [](Reader& r) { r.SetRpmFormat(); }},
+        {"spm", [](Reader& r) { r.SetRpmFormat(); }},
+        {"tar", [](Reader& r) { r.SetTarFormat(); }},
         {"war", SET_FORMAT(zip_seekable)},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
@@ -1567,7 +1567,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
   bool SetFormatAfterExtraFilter(std::string_view const ext) {
     static std::unordered_map<
-        std::string_view, std::function<void(Reader&)>> const ext_to_format = {
+        std::string_view, void (*)(Reader&)> const ext_to_format = {
         {"a", SET_FORMAT(ar)},
         {"ar", SET_FORMAT(ar)},
         {"cab", SET_FORMAT(cab)},
@@ -1577,8 +1577,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
         {"iso9660", SET_FORMAT(iso9660)},
         {"lha", SET_FORMAT(lha)},
         {"mtree", SET_FORMAT(mtree)},
-        {"rar", &Reader::SetRarFormat},
-        {"tar", &Reader::SetTarFormat},
+        {"rar", [](Reader& r) { r.SetRarFormat(); }},
+        {"tar", [](Reader& r) { r.SetTarFormat(); }},
         {"warc", SET_FORMAT(warc)},
         {"xar", SET_FORMAT(xar)},
     };
