@@ -278,7 +278,15 @@ class ScopedFile {
   operator int() const noexcept { return fd_; }
 
   // Writes the given bytes into this file at the given position.
-  // Throws ExitCode::CANNOT_WRITE_CACHE in case of error.
+  //
+  // Preconditions:
+  // - `this` must be a valid, writable file descriptor.
+  // - `pos >= 0`.
+  //
+  // Postconditions:
+  // - The data in `b` is fully written to the file at `pos`.
+  //
+  // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
   void Write(std::string_view b, i64 pos) const {
     while (!b.empty()) {
       ssize_t const r = pwrite(fd_, b.data(), b.size(), pos);
@@ -2064,6 +2072,20 @@ struct Node {
     return &*it;
   }
 
+  // Reads and caches data for this file up to `want_cached_size`.
+  //
+  // Preconditions:
+  // - `want_cached_size <= size` (the total decompressed size of the file).
+  // - `this` must represent a valid File node within an archive.
+  //
+  // Postconditions:
+  // - The uncompressed data up to `want_cached_size` is available in
+  //   `g_cache_fd`.
+  // - `cached_size` is updated to reflect the newly cached amount.
+  // - `cache_offset` is set and `>= 0`.
+  // - `reader` is advanced to `cached_size`.
+  //
+  // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
   void CacheUpTo(i64 const want_cached_size) {
     if (want_cached_size <= cached_size) {
       return;
@@ -2402,6 +2424,18 @@ void RehashIfNecessary() {
   }
 }
 
+// Detects and resolves path collisions by renaming the given node if necessary.
+//
+// Preconditions:
+// - `node` must be a valid, fully-initialized Node (with its parent assigned).
+// - `node` must not be present in `g_nodes_by_path` yet.
+//
+// Postconditions:
+// - If a collision occurs with an existing node in `g_nodes_by_path`, `node`'s
+//   name is modified by appending a numeric suffix (e.g., " (1)") before its
+//   filename extension, until the path becomes unique.
+// - `node` is successfully inserted into `g_nodes_by_path`.
+// - The path hash for `node` is recomputed if it was renamed.
 void RenameIfCollision(Node* const node) {
   assert(node);
   auto const [pos, ok] = g_nodes_by_path.insert(*node);
@@ -2445,6 +2479,18 @@ void RenameIfCollision(Node* const node) {
   }
 }
 
+// Gets or creates the directory hierarchy for the given path.
+//
+// Preconditions:
+// - `path` must be an absolute path (starting with '/').
+//
+// Postconditions:
+// - Returns a pointer to the Node corresponding to `path`.
+// - If the Node did not exist, it and any missing ancestor directories are
+//   created and inserted into the virtual file system.
+// - If an existing non-directory node conflicts with any part of the path,
+//   that non-directory node is renamed (via `RenameIfCollision`) to make room
+//   for the new directory.
 Node* GetOrCreateDirNode(std::string_view path) {
   if (!g_dirs || path.size() <= 1) {
     return g_root_node;
@@ -2561,6 +2607,25 @@ bool ShouldSkip(FileType const ft) {
   return true;
 }
 
+// Caches the uncompressed data of the current archive entry into the cache
+// file.
+//
+// Preconditions:
+// - `a` must be an initialized libarchive descriptor, currently positioned
+//   at the beginning of an entry's data blocks.
+// - `dest_fd` must be a valid, writable file descriptor for the cache file.
+// - `dest_offset >= 0`, representing the logical starting position in the
+// cache.
+//
+// Postconditions:
+// - The entry's data is fully written to `dest_fd`.
+// - The cache file is truncated to the correct length to ensure trailing holes
+//   are reflected in the file size.
+// - Returns the new cache file size.
+//
+// Throws:
+// - ExitCode::CANNOT_WRITE_CACHE in case of an I/O error when writing.
+// - ExitCode::INVALID_ARCHIVE_CONTENTS if libarchive fails to read the data.
 off_t CacheEntryData(Archive* const a,
                      const ScopedFile& dest_fd,
                      off_t dest_offset) {
@@ -2621,6 +2686,21 @@ off_t CacheEntryData(Archive* const a,
   }
 }
 
+// Processes an archive entry and creates the corresponding Node(s) in the
+// virtual file system.
+//
+// Preconditions:
+// - `r` must be a valid Reader currently positioned at an archive entry.
+// - `path` is a buffer used to hold the entry's normalized path. It must
+// initially contain the base path for the archive within the virtual file
+// system.
+// - `local_root` is the root node for this archive.
+//
+// Postconditions:
+// - Creates a Node (or updates directories) for the entry and inserts it into
+//   the file system tree under `local_root`.
+// - Caches the data if `g_cache == Cache::Full`.
+// - Extended attributes and hardlinks are processed and recorded.
 void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   Archive* const a = r.archive.get();
   Entry* const e = r.entry;
@@ -2849,6 +2929,13 @@ void ResolveHardlinks() {
   g_hardlinks_to_resolve.clear();
 }
 
+// Verifies the archive format.
+//
+// Preconditions:
+// - `r` must be a valid Reader positioned at an archive entry.
+//
+// Throws ExitCode::UNKNOWN_ARCHIVE_FORMAT if no valid compression filters are
+// found for a 'raw' archive.
 void CheckRawArchive(Reader& r) {
   if (r.descriptor->format != ArchiveFormat::NONE) {
     // Already checked.
