@@ -37,7 +37,6 @@
 #include <cerrno>
 #include <chrono>
 #include <climits>
-#include <compare>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -93,10 +92,7 @@ struct Timer {
   using Clock = std::chrono::steady_clock;
 
   // Start time.
-  Clock::time_point start = Clock::now();
-
-  // Resets this timer.
-  void Reset() { start = Clock::now(); }
+  Clock::time_point const start = Clock::now();
 
   // Elapsed time in milliseconds.
   auto Milliseconds() const {
@@ -230,12 +226,6 @@ std::string_view GetErrorString(archive* const a) {
   // Work around bug https://github.com/libarchive/libarchive/issues/2495.
   return archive_error_string(a) ?: "Unspecified error";
 }
-
-// ---- Platform specifics
-
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
-#define lseek64 lseek
-#endif
 
 // A scoped file descriptor.
 class ScopedFile {
@@ -721,11 +711,6 @@ class Path : public std::string_view {
     }
 
     return last_dot;
-  }
-
-  // Removes the final extension, if any.
-  Path WithoutFinalExtension() const {
-    return substr(0, FinalExtensionPosition());
   }
 
   // Removes the extension, if any.
