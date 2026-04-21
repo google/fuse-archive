@@ -995,7 +995,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   // Number of Readers created so far.
   static int count;
 
-  int id = ++count;
+  int const id = ++count;
   ArchiveDescriptor* const descriptor;
   ArchivePtr archive = ArchivePtr(archive_read_new());
   Entry* entry = nullptr;
@@ -2705,7 +2705,7 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   Archive* const a = r.archive.get();
   Entry* const e = r.entry;
   i64 const i = r.index_within_archive;
-  mode_t mode = archive_entry_mode(e);
+  mode_t const mode = archive_entry_mode(e);
   FileType const ft = GetFileType(mode);
 
   assert(path.starts_with('/'));
