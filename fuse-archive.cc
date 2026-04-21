@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <climits>
@@ -45,9 +46,11 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <locale>
 #include <memory>
+#include <new>
 #include <ostream>
 #include <span>
 #include <sstream>
