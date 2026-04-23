@@ -294,6 +294,25 @@ class ScopedFile {
   // Gets the underlying raw file descriptor.
   operator int() const noexcept { return fd_; }
 
+  // Resizes this file by either truncating it or extending it with NUL bytes.
+  //
+  // Preconditions:
+  // - `this` must be a valid, writable file descriptor.
+  // - `new_size >= 0`.
+  //
+  // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
+  void Truncate(i64 const new_size) const {
+    assert(IsValid());
+    assert(new_size >= 0);
+
+    while (ftruncate(fd_, new_size) < 0) {
+      if (errno != EINTR) {
+        PLOG(ERROR) << "Cannot resize file to " << new_size << " bytes";
+        throw ExitCode::CANNOT_WRITE_CACHE;
+      }
+    }
+  }
+
   // Writes the given bytes into this file at the given position.
   // Returns `pos + b.size()`, which is the position immediately following the
   // written bytes.
@@ -307,6 +326,9 @@ class ScopedFile {
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
   i64 Write(std::string_view b, i64 pos) const {
+    assert(IsValid());
+    assert(pos >= 0);
+
     while (!b.empty()) {
       ssize_t const r = pwrite(fd_, b.data(), b.size(), pos);
       if (r < 0) {
@@ -2214,12 +2236,7 @@ struct Node {
       assert(last_hole_start == 0);
       last_hole_start = cache_offset;
       g_cache_size += size;
-      while (ftruncate(g_cache_fd, g_cache_size) < 0) {
-        if (errno != EINTR) {
-          PLOG(ERROR) << "Cannot resize cache to " << g_cache_size << " bytes";
-          throw ExitCode::CANNOT_WRITE_CACHE;
-        }
-      }
+      g_cache_fd.Truncate(g_cache_size);
 
       LOG(DEBUG) << "Increased cache file size by " << size << " bytes to "
                  << g_cache_size << " bytes";
@@ -2765,13 +2782,14 @@ bool ShouldSkip(FileType const ft) {
 i64 CacheEntryData(Archive* const a,
                    const ScopedFile& dest_fd,
                    i64 const file_start_offset,
-                   Holes* const holes = nullptr) {
+                   Holes* const holes = nullptr) try {
   assert(file_start_offset >= 0);
   i64 dest_offset = file_start_offset;
   i64 last_hole_start = file_start_offset;
 
   ScopedFile::HoleCallback on_hole;
   if (holes) {
+    assert(holes->empty());
     on_hole = [holes, file_start_offset](i64 from, i64 to) {
       from -= file_start_offset;
       to -= file_start_offset;
@@ -2812,16 +2830,9 @@ i64 CacheEntryData(Archive* const a,
         // See https://github.com/google/fuse-archive/issues/40
         dest_offset = file_start_offset + offset;
         if (last_hole_start < dest_offset) {
+          dest_fd.Truncate(dest_offset);
           if (on_hole) {
             on_hole(last_hole_start, dest_offset);
-          }
-
-          while (ftruncate(dest_fd, dest_offset) < 0) {
-            if (errno != EINTR) {
-              PLOG(ERROR) << "Cannot resize cache to " << dest_offset
-                          << " bytes";
-              throw ExitCode::CANNOT_WRITE_CACHE;
-            }
           }
         }
 
@@ -2835,6 +2846,13 @@ i64 CacheEntryData(Archive* const a,
         throw ExitCode::INVALID_ARCHIVE_CONTENTS;
     }
   }
+} catch (...) {
+  // In case of error, erase the data of the partially cached file.
+  if (holes) {
+    holes->clear();
+  }
+  dest_fd.Truncate(file_start_offset);
+  throw;
 }
 
 // Processes an archive entry and creates the corresponding Node(s) in the
@@ -2973,6 +2991,8 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     node->size = archive_entry_size(e);
     i64 const offset = g_cache_size;
     g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size, &node->holes);
+    // Now that CacheEntryData has succeeded without throwing an exception, we
+    // can remember the cache offset.
     node->cache_offset = offset;
     node->cached_size = node->size = g_cache_size - offset;
     node->last_hole_start = g_cache_size;
