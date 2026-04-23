@@ -184,7 +184,7 @@ has_openssl = HasLib('openssl')
 env = os.environ.copy()
 # MALLOC_PERTURB_ makes lrzip much slower
 # https://github.com/ckolivas/lrzip/issues/266
-if not is_fast:
+if not is_fast and not has_lrzip:
     env['MALLOC_PERTURB_'] = '170'
 
 # Mounts the given archive(s), walks the mounted archive and unmounts.
