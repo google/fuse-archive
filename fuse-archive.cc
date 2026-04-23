@@ -227,12 +227,23 @@ std::string_view GetErrorString(archive* const a) {
   return archive_error_string(a) ?: "Unspecified error";
 }
 
+constexpr blksize_t block_size = 512;
+
 // A hole in a sparse file.
 struct Hole {
   i64 from, to;
 
   Hole(i64 const from, i64 const to) : from(from), to(to) {
     assert(0 <= from && from < to);
+  }
+
+  // Returns the number of blocks saved by this hole in a file of the given
+  // size.
+  i64 GetSavedBlocks(i64 const file_size) const {
+    constexpr i64 bsm1 = block_size - 1;
+    i64 const effective_to = (to < file_size) ? to : file_size + bsm1;
+    i64 const saved = effective_to / block_size - (from + bsm1) / block_size;
+    return std::max<i64>(0, saved);
   }
 };
 
@@ -311,6 +322,9 @@ class ScopedFile {
     return pos;
   }
 
+  // Callback called when a hole is discovered.
+  using HoleCallback = std::function<void(i64, i64)>;
+
   // Writes the given bytes into this file at the given position.
   // While doing so, it detects and skips "holes" (sparse regions).
   // A "hole" is defined as a sequence of 1024 or more consecutive NUL bytes.
@@ -324,14 +338,13 @@ class ScopedFile {
   //
   // Postconditions:
   // - The data in `b` is written to the file at `pos`, except for holes.
-  // - If `holes` is not null, any skipped holes are appended to it.
+  // - If `on_hole` is not null, any skipped holes are passed to it.
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
   i64 WriteBytesAndSkipHoles(std::string_view b,
                              i64 pos,
                              i64 last_hole_start,
-                             Holes* const holes,
-                             i64 const file_start_offset) const {
+                             const HoleCallback& on_hole = nullptr) const {
     constexpr size_t npos = std::string_view::npos;
     constexpr size_t min_hole_size = 1024;
 
@@ -346,9 +359,8 @@ class ScopedFile {
       pos += i;
       i = 0;
 
-      if (holes && pos - last_hole_start >= min_hole_size) {
-        holes->emplace_back(last_hole_start - file_start_offset,
-                            pos - file_start_offset);
+      if (on_hole && pos - last_hole_start >= min_hole_size) {
+        on_hole(last_hole_start, pos);
       }
 
       size_t j;
@@ -1006,8 +1018,6 @@ std::ostream& operator<<(std::ostream& out, Whence const whence) {
 
   return out << "SEEK_" << static_cast<int>(whence);
 }
-
-constexpr blksize_t block_size = 512;
 
 // Total number of blocks taken by the tree of nodes.
 blkcnt_t g_block_count = 1;
@@ -1958,7 +1968,12 @@ struct Node {
   time_t mtime = 0;
   dev_t rdev = 0;
   i64 nlink = 1;
+
+  // Sorted list of holes in this file.
   Holes holes;
+
+  // Number of blocks saved by the presence of holes in this file.
+  i64 saved_blocks = 0;
 
   // Extended attributes.
   struct Attribute {
@@ -2045,11 +2060,7 @@ struct Node {
   // Returns the number of blocks used by this node.
   i64 GetBlockCount() const {
     constexpr i64 bsm1 = block_size - 1;
-    i64 n = (size + bsm1) / block_size;
-    for (const Hole& h : holes) {
-      i64 const to = (h.to < size) ? h.to : size + bsm1;
-      n -= std::max<i64>(0, to / block_size - (h.from + bsm1) / block_size);
-    }
+    i64 const n = (size + bsm1) / block_size - saved_blocks;
     return std::max<i64>(0, n);
   }
 
@@ -2223,6 +2234,13 @@ struct Node {
 
     i64 const old_cached_size = cached_size;
     i64 const old_blocks = GetBlockCount();
+
+    ScopedFile::HoleCallback const on_hole = [this](i64 from, i64 to) {
+      from -= cache_offset;
+      to -= cache_offset;
+      saved_blocks += holes.emplace_back(from, to).GetSavedBlocks(size);
+    };
+
     while (cached_size < want_cached_size) {
       char buff[64 * 1024];
 
@@ -2235,15 +2253,16 @@ struct Node {
 
       last_hole_start = g_cache_fd.WriteBytesAndSkipHoles(
           std::string_view(buff, n), cache_offset + cached_size,
-          last_hole_start, &holes, cache_offset);
+          last_hole_start, on_hole);
       cached_size += n;
       assert(reader->offset_within_entry == cached_size);
     }
 
     if (cached_size == size) {
-      if (last_hole_start < cache_offset + size) {
-        holes.emplace_back(last_hole_start - cache_offset, size);
-        last_hole_start = cache_offset + size;
+      i64 const file_end = cache_offset + size;
+      if (last_hole_start < file_end) {
+        on_hole(last_hole_start, file_end);
+        last_hole_start = file_end;
       }
     }
 
@@ -2747,6 +2766,15 @@ i64 CacheEntryData(Archive* const a,
   i64 dest_offset = file_start_offset;
   i64 last_hole_start = file_start_offset;
 
+  ScopedFile::HoleCallback on_hole;
+  if (holes) {
+    on_hole = [holes, file_start_offset](i64 from, i64 to) {
+      from -= file_start_offset;
+      to -= file_start_offset;
+      holes->emplace_back(from, to);
+    };
+  }
+
   while (true) {
     const void* buff = nullptr;
     size_t len = 0;
@@ -2766,7 +2794,7 @@ i64 CacheEntryData(Archive* const a,
         dest_offset = file_start_offset + offset;
         last_hole_start = dest_fd.WriteBytesAndSkipHoles(
             std::string_view(static_cast<const char*>(buff), len), dest_offset,
-            last_hole_start, holes, file_start_offset);
+            last_hole_start, on_hole);
         dest_offset += len;
 
         continue;
@@ -2780,9 +2808,8 @@ i64 CacheEntryData(Archive* const a,
         // See https://github.com/google/fuse-archive/issues/40
         dest_offset = file_start_offset + offset;
         if (last_hole_start < dest_offset) {
-          if (holes) {
-            holes->emplace_back(last_hole_start - file_start_offset,
-                                dest_offset - file_start_offset);
+          if (on_hole) {
+            on_hole(last_hole_start, dest_offset);
           }
 
           while (ftruncate(dest_fd, dest_offset) < 0) {
@@ -2945,6 +2972,10 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     node->cache_offset = offset;
     node->cached_size = node->size = g_cache_size - offset;
     node->last_hole_start = g_cache_size;
+    assert(node->saved_blocks == 0);
+    for (const Hole& h : node->holes) {
+      node->saved_blocks += h.GetSavedBlocks(node->size);
+    }
   } else {
     // Get the entry size without caching the data.
     node->size = r.GetEntrySize();
@@ -3031,11 +3062,13 @@ void ResolveHardlinks() {
         .mtime = target->mtime,
         .rdev = target->rdev,
         .nlink = g_hardlinks ? (target->nlink++, 0) : 1,
-        .holes = target->holes,
+        .saved_blocks = target->saved_blocks,
         .hardlink_target = g_hardlinks ? target : nullptr,
     };
 
     if (!g_hardlinks) {
+      node->holes = target->holes;
+      node->attributes = target->attributes;
       g_inode_count += 1;
       g_block_count += node->GetBlockCount();
     }
