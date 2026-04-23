@@ -1496,49 +1496,49 @@ struct Reader : bi::list_base_hook<LinkMode> {
 #define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3009000
 
   bool SetFilter(std::string_view const ext) {
-    static std::unordered_map<
-        std::string_view, void (*)(Reader&)> const ext_to_filter = {
-        {"asc", SET_FILTER_COMMAND(gpg)},
-        {"gpg", SET_FILTER_COMMAND(gpg)},
-        {"pgp", SET_FILTER_COMMAND(gpg)},
-        {"b64", SET_FILTER_COMMAND(base64)},
-        {"base64", SET_FILTER_COMMAND(base64)},
-        {"br", SET_FILTER_COMMAND(brotli)},
-        {"brotli", SET_FILTER_COMMAND(brotli)},
-        {"bz2", SET_FILTER(BZIP2)},
-        {"bzip2", SET_FILTER(BZIP2)},
+    static std::unordered_map<std::string_view, void (*)(Reader&)> const
+        ext_to_filter = {
+            {"asc", SET_FILTER_COMMAND(gpg)},
+            {"gpg", SET_FILTER_COMMAND(gpg)},
+            {"pgp", SET_FILTER_COMMAND(gpg)},
+            {"b64", SET_FILTER_COMMAND(base64)},
+            {"base64", SET_FILTER_COMMAND(base64)},
+            {"br", SET_FILTER_COMMAND(brotli)},
+            {"brotli", SET_FILTER_COMMAND(brotli)},
+            {"bz2", SET_FILTER(BZIP2)},
+            {"bzip2", SET_FILTER(BZIP2)},
 #if WORK_AROUND_ISSUE_2513
-        // Work around https://github.com/libarchive/libarchive/issues/2513
-        {"grz", SET_FILTER_COMMAND(grzip)},
-        {"grzip", SET_FILTER_COMMAND(grzip)},
+            // Work around https://github.com/libarchive/libarchive/issues/2513
+            {"grz", SET_FILTER_COMMAND(grzip)},
+            {"grzip", SET_FILTER_COMMAND(grzip)},
 #else
-        {"grz", SET_FILTER(GRZIP)},
-        {"grzip", SET_FILTER(GRZIP)},
+            {"grz", SET_FILTER(GRZIP)},
+            {"grzip", SET_FILTER(GRZIP)},
 #endif
-        {"gz", SET_FILTER(GZIP)},
-        {"gzip", SET_FILTER(GZIP)},
-        {"lrz", SET_FILTER(LRZIP)},
-        {"lrzip", SET_FILTER(LRZIP)},
-        {"lz", SET_FILTER(LZIP)},
-        {"lzip", SET_FILTER(LZIP)},
-        {"lz4", SET_FILTER(LZ4)},
-        {"lzma", SET_FILTER(LZMA)},
+            {"gz", SET_FILTER(GZIP)},
+            {"gzip", SET_FILTER(GZIP)},
+            {"lrz", SET_FILTER(LRZIP)},
+            {"lrzip", SET_FILTER(LRZIP)},
+            {"lz", SET_FILTER(LZIP)},
+            {"lzip", SET_FILTER(LZIP)},
+            {"lz4", SET_FILTER(LZ4)},
+            {"lzma", SET_FILTER(LZMA)},
 #if WORK_AROUND_ISSUE_2513
-        // Work around https://github.com/libarchive/libarchive/issues/2513
-        {"lzo", SET_FILTER_COMMAND(lzop)},
-        {"lzop", SET_FILTER_COMMAND(lzop)},
+            // Work around https://github.com/libarchive/libarchive/issues/2513
+            {"lzo", SET_FILTER_COMMAND(lzop)},
+            {"lzop", SET_FILTER_COMMAND(lzop)},
 #else
-        {"lzo", SET_FILTER(LZOP)},
-        {"lzop", SET_FILTER(LZOP)},
+            {"lzo", SET_FILTER(LZOP)},
+            {"lzop", SET_FILTER(LZOP)},
 #endif
-        {"uu", SET_FILTER(UU)},
-        {"xz", SET_FILTER(XZ)},
-        // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"z", SET_FILTER(COMPRESS)},
-        {"z", SET_FILTER_COMMAND(compress)},
-        {"zst", SET_FILTER(ZSTD)},
-        {"zstd", SET_FILTER(ZSTD)},
-    };
+            {"uu", SET_FILTER(UU)},
+            {"xz", SET_FILTER(XZ)},
+            // Work around https://github.com/libarchive/libarchive/issues/2514
+            // {"z", SET_FILTER(COMPRESS)},
+            {"z", SET_FILTER_COMMAND(compress)},
+            {"zst", SET_FILTER(ZSTD)},
+            {"zstd", SET_FILTER(ZSTD)},
+        };
 
     const auto it = ext_to_filter.find(ext);
     if (it == ext_to_filter.end()) {
@@ -1550,44 +1550,44 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
   bool SetCompressedTarFormat(std::string_view const ext) {
-    static std::unordered_map<
-        std::string_view, void (*)(Reader&)> const ext_to_filter = {
-        // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"taz", SET_FILTER(COMPRESS)},
-        {"taz", SET_FILTER_COMMAND(compress)},
-        {"tbr", SET_FILTER_COMMAND(brotli)},
-        {"tb2", SET_FILTER(BZIP2)},
-        {"tbz", SET_FILTER(BZIP2)},
-        {"tbz2", SET_FILTER(BZIP2)},
-        {"tgz", SET_FILTER(GZIP)},
-        {"tlz",
-         [](Reader& r) {
-           // .tlz could mean .tar.lz or .tar.lzma
-           Archive* const a = r.archive.get();
-           r.Check(archive_read_support_filter_lzip(a));
-           r.Check(archive_read_support_filter_lzma(a));
-         }},
-        {"tlz4", SET_FILTER(LZ4)},
-        {"tlzip", SET_FILTER(LZIP)},
-        {"tlzma", SET_FILTER(LZMA)},
-        {"txz", SET_FILTER(XZ)},
-        // Work around https://github.com/libarchive/libarchive/issues/2514
-        // {"tz", SET_FILTER(COMPRESS)},
-        {"tz", SET_FILTER_COMMAND(compress)},
-        {"tz2", SET_FILTER(BZIP2)},
-        {"tzs", SET_FILTER(ZSTD)},
-        {"tzst", SET_FILTER(ZSTD)},
-        {"tzstd", SET_FILTER(ZSTD)},
-        {"tar",
-         [](Reader& r) {
-           // Some `.tar` archives are actually compressed TARs, even though
-           // they don't have the compression extension. So, as a special case
-           // for `.tar`, automatically recognize the possible compression
-           // filters.
-           Archive* const a = r.archive.get();
-           r.Check(archive_read_support_filter_all(a));
-         }},
-    };
+    static std::unordered_map<std::string_view, void (*)(Reader&)> const
+        ext_to_filter = {
+            // Work around https://github.com/libarchive/libarchive/issues/2514
+            // {"taz", SET_FILTER(COMPRESS)},
+            {"taz", SET_FILTER_COMMAND(compress)},
+            {"tbr", SET_FILTER_COMMAND(brotli)},
+            {"tb2", SET_FILTER(BZIP2)},
+            {"tbz", SET_FILTER(BZIP2)},
+            {"tbz2", SET_FILTER(BZIP2)},
+            {"tgz", SET_FILTER(GZIP)},
+            {"tlz",
+             [](Reader& r) {
+               // .tlz could mean .tar.lz or .tar.lzma
+               Archive* const a = r.archive.get();
+               r.Check(archive_read_support_filter_lzip(a));
+               r.Check(archive_read_support_filter_lzma(a));
+             }},
+            {"tlz4", SET_FILTER(LZ4)},
+            {"tlzip", SET_FILTER(LZIP)},
+            {"tlzma", SET_FILTER(LZMA)},
+            {"txz", SET_FILTER(XZ)},
+            // Work around https://github.com/libarchive/libarchive/issues/2514
+            // {"tz", SET_FILTER(COMPRESS)},
+            {"tz", SET_FILTER_COMMAND(compress)},
+            {"tz2", SET_FILTER(BZIP2)},
+            {"tzs", SET_FILTER(ZSTD)},
+            {"tzst", SET_FILTER(ZSTD)},
+            {"tzstd", SET_FILTER(ZSTD)},
+            {"tar",
+             [](Reader& r) {
+               // Some `.tar` archives are actually compressed TARs, even though
+               // they don't have the compression extension. So, as a special
+               // case for `.tar`, automatically recognize the possible
+               // compression filters.
+               Archive* const a = r.archive.get();
+               r.Check(archive_read_support_filter_all(a));
+             }},
+        };
 
     const auto it = ext_to_filter.find(ext);
     if (it == ext_to_filter.end()) {
@@ -1606,40 +1606,40 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
   bool SetFormatBeforeExtraFilter(std::string_view const ext) {
-    static std::unordered_map<
-        std::string_view, void (*)(Reader&)> const ext_to_format = {
-        {"7z", SET_FORMAT(7zip)},
-        {"7zip", SET_FORMAT(7zip)},
-        {"a", SET_FORMAT(ar)},
-        {"ar", SET_FORMAT(ar)},
-        {"cab", SET_FORMAT(cab)},
-        {"cpio", SET_FORMAT(cpio)},
-        {"crx", SET_FORMAT(zip_seekable)},
-        {"deb", SET_FORMAT(ar)},
-        {"docx", SET_FORMAT(zip_seekable)},
-        {"iso", SET_FORMAT(iso9660)},
-        {"iso9660", SET_FORMAT(iso9660)},
-        {"jar", SET_FORMAT(zip_seekable)},
-        {"lha", SET_FORMAT(lha)},
-        {"mtree", SET_FORMAT(mtree)},
-        {"odf", SET_FORMAT(zip_seekable)},
-        {"odg", SET_FORMAT(zip_seekable)},
-        {"odp", SET_FORMAT(zip_seekable)},
-        {"ods", SET_FORMAT(zip_seekable)},
-        {"odt", SET_FORMAT(zip_seekable)},
-        {"ppsx", SET_FORMAT(zip_seekable)},
-        {"pptx", SET_FORMAT(zip_seekable)},
-        {"rar", [](Reader& r) { r.SetRarFormat(); }},
-        {"rpm", [](Reader& r) { r.SetRpmFormat(); }},
-        {"spm", [](Reader& r) { r.SetRpmFormat(); }},
-        {"tar", [](Reader& r) { r.SetTarFormat(); }},
-        {"war", SET_FORMAT(zip_seekable)},
-        {"warc", SET_FORMAT(warc)},
-        {"xar", SET_FORMAT(xar)},
-        {"xlsx", SET_FORMAT(zip_seekable)},
-        {"zip", SET_FORMAT(zip_seekable)},
-        {"zipx", SET_FORMAT(zip_seekable)},
-    };
+    static std::unordered_map<std::string_view, void (*)(Reader&)> const
+        ext_to_format = {
+            {"7z", SET_FORMAT(7zip)},
+            {"7zip", SET_FORMAT(7zip)},
+            {"a", SET_FORMAT(ar)},
+            {"ar", SET_FORMAT(ar)},
+            {"cab", SET_FORMAT(cab)},
+            {"cpio", SET_FORMAT(cpio)},
+            {"crx", SET_FORMAT(zip_seekable)},
+            {"deb", SET_FORMAT(ar)},
+            {"docx", SET_FORMAT(zip_seekable)},
+            {"iso", SET_FORMAT(iso9660)},
+            {"iso9660", SET_FORMAT(iso9660)},
+            {"jar", SET_FORMAT(zip_seekable)},
+            {"lha", SET_FORMAT(lha)},
+            {"mtree", SET_FORMAT(mtree)},
+            {"odf", SET_FORMAT(zip_seekable)},
+            {"odg", SET_FORMAT(zip_seekable)},
+            {"odp", SET_FORMAT(zip_seekable)},
+            {"ods", SET_FORMAT(zip_seekable)},
+            {"odt", SET_FORMAT(zip_seekable)},
+            {"ppsx", SET_FORMAT(zip_seekable)},
+            {"pptx", SET_FORMAT(zip_seekable)},
+            {"rar", [](Reader& r) { r.SetRarFormat(); }},
+            {"rpm", [](Reader& r) { r.SetRpmFormat(); }},
+            {"spm", [](Reader& r) { r.SetRpmFormat(); }},
+            {"tar", [](Reader& r) { r.SetTarFormat(); }},
+            {"war", SET_FORMAT(zip_seekable)},
+            {"warc", SET_FORMAT(warc)},
+            {"xar", SET_FORMAT(xar)},
+            {"xlsx", SET_FORMAT(zip_seekable)},
+            {"zip", SET_FORMAT(zip_seekable)},
+            {"zipx", SET_FORMAT(zip_seekable)},
+        };
 
     const auto it = ext_to_format.find(ext);
     if (it == ext_to_format.end()) {
@@ -1651,22 +1651,22 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
   bool SetFormatAfterExtraFilter(std::string_view const ext) {
-    static std::unordered_map<
-        std::string_view, void (*)(Reader&)> const ext_to_format = {
-        {"a", SET_FORMAT(ar)},
-        {"ar", SET_FORMAT(ar)},
-        {"cab", SET_FORMAT(cab)},
-        {"cpio", SET_FORMAT(cpio)},
-        {"deb", SET_FORMAT(ar)},
-        {"iso", SET_FORMAT(iso9660)},
-        {"iso9660", SET_FORMAT(iso9660)},
-        {"lha", SET_FORMAT(lha)},
-        {"mtree", SET_FORMAT(mtree)},
-        {"rar", [](Reader& r) { r.SetRarFormat(); }},
-        {"tar", [](Reader& r) { r.SetTarFormat(); }},
-        {"warc", SET_FORMAT(warc)},
-        {"xar", SET_FORMAT(xar)},
-    };
+    static std::unordered_map<std::string_view, void (*)(Reader&)> const
+        ext_to_format = {
+            {"a", SET_FORMAT(ar)},
+            {"ar", SET_FORMAT(ar)},
+            {"cab", SET_FORMAT(cab)},
+            {"cpio", SET_FORMAT(cpio)},
+            {"deb", SET_FORMAT(ar)},
+            {"iso", SET_FORMAT(iso9660)},
+            {"iso9660", SET_FORMAT(iso9660)},
+            {"lha", SET_FORMAT(lha)},
+            {"mtree", SET_FORMAT(mtree)},
+            {"rar", [](Reader& r) { r.SetRarFormat(); }},
+            {"tar", [](Reader& r) { r.SetTarFormat(); }},
+            {"warc", SET_FORMAT(warc)},
+            {"xar", SET_FORMAT(xar)},
+        };
 
     const auto it = ext_to_format.find(ext);
     if (it == ext_to_format.end()) {
