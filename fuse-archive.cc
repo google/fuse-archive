@@ -227,6 +227,18 @@ std::string_view GetErrorString(archive* const a) {
   return archive_error_string(a) ?: "Unspecified error";
 }
 
+// A hole in a sparse file.
+struct Hole {
+  i64 from, to;
+
+  Hole(i64 const from, i64 const to) : from(from), to(to) {
+    assert(0 <= from && from < to);
+  }
+};
+
+// A sorted list of holes in a sparse file.
+using Holes = std::vector<Hole>;
+
 // A scoped file descriptor.
 class ScopedFile {
  public:
@@ -302,6 +314,7 @@ class ScopedFile {
   // Writes the given bytes into this file at the given position.
   // While doing so, it detects and skips "holes" (sparse regions).
   // A "hole" is defined as a sequence of 1024 or more consecutive NUL bytes.
+  //
   // Returns the position immediately following the last written bytes,
   // or `last_hole_start` if nothing was written.
   //
@@ -311,11 +324,14 @@ class ScopedFile {
   //
   // Postconditions:
   // - The data in `b` is written to the file at `pos`, except for holes.
+  // - If `holes` is not null, any skipped holes are appended to it.
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
   i64 WriteBytesAndSkipHoles(std::string_view b,
                              i64 pos,
-                             i64 last_hole_start) const {
+                             i64 last_hole_start,
+                             Holes* const holes,
+                             i64 const file_start_offset) const {
     constexpr size_t npos = std::string_view::npos;
     constexpr size_t min_hole_size = 1024;
 
@@ -329,6 +345,11 @@ class ScopedFile {
       b.remove_prefix(i);
       pos += i;
       i = 0;
+
+      if (holes && pos - last_hole_start >= min_hole_size) {
+        holes->emplace_back(last_hole_start - file_start_offset,
+                            pos - file_start_offset);
+      }
 
       size_t j;
       do {
@@ -1937,6 +1958,7 @@ struct Node {
   time_t mtime = 0;
   dev_t rdev = 0;
   i64 nlink = 1;
+  Holes holes;
 
   // Extended attributes.
   struct Attribute {
@@ -2020,7 +2042,16 @@ struct Node {
     }
   }
 
-  i64 GetBlockCount() const { return (size + (block_size - 1)) / block_size; }
+  // Returns the number of blocks used by this node.
+  i64 GetBlockCount() const {
+    constexpr i64 bsm1 = block_size - 1;
+    i64 n = (size + bsm1) / block_size;
+    for (const Hole& h : holes) {
+      i64 const to = (h.to < size) ? h.to : size + bsm1;
+      n -= std::max<i64>(0, to / block_size - (h.from + bsm1) / block_size);
+    }
+    return std::max<i64>(0, n);
+  }
 
   const Node* GetTarget() const { return hardlink_target ?: this; }
   Node* GetTarget() { return hardlink_target ?: this; }
@@ -2191,6 +2222,7 @@ struct Node {
     assert(reader->index_within_archive == index_within_archive);
 
     i64 const old_cached_size = cached_size;
+    i64 const old_blocks = GetBlockCount();
     while (cached_size < want_cached_size) {
       char buff[64 * 1024];
 
@@ -2203,10 +2235,19 @@ struct Node {
 
       last_hole_start = g_cache_fd.WriteBytesAndSkipHoles(
           std::string_view(buff, n), cache_offset + cached_size,
-          last_hole_start);
+          last_hole_start, &holes, cache_offset);
       cached_size += n;
       assert(reader->offset_within_entry == cached_size);
     }
+
+    if (cached_size == size) {
+      if (last_hole_start < cache_offset + size) {
+        holes.emplace_back(last_hole_start - cache_offset, size);
+        last_hole_start = cache_offset + size;
+      }
+    }
+
+    g_block_count -= (old_blocks - GetBlockCount());
 
     LOG(DEBUG) << "Cached " << cached_size - old_cached_size << " bytes of "
                << *this << " up to " << cached_size << " in " << timer;
@@ -2682,13 +2723,15 @@ bool ShouldSkip(FileType const ft) {
 // - `a` must be an initialized libarchive descriptor, currently positioned
 //   at the beginning of an entry's data blocks.
 // - `dest_fd` must be a valid, writable file descriptor for the cache file.
-// - `dest_offset >= 0`, representing the logical starting position in the
+// - `file_start_offset >= 0`, representing the logical starting position in the
 //   cache.
 //
 // Postconditions:
 // - The entry's data is fully written to `dest_fd`.
 // - Sparse "holes" (long sequences of NUL bytes) are skipped to save disk
 //   space.
+// - If `holes` is not null, it is populated with the positions of the holes
+//   relative to `file_start_offset`.
 // - The cache file is truncated to the correct length to ensure trailing holes
 //   are reflected in the file size.
 // - Returns the new cache file size.
@@ -2698,9 +2741,10 @@ bool ShouldSkip(FileType const ft) {
 // - ExitCode::INVALID_ARCHIVE_CONTENTS if libarchive fails to read the data.
 i64 CacheEntryData(Archive* const a,
                    const ScopedFile& dest_fd,
-                   i64 dest_offset) {
-  assert(dest_offset >= 0);
-  i64 const file_start_offset = dest_offset;
+                   i64 const file_start_offset,
+                   Holes* const holes = nullptr) {
+  assert(file_start_offset >= 0);
+  i64 dest_offset = file_start_offset;
   i64 last_hole_start = file_start_offset;
 
   while (true) {
@@ -2722,7 +2766,7 @@ i64 CacheEntryData(Archive* const a,
         dest_offset = file_start_offset + offset;
         last_hole_start = dest_fd.WriteBytesAndSkipHoles(
             std::string_view(static_cast<const char*>(buff), len), dest_offset,
-            last_hole_start);
+            last_hole_start, holes, file_start_offset);
         dest_offset += len;
 
         continue;
@@ -2736,6 +2780,11 @@ i64 CacheEntryData(Archive* const a,
         // See https://github.com/google/fuse-archive/issues/40
         dest_offset = file_start_offset + offset;
         if (last_hole_start < dest_offset) {
+          if (holes) {
+            holes->emplace_back(last_hole_start - file_start_offset,
+                                dest_offset - file_start_offset);
+          }
+
           while (ftruncate(dest_fd, dest_offset) < 0) {
             if (errno != EINTR) {
               PLOG(ERROR) << "Cannot resize cache to " << dest_offset
@@ -2892,9 +2941,10 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     // Cache file data.
     node->size = archive_entry_size(e);
     i64 const offset = g_cache_size;
-    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size);
+    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size, &node->holes);
     node->cache_offset = offset;
     node->cached_size = node->size = g_cache_size - offset;
+    node->last_hole_start = g_cache_size;
   } else {
     // Get the entry size without caching the data.
     node->size = r.GetEntrySize();
@@ -2976,9 +3026,12 @@ void ResolveHardlinks() {
         .index_within_archive = target->index_within_archive,
         .size = target->size,
         .cache_offset = target->cache_offset,
+        .cached_size = target->cached_size,
+        .last_hole_start = target->last_hole_start,
         .mtime = target->mtime,
         .rdev = target->rdev,
         .nlink = g_hardlinks ? (target->nlink++, 0) : 1,
+        .holes = target->holes,
         .hardlink_target = g_hardlinks ? target : nullptr,
     };
 
@@ -3725,14 +3778,24 @@ off_t Seek(const char*,
   LOG(DEBUG) << "Seeking " << *n << " with whence = " << Whence(whence)
              << " and offset = " << offset;
 
+  const Node* const t = n->GetTarget();
+  Holes::const_iterator const it =
+      std::ranges::upper_bound(t->holes, offset, std::less<i64>(), &Hole::to);
+
   switch (whence) {
     case SEEK_DATA:
       if (offset < 0) {
         return EINVAL;
       }
 
-      if (offset >= n->size) {
+      if (offset >= t->size) {
         return ENXIO;
+      }
+
+      if (it != t->holes.end() && it->from <= offset) {
+        assert(offset < it->to);
+        // offset is located in a hole
+        return it->to < t->size ? it->to : ENXIO;
       }
 
       return offset;
@@ -3742,11 +3805,26 @@ off_t Seek(const char*,
         return EINVAL;
       }
 
-      if (offset > n->size) {
+      if (offset > t->size) {
         return ENXIO;
       }
 
-      return n->size;
+      if (it == t->holes.end()) {
+        // offset is past the last hole
+        return t->size;
+      }
+
+      assert(it != t->holes.end());
+      assert(offset < it->to);
+
+      if (it->from <= offset) {
+        // offset is located in a hole
+        return offset;
+      }
+
+      // offset is before a hole
+      assert(offset < it->from);
+      return it->from;
   }
 
   LOG(ERROR) << "Cannot seek " << *n << " with whence = " << Whence(whence)
