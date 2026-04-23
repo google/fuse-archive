@@ -245,6 +245,10 @@ struct Hole {
     i64 const saved = effective_to / block_size - (from + bsm1) / block_size;
     return std::max<i64>(0, saved);
   }
+
+  friend std::ostream& operator<<(std::ostream& out, const Hole& h) {
+    return out << "Hole from " << h.from << " to " << h.to;
+  }
 };
 
 // A sorted list of holes in a sparse file.
@@ -3818,32 +3822,35 @@ off_t Seek(const char*,
   switch (whence) {
     case SEEK_DATA:
       if (offset < 0) {
-        return EINVAL;
+        return -EINVAL;
       }
 
       if (offset >= t->size) {
-        return ENXIO;
+        return -ENXIO;
       }
 
       if (it != t->holes.end() && it->from <= offset) {
         assert(offset < it->to);
         // offset is located in a hole
-        return it->to < t->size ? it->to : ENXIO;
+        LOG(DEBUG) << "In " << *it;
+        return it->to < t->size ? it->to : -ENXIO;
       }
 
+      LOG(DEBUG) << "In Data";
       return offset;
 
     case SEEK_HOLE:
       if (offset < 0) {
-        return EINVAL;
+        return -EINVAL;
       }
 
       if (offset > t->size) {
-        return ENXIO;
+        return -ENXIO;
       }
 
       if (it == t->holes.end()) {
         // offset is past the last hole
+        LOG(DEBUG) << "In Data past the last hole";
         return t->size;
       }
 
@@ -3852,11 +3859,13 @@ off_t Seek(const char*,
 
       if (it->from <= offset) {
         // offset is located in a hole
+        LOG(DEBUG) << "In " << *it;
         return offset;
       }
 
       // offset is before a hole
       assert(offset < it->from);
+      LOG(DEBUG) << "In Data before " << *it;
       return it->from;
   }
 
