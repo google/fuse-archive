@@ -2771,8 +2771,8 @@ bool ShouldSkip(FileType const ft) {
 // - The entry's data is fully written to `dest_fd`.
 // - Sparse "holes" (long sequences of NUL bytes) are skipped to save disk
 //   space.
-// - If `holes` is not null, it is populated with the positions of the holes
-//   relative to `file_start_offset`.
+// - If `node` is not null, its `holes` list and `saved_blocks` count are
+//   updated.
 // - The cache file is truncated to the correct length to ensure trailing holes
 //   are reflected in the file size.
 // - Returns the new cache file size.
@@ -2783,18 +2783,21 @@ bool ShouldSkip(FileType const ft) {
 i64 CacheEntryData(Archive* const a,
                    const ScopedFile& dest_fd,
                    i64 const file_start_offset,
-                   Holes* const holes = nullptr) try {
+                   Node* const node = nullptr) try {
   assert(file_start_offset >= 0);
   i64 dest_offset = file_start_offset;
   i64 last_hole_start = file_start_offset;
 
   ScopedFile::HoleCallback on_hole;
-  if (holes) {
-    assert(holes->empty());
-    on_hole = [holes, file_start_offset](i64 from, i64 to) {
+  if (node) {
+    assert(node->holes.empty());
+    assert(node->saved_blocks == 0);
+
+    on_hole = [node, file_start_offset](i64 from, i64 to) {
       from -= file_start_offset;
       to -= file_start_offset;
-      holes->emplace_back(from, to);
+      node->saved_blocks +=
+          node->holes.emplace_back(from, to).GetSavedBlocks(node->size);
     };
   }
 
@@ -2849,8 +2852,9 @@ i64 CacheEntryData(Archive* const a,
   }
 } catch (...) {
   // In case of error, erase the data of the partially cached file.
-  if (holes) {
-    holes->clear();
+  if (node) {
+    node->holes.clear();
+    node->saved_blocks = 0;
   }
   dest_fd.Truncate(file_start_offset);
   throw;
@@ -2991,16 +2995,12 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     // Cache file data.
     node->size = archive_entry_size(e);
     i64 const offset = g_cache_size;
-    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size, &node->holes);
+    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size, node);
     // Now that CacheEntryData has succeeded without throwing an exception, we
     // can remember the cache offset.
     node->cache_offset = offset;
     node->cached_size = node->size = g_cache_size - offset;
     node->last_hole_start = g_cache_size;
-    assert(node->saved_blocks == 0);
-    for (const Hole& h : node->holes) {
-      node->saved_blocks += h.GetSavedBlocks(node->size);
-    }
   } else {
     // Get the entry size without caching the data.
     node->size = r.GetEntrySize();
