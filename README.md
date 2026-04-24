@@ -3,7 +3,7 @@ title: fuse-archive
 section: 1
 header: User Manual
 footer: fuse-archive 1.19
-date: March 2026
+date: April 2026
 ---
 
 # NAME
@@ -17,49 +17,49 @@ date: March 2026
 
 # DESCRIPTION
 
-**fuse-archive** serves one or several archives or compressed files (e.g.
-`foo.tar`, `foo.tar.gz`, `foo.xz` or `foo.zip`) as a read-only
+**fuse-archive** serves one or several archives or compressed files (e.g.,
+`foo.tar`, `foo.tar.gz`, `foo.xz`, or `foo.zip`) as a read-only
 [FUSE](https://en.wikipedia.org/wiki/Filesystem_in_Userspace) file system.
 
 It is similar to [**mount-zip**](https://github.com/google/mount-zip) and
-[**fuse-zip**](https://bitbucket.org/agalanin/fuse-zip) but speaks a larger
+[**fuse-zip**](https://bitbucket.org/agalanin/fuse-zip) but supports a larger
 range of archive or compressed file formats.
 
 It is similar to [**archivemount**](https://github.com/cybernoid/archivemount)
-but can be much faster (see the Performance section below) although it can only
+but can be much faster (see the Performance section below), although it can only
 mount read-only, not read-write.
 
 # OPTIONS
 
 **-\-help** or **-h**
-:   Print help
+:   Print help.
 
 **-\-version** or **-V**
-:   Print version info
+:   Print version info.
 
 **-o quiet** or **-q**
-:   Print fewer log messages
+:   Print fewer log messages.
 
 **-o verbose** or **-v**
-:   Print more log messages
+:   Print more log messages.
 
 **-o redact**
-:   Redact file names from log messages
+:   Redact file names from log messages.
 
 **-o force**
-:   Continue despite errors
+:   Continue despite errors.
 
 **-o maxfilters=N**
-:   Maximum number of filters per archive (default is 1)
+:   Maximum number of filters per archive (default is 1).
 
 **-o lazycache**
-:   Incremental caching of uncompressed data
+:   Incremental caching of uncompressed data.
 
 **-o memcache**
-:   Caching in memory
+:   Caching in memory (Linux only).
 
 **-o nocache**
-:   No caching of uncompressed data
+:   No caching of uncompressed data.
 
 **-o nomerge**
 :   Do not merge multiple archives on top of each other. Instead, create a
@@ -72,46 +72,46 @@ mount read-only, not read-write.
 **-o nodirs**
 :   No directories. Flatten the archive structure by presenting all its files in
     its root directory. This might make sense if you're not interested in the
-    archive tree structure, but only in its file data, e.g. for malware scanning.
+    archive tree structure, but only in its file data, e.g., for malware scanning.
 
 **-o nospecials**
-:   Hide special files (FIFOs, sockets, devices)
+:   Hide special files (FIFOs, sockets, devices).
 
 **-o nosymlinks**
-:   Hide symbolic links
+:   Hide symbolic links.
 
 **-o noholes**
 :   Do not report holes in sparse files.
 
 **-o nohardlinks**
-:   No files with multiple hard links
+:   Do not report files with multiple hard links.
 
 **-o noxattrs**
-:   No extended attributes
+:   Do not report extended attributes.
 
 **-o dmask=M**
-:   Directory permission mask in octal (default is 0022)
+:   Directory permission mask in octal (default is 0022).
 
 **-o fmask=M**
-:   File permission mask in octal (default is 0022)
+:   File permission mask in octal (default is 0022).
 
 **-o uid=N**
-:   Set the file owner of all the items in the mounted archive (default is
-    current user)
+:   Set the file owner of all the items in the mounted archive (default is the
+    current user).
 
 **-o gid=N**
-:   Set file group of all the items in the mounted archive (default is current
-    group)
+:   Set the file group of all the items in the mounted archive (default is the
+    current group).
 
 **-o default_permissions**
-:   Use the file owner (UID), group (GID) and permissions stored with each item
+:   Use the file owner (UID), group (GID), and permissions stored with each item
     in the archive.
 
 **-f**
-:   Foreground mode
+:   Foreground mode.
 
 **-d**
-:   Foreground mode with debug output
+:   Foreground mode with debug output.
 
 # ARCHIVE FORMATS
 
@@ -120,16 +120,16 @@ recognizes the following extensions:
 
 *   Archive formats `7z`, `7zip`, `a`, `ar`, `cab`, `cpio`, `deb`, `iso`,
     `iso9660`, `jar`, `mtree`, `rar`, `rpm`, `tar`, `war`, `warc`, `xar`, `zip`,
-    `zipx`
+    `zipx`.
 *   ZIP-based file formats `crx`, `odf`, `odg`, `odp`, `ods`, `odt`, `docx`,
-    `ppsx`, `pptx`, `xlsx`
+    `ppsx`, `pptx`, `xlsx`.
 *   Compressed TARs `tb2`, `tbr`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz`, `tlz4`,
-    `tlzma`, `txz`, `tz`, `taz`, `tzs`, `tzst`, `tzstd`
+    `tlzma`, `txz`, `tz`, `taz`, `tzs`, `tzst`, `tzstd`.
 *   Compression filters `br`, `brotli`, `bz2`, `bzip2`, `grz`, `grzip`, `gz`,
     `gzip`, `lha`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`, `lzop`,
-    `xz`, `z`, `zst`, `zstd`
-*   ASCII encoding filters `b64`, `base64`, `uu`
-*   Encryption filters `asc`, `gpg`, `pgp` 
+    `xz`, `z`, `zst`, `zstd`.
+*   ASCII encoding filters `b64`, `base64`, `uu`.
+*   Encryption filters `asc`, `gpg`, `pgp`.
 
 If the filename extension is not recognized, then **fuse-archive** determines
 the archive format by looking at its byte contents. This heuristic works all
@@ -137,13 +137,35 @@ right most of the time, but there are corner cases for which it might get
 confused.
 
 **fuse-archive** relies on the availability of the following filter programs:
-`base64`, `brotli`, `compress`, `gpg`, `grzip`, `lrzip` and `lzop`.
+`base64`, `brotli`, `compress`, `gpg`, `lrzip`, and `lzop`.
+
+# GPG INTEGRATION
+
+**fuse-archive** supports archives encrypted with [GnuPG](https://gnupg.org/)
+(e.g., `archive.tar.gpg`, `archive.7z.pgp`, or `archive.tar.asc`).
+
+When mounting a GPG-encrypted archive, **fuse-archive** invokes the `gpg`
+command-line tool to perform the decryption. This allows it to leverage your
+existing GnuPG configuration and environment:
+
+*   **Passphrase Management**: It can work with `gpg-agent` to reuse cached
+    passphrases.
+*   **Secure Prompting**: It can use `pinentry` to securely prompt for
+    passphrases via your preferred method (GUI or terminal).
+*   **Hardware Support**: It supports decryption via hardware tokens (like
+    YubiKeys) if they are configured in your system's GnuPG setup.
+*   **Nested Encodings**: It can handle multiple layers of compression and
+    encryption (e.g., `archive.tar.gz.gpg`). Note that you must increase the
+    `-o maxfilters` value (which defaults to 1) to support these scenarios
+    (e.g., `-o maxfilters=2`).
+
+Ensure that the `gpg` program is installed and available in your `PATH`.
 
 # CACHING
 
 By default, **fuse-archive** decompresses and caches the whole archive before
 serving its contents. This ensures that the served files can be accessed in any
-order without any performance issue.
+order without any performance issues.
 
 Decompressed data is cached in an anonymous file created in the `tmp` directory
 (`$TMPDIR` or `/tmp` by default). This cache can use a significant amount of
@@ -188,7 +210,7 @@ $ umount mnt
 ```
 
 In this case, **fuse-archive** takes about the same time to load the archive as
-**archivemount**, but it is **~700× faster** (0.83s vs 570s) to copy out the
+**archivemount**, but it is **~700× faster** (0.83s vs. 570s) to copy out the
 decompressed contents. This is because **fuse-archive** fully caches the archive
 and does not use **archivemount**'s
 [quadratic complexity algorithm](https://github.com/cybernoid/archivemount/issues/21).
@@ -199,7 +221,7 @@ and does not use **archivemount**'s
 :   Success.
 
 **1**
-:   Generic error code for: missing command line argument, too many command line
+:   Generic error code for: missing command-line argument, too many command-line
     arguments, unknown option, mount point is not empty, etc.
 
 **10**
@@ -212,8 +234,8 @@ and does not use **archivemount**'s
 :   Cannot create the cache file.
 
 **13**
-:   Cannot write to the cache file. This is most likely the indication that
-    there is not enough temp space.
+:   Cannot write to the cache file. This is most likely an indication that
+    there is not enough temporary space.
 
 **20**
 :   The archive contains an encrypted file, but no password was provided.

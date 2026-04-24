@@ -92,13 +92,13 @@ $ make check
 $ make check-fast
 ```
 
-## Install **fuse-archive**:
+## Install **fuse-archive**
 
 ```sh
 $ sudo make install
 ```
 
-## Uninstall **fuse-archive**:
+## Uninstall **fuse-archive**
 
 ```sh
 $ sudo make uninstall
