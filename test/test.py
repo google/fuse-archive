@@ -201,7 +201,11 @@ if not is_fast and not has_lrzip:
 # - member 1 is the result of os.statvfs
 #
 # Throws subprocess.CalledProcessError if the archive cannot be mounted.
-def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get_tree=True):
+from contextlib import contextmanager
+
+
+@contextmanager
+def MountArchive(zip_names, options=[], password='', env=env):
     with tempfile.TemporaryDirectory() as mount_point:
         if type(zip_names) is not list: zip_names = [zip_names]
         zip_paths = [
@@ -214,16 +218,21 @@ def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get
             capture_output=True,
             input=password,
             encoding='UTF-8',
-            env = env,
+            env=env,
         )
         try:
             logging.debug(f'Mounted archive {zip_paths!r} on {mount_point!r}')
-            tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
-            return tree, os.statvfs(mount_point)
+            yield mount_point
         finally:
             logging.debug(f'Unmounting {zip_paths!r} from {mount_point!r}...')
             subprocess.run(['umount', '-l', mount_point], check=True)
             logging.debug(f'Unmounted {zip_paths!r} from {mount_point!r}')
+
+
+def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get_tree=True):
+    with MountArchive(zip_names, options, password) as mount_point:
+        tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
+        return tree, os.statvfs(mount_point)
 
 
 # Mounts the given archive(s), checks the mounted archive tree and unmounts.
@@ -1069,6 +1078,81 @@ def TestHardlinks(options=[]):
     MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
 
 
+# Tests sparse file seeking logic.
+def TestSeek(options=[]):
+    if not has_gzip and not has_zlib: return
+    zip_name = 'seek.tar.gz'
+    with MountArchive(zip_name, options=options) as mount_point:
+        path = os.path.join(mount_point, 'complex_sparse')
+        
+        # In lazycache mode, holes are not known until the file is read.
+        if '-o' in options and 'lazycache' in options:
+            with open(path, 'rb') as f:
+                f.read()
+            time.sleep(1) # wait for any async processing or FUSE attribute cache
+
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            is_noholes = '-o' in options and 'noholes' in options
+            is_nocache = '-o' in options and 'nocache' in options
+
+            def check_seek(offset, whence, want):
+                got = os.lseek(fd, offset, whence)
+                if got != want:
+                    LogError(f'Seek mismatch for {whence} at {offset}: got {got}, want {want} (options={options!r})')
+
+            def check_enxio(offset, whence):
+                try:
+                    os.lseek(fd, offset, whence)
+                    LogError(f'Seek {whence} at {offset} should fail with ENXIO (options={options!r})')
+                except OSError as e:
+                    if e.errno != 6: # ENXIO
+                        LogError(f'Seek {whence} at {offset} failed with wrong error: {e.errno} (options={options!r})')
+
+            if is_noholes or is_nocache:
+                # No holes reported
+                check_seek(0, os.SEEK_DATA, 0)
+                check_seek(2048, os.SEEK_DATA, 2048)
+                check_seek(3072, os.SEEK_DATA, 3072)
+                check_seek(5120, os.SEEK_DATA, 5120)
+                check_seek(0, os.SEEK_HOLE, 8192)
+                check_seek(2048, os.SEEK_HOLE, 8192)
+                check_seek(3072, os.SEEK_HOLE, 8192)
+                check_seek(5120, os.SEEK_HOLE, 8192)
+            else:
+                # Based on WriteBytesAndSkipHoles logic with min_hole_size=1024:
+                # [0, 2048): HOLE
+                # [2048, 3072): DATA ('A's)
+                # [3072, 5120): HOLE
+                # [5120, 5632): 512 NULs < 1024. Merged into the previous hole!
+                # [5632, 6144): DATA ('B's)
+                # [6144, 8192): HOLE
+                # Resulting Holes: [0, 2048), [3072, 5632), [6144, 8192)
+                # Resulting Data: [2048, 3072), [5632, 6144)
+                
+                check_seek(0, os.SEEK_DATA, 2048)
+                check_seek(2048, os.SEEK_DATA, 2048)
+                check_seek(3000, os.SEEK_DATA, 3000)
+                check_seek(3072, os.SEEK_DATA, 5632)
+                check_seek(5120, os.SEEK_DATA, 5632)
+                check_seek(5632, os.SEEK_DATA, 5632)
+                check_enxio(6144, os.SEEK_DATA)
+
+                check_seek(0, os.SEEK_HOLE, 0)
+                check_seek(1024, os.SEEK_HOLE, 1024)
+                check_seek(2048, os.SEEK_HOLE, 3072)
+                check_seek(5120, os.SEEK_HOLE, 5120)
+                check_seek(5632, os.SEEK_HOLE, 6144)
+                check_seek(7000, os.SEEK_HOLE, 7000)
+
+            check_enxio(8192, os.SEEK_DATA)
+            check_enxio(8192, os.SEEK_HOLE)
+            check_enxio(9000, os.SEEK_DATA)
+            check_enxio(9000, os.SEEK_HOLE)
+        finally:
+            os.close(fd)
+
+
 # Tests dmask and fmask.
 def TestMasks():
     want_tree = {
@@ -1898,6 +1982,10 @@ finally:
 TestHardlinks()
 TestHardlinks(['-o', 'nocache'])
 TestHardlinks(['-o', 'lazycache'])
+TestSeek()
+TestSeek(['-o', 'nocache'])
+TestSeek(['-o', 'lazycache'])
+TestSeek(['-o', 'noholes'])
 TestArchiveWithSpecialFiles()
 TestEncryptedArchive()
 TestEncryptedArchive(['-o', 'nocache'])

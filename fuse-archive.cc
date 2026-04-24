@@ -3877,7 +3877,7 @@ off_t Seek(const char*,
         return -EINVAL;
       }
 
-      if (offset > t->size) {
+      if (offset >= t->size) {
         return -ENXIO;
       }
 

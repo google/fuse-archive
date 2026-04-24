@@ -67,8 +67,11 @@
 - [x] Add the ability to cache filtered ZIP and 7Z archives.
 - [x] Add the ability to handle several filters for each archive.
 - [x] Detect "holes" in sparse files (https://github.com/google/fuse-archive/issues/41).
-- [x] Add a `-o nosparse` or `-o noholes` option.
-- [ ] Add tests for sparse files.
+- [x] Add a `-o noholes` option.
+- [x] Add tests for sparse files.
 - [ ] Add test for mounting several archives in the same mount point.
+- [ ] Add test for `-o notrim` option.
+- [ ] Add test for `-o nomerge` option.
+- [ ] Add test for `-o nomerge` and `-o notrim` options combined.
 - [ ] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
 - [ ] Add a `-o memcache` option.
