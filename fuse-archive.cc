@@ -429,6 +429,7 @@ enum {
   KEY_REDACT,
   KEY_FORCE,
   KEY_LAZY_CACHE,
+  KEY_MEM_CACHE,
   KEY_NO_CACHE,
   KEY_NO_MERGE,
   KEY_NO_TRIM,
@@ -467,6 +468,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("redact", KEY_REDACT),
     FUSE_OPT_KEY("force", KEY_FORCE),
     FUSE_OPT_KEY("lazycache", KEY_LAZY_CACHE),
+    FUSE_OPT_KEY("memcache", KEY_MEM_CACHE),
     FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     FUSE_OPT_KEY("nomerge", KEY_NO_MERGE),
     FUSE_OPT_KEY("notrim", KEY_NO_TRIM),
@@ -516,6 +518,7 @@ enum class Cache {
 
 // Caching strategy.
 Cache g_cache = Cache::Full;
+bool g_memcache = false;
 
 // File descriptor of the cache file.
 ScopedFile g_cache_fd;
@@ -2373,6 +2376,23 @@ std::string GetCacheDir() {
 // Creates a hidden temp file. Returns a file descriptor to this temp file.
 ScopedFile CreateCacheFile() {
   ScopedFile fd;
+
+  if (g_memcache) {
+#if defined(__linux__)
+    fd = ScopedFile(memfd_create(PROGRAM_NAME, MFD_CLOEXEC));
+    if (fd.IsValid()) {
+      LOG(DEBUG) << "Created memory-backed cache file";
+      return fd;
+    }
+
+    PLOG(ERROR) << "Cannot create memory-backed cache file";
+    throw ExitCode::CANNOT_CREATE_CACHE;
+#else
+    LOG(ERROR) << "Memory-backed cache file is only supported on Linux";
+    throw ExitCode::CANNOT_CREATE_CACHE;
+#endif
+  }
+
   std::string const cache_dir = GetCacheDir();
 
 #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__APPLE__)
@@ -3967,6 +3987,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_cache = Cache::Lazy;
       return DISCARD;
 
+    case KEY_MEM_CACHE:
+      g_memcache = true;
+      return DISCARD;
+
     case KEY_NO_CACHE:
       g_cache = Cache::None;
       return DISCARD;
@@ -4089,8 +4113,9 @@ general options:
     -v   -o verbose        print more log messages
     -o redact              redact paths from log messages
     -o force               continue despite errors
-    -o maxfilters=N        maximum number of filters per archive (default 1)
+    -o maxfilters=N        max number of filters (default 1)
     -o lazycache           incremental caching of uncompressed data
+    -o memcache            caching in memory
     -o nocache             no caching of uncompressed data
     -o nomerge             don't merge multiple archives in the same directory
     -o notrim              don't trim the base of the tree

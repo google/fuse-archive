@@ -55,6 +55,9 @@ mount read-only, not read-write.
 **-o lazycache**
 :   Incremental caching of uncompressed data
 
+**-o memcache**
+:   Caching in memory
+
 **-o nocache**
 :   No caching of uncompressed data
 

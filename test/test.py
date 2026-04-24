@@ -49,6 +49,8 @@ def GetFuseMajorVersion():
 fuse_major_version = GetFuseMajorVersion()
 logging.info(f'FUSE major version: {fuse_major_version}')
 
+has_memcache = sys.platform.startswith('linux')
+
 sys.setrecursionlimit(3000)
 
 # Computes the MD5 hash of the given file.
@@ -2067,6 +2069,7 @@ try:
     TestArchiveWithOptions()
     TestArchiveWithOptions(['-o', 'nocache'])
     TestArchiveWithOptions(['-o', 'lazycache'])
+    if has_memcache: TestArchiveWithOptions(['-o', 'memcache'])
     TestFilteredZip()
 finally:
     if has_gpg:
@@ -2075,23 +2078,35 @@ finally:
 TestHardlinks()
 TestHardlinks(['-o', 'nocache'])
 TestHardlinks(['-o', 'lazycache'])
+if has_memcache: TestHardlinks(['-o', 'memcache'])
+
 TestSeek()
 TestSeek(['-o', 'nocache'])
 TestSeek(['-o', 'lazycache'])
+if has_memcache: TestSeek(['-o', 'memcache'])
 TestSeek(['-o', 'noholes'])
+
 TestMultiArchive()
 TestMultiArchive(['-o', 'nocache'])
 TestMultiArchive(['-o', 'lazycache'])
+if has_memcache: TestMultiArchive(['-o', 'memcache'])
+
 TestSpecialPermissions()
 TestSpecialPermissions(['-o', 'nocache'])
 TestSpecialPermissions(['-o', 'lazycache'])
+if has_memcache: TestSpecialPermissions(['-o', 'memcache'])
+
 TestArchiveWithSpecialFiles()
+
 TestEncryptedArchive()
 TestEncryptedArchive(['-o', 'nocache'])
 TestEncryptedArchive(['-o', 'lazycache'])
+if has_memcache: TestEncryptedArchive(['-o', 'memcache'])
+
 TestExtendedAttributes()
 TestExtendedAttributes(['-o', 'nocache'])
 TestExtendedAttributes(['-o', 'lazycache'])
+if has_memcache: TestExtendedAttributes(['-o', 'memcache'])
 TestInvalidArchive()
 TestMasks()
 TestArchiveWithManyFiles()

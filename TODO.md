@@ -74,4 +74,4 @@
 - [x] Add test for `-o nomerge` option.
 - [x] Add test for `-o nomerge` and `-o notrim` options combined.
 - [x] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
-- [ ] Add a `-o memcache` option.
+- [x] Add a `-o memcache` option.
