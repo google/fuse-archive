@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import hashlib
 import logging
 import os
@@ -26,7 +27,13 @@ import tempfile
 import time
 
 
-logging.getLogger().setLevel('INFO')
+parser = argparse.ArgumentParser()
+parser.add_argument('--fast', action='store_true', help='skip slow tests')
+parser.add_argument('-v', '--verbose', action='store_true', help='enable debug logging')
+args = parser.parse_args()
+
+logging.getLogger().setLevel('DEBUG' if args.verbose else 'INFO')
+is_fast = args.fast
 
 sys.setrecursionlimit(3000)
 
@@ -61,6 +68,7 @@ def GetTree(root, use_md5=True):
         result[os.path.relpath(path, root)] = line
         if stat.S_ISREG(mode):
             line['size'] = st.st_size
+            line['blocks'] = st.st_blocks
             try:
                 if use_md5:
                     line['md5'] = md5(path)
@@ -75,14 +83,16 @@ def GetTree(root, use_md5=True):
                 scan(entry.path, entry.stat(follow_symlinks=False))
 
         try:
-            attrs = os.listxattr(path)
+            attrs = os.listxattr(path, follow_symlinks=False)
             xattr_dict = dict()
             for attr in attrs:
                 try:
-                    value = os.getxattr(path, attr)
+                    value = os.getxattr(path, attr, follow_symlinks=False)
                     xattr_dict[attr] = value.decode('utf-8')
                 except OSError as e:
                     xattr_dict[attr] = f'<error: {e.errno}>'
+            if xattr_dict:
+                logging.debug(f"Path {path} has xattrs: {xattr_dict}")
             line['xattr'] = xattr_dict
         except OSError as e:
             line['xattr'] = e.errno
@@ -136,8 +146,6 @@ data_dir = os.path.join(script_dir, 'data')
 
 # Path of the FUSE mounter.
 mount_program = os.path.join(script_dir, '..', 'out', 'fuse-archive')
-
-is_fast = '--fast' in sys.argv
 
 def CanRun(args):
     try:
@@ -966,16 +974,16 @@ def TestHardlinks(options=[]):
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
         'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
         'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
-        'Dir1/Dir2/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'Dir1/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File1': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File2': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File3': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'File5': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'Symlink1': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'Symlink3': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'Dir1/Dir2/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Dir1/File': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File1': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File2': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File3': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'File5': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Symlink1': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
+        'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
+        'Symlink3': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
     MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=15, want_inodes=5, options=options)
@@ -984,32 +992,30 @@ def TestHardlinks(options=[]):
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
         'hardlinks': {'ino': 2, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
         'hardlinks/Dir1': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
-        'hardlinks/Dir1': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
         'hardlinks/Dir1/Dir2': {'ino': 5, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
-        'hardlinks/Dir1/Dir2/File': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/Dir1/File': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/File1': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/File2': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/File3': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/File4': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/File5': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/Symlink1': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'hardlinks/Symlink2': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'hardlinks/Symlink3': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks/Dir1/Dir2/File': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/Dir1/File': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/File1': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/File2': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/File3': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/File4': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/File5': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/Symlink1': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
+        'hardlinks/Symlink2': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
+        'hardlinks/Symlink3': {'ino': 6, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
         'hardlinks (1)': {'ino': 7, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
         'hardlinks (1)/Dir1': {'ino': 9, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
-        'hardlinks (1)/Dir1': {'ino': 9, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
         'hardlinks (1)/Dir1/Dir2': {'ino': 10, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
-        'hardlinks (1)/Dir1/Dir2/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/Dir1/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/File1': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/File2': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/File3': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/File4': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/File5': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/Symlink1': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'hardlinks (1)/Symlink2': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
-        'hardlinks (1)/Symlink3': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks (1)/Dir1/Dir2/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/Dir1/File': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/File1': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/File2': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/File3': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/File4': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/File5': {'ino': 8, 'mode': '-rw-r--r--', 'nlink': 7, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/Symlink1': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
+        'hardlinks (1)/Symlink2': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
+        'hardlinks (1)/Symlink3': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
     MountArchiveAndCheckTree([zip_name, zip_name], want_tree, want_blocks=31, want_inodes=11, options=[*options, '-o', 'nomerge'])
@@ -1018,16 +1024,16 @@ def TestHardlinks(options=[]):
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
         'Dir1': {'ino': 3, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754809000000000},
         'Dir1/Dir2': {'ino': 4, 'mode': 'drwxr-xr-x', 'nlink': 2, 'mtime': 1727754818000000000},
-        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
     MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=7, want_inodes=5, options=[*options, '-o', 'nohardlinks'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
-        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'Symlink2': {'ino': 3, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'File4': {'ino': 2, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'Symlink2': {'ino': 3, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
     MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=5, want_inodes=3, options=[*options, '-o', 'nodirs'])
@@ -1035,14 +1041,32 @@ def TestHardlinks(options=[]):
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
         'hardlinks': {'ino': 2, 'mode': 'drwxr-xr-x', 'nlink': 2},
-        'hardlinks/File4': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks/Symlink2': {'ino': 4, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks/File4': {'ino': 3, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks/Symlink2': {'ino': 4, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
         'hardlinks (1)': {'ino': 5, 'mode': 'drwxr-xr-x', 'nlink': 2},
-        'hardlinks (1)/File4': {'ino': 6, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
-        'hardlinks (1)/Symlink2': {'ino': 7, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target'},
+        'hardlinks (1)/File4': {'ino': 6, 'mode': '-rw-r--r--', 'nlink': 1, 'mtime': 1727754740000000000, 'size': 35, 'blocks': 1, 'xattr': {}, 'md5': '972fc6414a197a62c6c84fe8da0cf5ca'},
+        'hardlinks (1)/Symlink2': {'ino': 7, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
     MountArchiveAndCheckTree([zip_name, zip_name], want_tree, want_blocks=11, want_inodes=7, options=[*options, '-o', 'nomerge,nodirs'])
+
+    if not has_gzip and not has_zlib: return
+
+    # Tests hardlinks with extended attributes consistency.
+    zip_name = 'xattr_hardlinks.tar.gz'
+    want_tree = {
+        '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+        'original': {
+            'ino': 2, 'mode': '-rw-r--r--', 'nlink': 2,
+            'xattr': {'user.test_attr': 'test_value'},
+        },
+        'link': {
+            'ino': 2, 'mode': '-rw-r--r--', 'nlink': 2,
+            'xattr': {'user.test_attr': 'test_value'},
+        },
+    }
+
+    MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
 
 
 # Tests dmask and fmask.
