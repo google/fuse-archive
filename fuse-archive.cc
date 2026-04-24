@@ -2007,7 +2007,8 @@ struct Node {
     std::string value;
   };
 
-  std::vector<Attribute> attributes;
+  using Attributes = std::vector<Attribute>;
+  Attributes attributes;
 
   // Number of entries whose name have initially collided with this file node.
   int collision_count = 0;
@@ -3088,6 +3089,9 @@ void ResolveHardlinks() {
         .nlink = g_hardlinks ? (target->nlink++, 0) : 1,
         .saved_blocks = target->saved_blocks,
         .hardlink_target = g_hardlinks ? target : nullptr,
+        // For performance reasons, we don't copy holes and attributes here.
+        // FUSE callbacks that rely on these members will explicitely get the
+        // hardlink target.
     };
 
     if (!g_hardlinks) {
@@ -3431,7 +3435,9 @@ int GetXattr(const char* const path,
     return -ENOENT;
   }
 
-  if (node->attributes.empty()) {
+  const Node::Attributes& attributes = node->GetTarget()->attributes;
+
+  if (attributes.empty()) {
     // The node has no extended attributes.
     LOG(DEBUG) << *node << " has no xattr " << std::quoted(xattr_name);
     return -ENODATA;
@@ -3444,9 +3450,8 @@ int GetXattr(const char* const path,
     return -ENODATA;
   }
 
-  auto const it =
-      std::ranges::find(node->attributes, key, &Node::Attribute::key);
-  if (it == node->attributes.end()) {
+  auto const it = std::ranges::find(attributes, key, &Node::Attribute::key);
+  if (it == attributes.end()) {
     // The node has some extended attributes, but none matching the given name.
     LOG(DEBUG) << *node << " has no xattr " << std::quoted(xattr_name);
     return -ENODATA;
@@ -3490,21 +3495,23 @@ int ListXattr(const char* const path,
     return -ENOENT;
   }
 
+  const Node::Attributes& attributes = node->GetTarget()->attributes;
+
   size_t total_bytes = 0;
   if (dst_len == 0) {
     // Compute required buffer size.
-    for (const Node::Attribute& a : node->attributes) {
+    for (const Node::Attribute& a : attributes) {
       const std::string& key = a.key->string;
       total_bytes += key.size() + 1;
     }
   } else {
     assert(dst_ptr);
     std::span<char> dst(dst_ptr, dst_len);
-    for (const Node::Attribute& a : node->attributes) {
+    for (const Node::Attribute& a : attributes) {
       const std::string& key = a.key->string;
       const size_t n = key.size() + 1;
       if (dst.size() < n) {
-        LOG(ERROR) << "Cannot list " << node->attributes.size() << " xattrs of "
+        LOG(ERROR) << "Cannot list " << attributes.size() << " xattrs of "
                    << *node << ": The destination buffer of " << dst_len
                    << " bytes is too small";
         return -ERANGE;
@@ -3518,14 +3525,14 @@ int ListXattr(const char* const path,
   }
 
   if (total_bytes > std::numeric_limits<int>::max()) {
-    LOG(ERROR) << "Cannot list " << node->attributes.size() << " xattrs of "
-               << *node << ": The list is " << total_bytes
+    LOG(ERROR) << "Cannot list " << attributes.size() << " xattrs of " << *node
+               << ": The list is " << total_bytes
                << " bytes long, which is greater than MAX_INT";
     return -E2BIG;
   }
 
-  LOG(DEBUG) << "List " << node->attributes.size() << " xattrs of " << *node
-             << " -> " << total_bytes << " bytes";
+  LOG(DEBUG) << "List " << attributes.size() << " xattrs of " << *node << " -> "
+             << total_bytes << " bytes";
   return static_cast<int>(total_bytes);
 }
 
@@ -3785,7 +3792,7 @@ int ReadDir(const char*,
   }
 
   for (const Node& child : n->children) {
-    struct stat const z = child.GetStat();
+    struct stat const z = child.GetTarget()->GetStat();
     add(child.name.c_str(), &z);
   }
 
