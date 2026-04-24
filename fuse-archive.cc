@@ -1541,8 +1541,8 @@ struct Reader : bi::list_base_hook<LinkMode> {
     r.Check(archive_read_append_filter_program(a, #s " -d")); \
   }
 
-#define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3009000
-#define WORK_AROUND_ISSUE_2514 ARCHIVE_VERSION_NUMBER < 3009000
+#define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3'008'007
+#define WORK_AROUND_ISSUE_2514 ARCHIVE_VERSION_NUMBER < 3'009'000
 
   bool SetFilter(std::string_view const ext) {
     static std::unordered_map<std::string_view, void (*)(Reader&)> const
