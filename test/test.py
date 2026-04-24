@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 
 
 parser = argparse.ArgumentParser()
@@ -211,15 +212,6 @@ env = os.environ.copy()
 if not is_fast and not has_lrzip:
     env['MALLOC_PERTURB_'] = '170'
 
-# Mounts the given archive(s), walks the mounted archive and unmounts.
-# Returns a pair where:
-# - member 0 is a dict representing the mounted archive.
-# - member 1 is the result of os.statvfs
-#
-# Throws subprocess.CalledProcessError if the archive cannot be mounted.
-from contextlib import contextmanager
-
-
 @contextmanager
 def MountArchive(zip_names, options=[], password='', env=env):
     with tempfile.TemporaryDirectory() as mount_point:
@@ -245,6 +237,12 @@ def MountArchive(zip_names, options=[], password='', env=env):
             logging.debug(f'Unmounted {zip_paths!r} from {mount_point!r}')
 
 
+# Mounts the given archive(s), walks the mounted archive and unmounts.
+# Returns a pair where:
+# - member 0 is a dict representing the mounted archive.
+# - member 1 is the result of os.statvfs
+#
+# Throws subprocess.CalledProcessError if the archive cannot be mounted.
 def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get_tree=True):
     with MountArchive(zip_names, options, password) as mount_point:
         tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
