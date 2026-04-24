@@ -1542,6 +1542,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   }
 
 #define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3009000
+#define WORK_AROUND_ISSUE_2514 ARCHIVE_VERSION_NUMBER < 3009000
 
   bool SetFilter(std::string_view const ext) {
     static std::unordered_map<std::string_view, void (*)(Reader&)> const
@@ -1581,9 +1582,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
 #endif
             {"uu", SET_FILTER(UU)},
             {"xz", SET_FILTER(XZ)},
+#if WORK_AROUND_ISSUE_2514
             // Work around https://github.com/libarchive/libarchive/issues/2514
-            // {"z", SET_FILTER(COMPRESS)},
             {"z", SET_FILTER_COMMAND(compress)},
+#else
+            {"z", SET_FILTER(COMPRESS)},
+#endif
             {"zst", SET_FILTER(ZSTD)},
             {"zstd", SET_FILTER(ZSTD)},
         };
@@ -1600,9 +1604,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
   bool SetCompressedTarFormat(std::string_view const ext) {
     static std::unordered_map<std::string_view, void (*)(Reader&)> const
         ext_to_filter = {
+#if WORK_AROUND_ISSUE_2514
             // Work around https://github.com/libarchive/libarchive/issues/2514
-            // {"taz", SET_FILTER(COMPRESS)},
             {"taz", SET_FILTER_COMMAND(compress)},
+            {"tz", SET_FILTER_COMMAND(compress)},
+#else
+            {"taz", SET_FILTER(COMPRESS)},
+            {"tz", SET_FILTER(COMPRESS)},
+#endif
             {"tbr", SET_FILTER_COMMAND(brotli)},
             {"tb2", SET_FILTER(BZIP2)},
             {"tbz", SET_FILTER(BZIP2)},
@@ -1619,9 +1628,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
             {"tlzip", SET_FILTER(LZIP)},
             {"tlzma", SET_FILTER(LZMA)},
             {"txz", SET_FILTER(XZ)},
-            // Work around https://github.com/libarchive/libarchive/issues/2514
-            // {"tz", SET_FILTER(COMPRESS)},
-            {"tz", SET_FILTER_COMMAND(compress)},
             {"tz2", SET_FILTER(BZIP2)},
             {"tzs", SET_FILTER(ZSTD)},
             {"tzst", SET_FILTER(ZSTD)},
