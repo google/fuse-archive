@@ -435,6 +435,7 @@ enum {
   KEY_NO_DIRS,
   KEY_NO_SPECIALS,
   KEY_NO_SYMLINKS,
+  KEY_NO_HOLES,
   KEY_NO_HARDLINKS,
   KEY_NO_XATTRS,
   KEY_DEFAULT_PERMISSIONS,
@@ -472,6 +473,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("nodirs", KEY_NO_DIRS),
     FUSE_OPT_KEY("nospecials", KEY_NO_SPECIALS),
     FUSE_OPT_KEY("nosymlinks", KEY_NO_SYMLINKS),
+    FUSE_OPT_KEY("noholes", KEY_NO_HOLES),
     FUSE_OPT_KEY("nohardlinks", KEY_NO_HARDLINKS),
     FUSE_OPT_KEY("noxattrs", KEY_NO_XATTRS),
     FUSE_OPT_KEY("default_permissions", KEY_DEFAULT_PERMISSIONS),
@@ -494,6 +496,7 @@ bool g_trim = true;
 bool g_dirs = true;
 bool g_specials = true;
 bool g_symlinks = true;
+bool g_holes = true;
 bool g_hardlinks = true;
 bool g_xattrs = true;
 bool g_default_permissions = false;
@@ -2257,11 +2260,14 @@ struct Node {
     i64 const old_cached_size = cached_size;
     i64 const old_blocks = GetBlockCount();
 
-    ScopedFile::HoleCallback const on_hole = [this](i64 from, i64 to) {
-      from -= cache_offset;
-      to -= cache_offset;
-      saved_blocks += holes.emplace_back(from, to).GetSavedBlocks(size);
-    };
+    ScopedFile::HoleCallback on_hole;
+    if (g_holes) {
+      on_hole = [this](i64 from, i64 to) {
+        from -= cache_offset;
+        to -= cache_offset;
+        saved_blocks += holes.emplace_back(from, to).GetSavedBlocks(size);
+      };
+    }
 
     while (cached_size < want_cached_size) {
       char buff[64 * 1024];
@@ -2789,7 +2795,7 @@ i64 CacheEntryData(Archive* const a,
   i64 last_hole_start = file_start_offset;
 
   ScopedFile::HoleCallback on_hole;
-  if (node) {
+  if (node && g_holes) {
     assert(node->holes.empty());
     assert(node->saved_blocks == 0);
 
@@ -3986,6 +3992,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_symlinks = false;
       return DISCARD;
 
+    case KEY_NO_HOLES:
+      g_holes = false;
+      return DISCARD;
+
     case KEY_NO_HARDLINKS:
       g_hardlinks = false;
       return DISCARD;
@@ -4087,6 +4097,7 @@ general options:
     -o nodirs              no directories
     -o nospecials          no special files (FIFOs, sockets, devices)
     -o nosymlinks          no symlinks
+    -o noholes             no sparse files
     -o nohardlinks         no hard links
     -o noxattrs            no extended attributes
     -o dmask=M             directory permission mask in octal (default 0022)

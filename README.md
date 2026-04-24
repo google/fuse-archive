@@ -77,6 +77,9 @@ mount read-only, not read-write.
 **-o nosymlinks**
 :   Hide symbolic links
 
+**-o noholes**
+:   Do not report holes in sparse files.
+
 **-o nohardlinks**
 :   No files with multiple hard links
 
