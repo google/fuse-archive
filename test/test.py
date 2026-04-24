@@ -35,6 +35,20 @@ args = parser.parse_args()
 logging.getLogger().setLevel('DEBUG' if args.verbose else 'INFO')
 is_fast = args.fast
 
+def GetFuseMajorVersion():
+    try:
+        res = subprocess.run([mount_program, '--version'], capture_output=True, text=True, check=True)
+        for line in res.stdout.split('\n'):
+            if 'FUSE library version:' in line:
+                version_str = line.split(':')[-1].strip()
+                return int(version_str.split('.')[0])
+    except Exception as e:
+        logging.debug(f'Cannot determine FUSE version: {e}')
+    return 0
+
+fuse_major_version = GetFuseMajorVersion()
+logging.info(f'FUSE major version: {fuse_major_version}')
+
 sys.setrecursionlimit(3000)
 
 # Computes the MD5 hash of the given file.
@@ -1081,6 +1095,9 @@ def TestHardlinks(options=[]):
 # Tests sparse file seeking logic.
 def TestSeek(options=[]):
     if not has_gzip and not has_zlib: return
+    if fuse_major_version < 3:
+        logging.info('Skipping TestSeek (FUSE version < 3)')
+        return
     zip_name = 'seek.tar.gz'
     with MountArchive(zip_name, options=options) as mount_point:
         path = os.path.join(mount_point, 'complex_sparse')
@@ -1151,6 +1168,82 @@ def TestSeek(options=[]):
             check_enxio(9000, os.SEEK_HOLE)
         finally:
             os.close(fd)
+
+
+# Tests multiple archives, nomerge and notrim options.
+def TestMultiArchive(options=[]):
+    if not has_gzip and not has_zlib: return
+
+    zip1 = 'multi1.tar.gz'
+    zip2 = 'multi2.tar.gz'
+    zip_names = [zip1, zip2]
+
+    # Default: merged and trimmed.
+    # multi1 has a/b/c/file1
+    # multi2 has a/b/d/file2
+    # Common prefix is a/b/, so it should be trimmed.
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'c': {'mode': 'drwxr-xr-x'},
+        'c/file1': {'size': 6, 'md5': '5149d403009a139c7e085405ef762e1a'},
+        'd': {'mode': 'drwxr-xr-x'},
+        'd/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
+    }
+    MountArchiveAndCheckTree(zip_names, want_tree, options=options)
+
+    # notrim: merged but not trimmed.
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'a': {'mode': 'drwxr-xr-x'},
+        'a/b': {'mode': 'drwxr-xr-x'},
+        'a/b/c': {'mode': 'drwxr-xr-x'},
+        'a/b/c/file1': {'size': 6, 'md5': '5149d403009a139c7e085405ef762e1a'},
+        'a/b/d': {'mode': 'drwxr-xr-x'},
+        'a/b/d/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
+    }
+    MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'notrim'])
+
+    # nomerge: not merged, and each archive is trimmed.
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'multi1': {'mode': 'drwxr-xr-x'},
+        'multi1/file1': {'size': 6, 'md5': '5149d403009a139c7e085405ef762e1a'},
+        'multi2': {'mode': 'drwxr-xr-x'},
+        'multi2/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
+    }
+    MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'nomerge'])
+
+    # nomerge and notrim: not merged, not trimmed.
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'multi1': {'mode': 'drwxr-xr-x'},
+        'multi1/a': {'mode': 'drwxr-xr-x'},
+        'multi1/a/b': {'mode': 'drwxr-xr-x'},
+        'multi1/a/b/c': {'mode': 'drwxr-xr-x'},
+        'multi1/a/b/c/file1': {'size': 6, 'md5': '5149d403009a139c7e085405ef762e1a'},
+        'multi2': {'mode': 'drwxr-xr-x'},
+        'multi2/a': {'mode': 'drwxr-xr-x'},
+        'multi2/a/b': {'mode': 'drwxr-xr-x'},
+        'multi2/a/b/d': {'mode': 'drwxr-xr-x'},
+        'multi2/a/b/d/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
+    }
+    MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'nomerge,notrim'])
+
+
+# Tests SUID, SGID and sticky bits with -o default_permissions.
+def TestSpecialPermissions(options=[]):
+    if not has_gzip and not has_zlib: return
+    zip_name = 'special_perms.tar.gz'
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'suid': {'mode': '-rwsr-xr-x'},
+        'sgid': {'mode': '-rwxr-sr-x'},
+        'suid_sgid': {'mode': '-rwsr-sr-x'},
+        'sticky': {'mode': 'drwxr-xr-t'},
+        'all': {'mode': '-rwsr-sr-t'},
+    }
+    # -o default_permissions tells fuse-archive to use the bits from the archive.
+    MountArchiveAndCheckTree(zip_name, want_tree, options=[*options, '-o', 'default_permissions'], use_md5=False)
 
 
 # Tests dmask and fmask.
@@ -1986,6 +2079,12 @@ TestSeek()
 TestSeek(['-o', 'nocache'])
 TestSeek(['-o', 'lazycache'])
 TestSeek(['-o', 'noholes'])
+TestMultiArchive()
+TestMultiArchive(['-o', 'nocache'])
+TestMultiArchive(['-o', 'lazycache'])
+TestSpecialPermissions()
+TestSpecialPermissions(['-o', 'nocache'])
+TestSpecialPermissions(['-o', 'lazycache'])
 TestArchiveWithSpecialFiles()
 TestEncryptedArchive()
 TestEncryptedArchive(['-o', 'nocache'])

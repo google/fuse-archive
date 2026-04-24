@@ -69,9 +69,9 @@
 - [x] Detect "holes" in sparse files (https://github.com/google/fuse-archive/issues/41).
 - [x] Add a `-o noholes` option.
 - [x] Add tests for sparse files.
-- [ ] Add test for mounting several archives in the same mount point.
-- [ ] Add test for `-o notrim` option.
-- [ ] Add test for `-o nomerge` option.
-- [ ] Add test for `-o nomerge` and `-o notrim` options combined.
-- [ ] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
+- [x] Add test for mounting several archives in the same mount point.
+- [x] Add test for `-o notrim` option.
+- [x] Add test for `-o nomerge` option.
+- [x] Add test for `-o nomerge` and `-o notrim` options combined.
+- [x] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
 - [ ] Add a `-o memcache` option.
