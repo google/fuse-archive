@@ -639,21 +639,16 @@ struct Hash {
   size_t operator()(const auto& x) const { return x.string_hash; }
 };
 
-// Set of unique (i.e. deduplicated) strings. Lazily constructed and populated.
-// Never destructed.
+// Set of unique (i.e. deduplicated) strings. Lazily populated.
 using HashedStrings = std::unordered_set<HashedString, Hash, IsEqual>;
-HashedStrings* g_unique_strings = nullptr;
+HashedStrings g_unique_strings;
 
 // Gets a pointer to the unique registered string matching the given string, or
 // null if no such string has been registered.
 const HashedString* GetUniqueOrNull(std::string_view const s) {
-  if (!g_unique_strings) {
-    return nullptr;
-  }
-
   HashedStrings::const_iterator const it =
-      g_unique_strings->find(HashedStringView(s));
-  if (it == g_unique_strings->cend()) {
+      g_unique_strings.find(HashedStringView(s));
+  if (it == g_unique_strings.cend()) {
     return nullptr;
   }
 
@@ -665,13 +660,9 @@ const HashedString* GetUniqueOrNull(std::string_view const s) {
 // Gets a non-null pointer to the unique registered string matching the given
 // string, creating and registering it if necessary.
 const HashedString* GetOrCreateUnique(std::string_view const s) {
-  if (!g_unique_strings) {
-    g_unique_strings = new HashedStrings();
-  }
-
   HashedStrings::const_iterator const it =
-      g_unique_strings->insert(HashedStringView(s)).first;
-  assert(it != g_unique_strings->cend());
+      g_unique_strings.insert(HashedStringView(s)).first;
+  assert(it != g_unique_strings.cend());
   assert(it->string == s);
   assert(it->string.data() != s.data());
   return &*it;
@@ -4164,6 +4155,17 @@ int main(int const argc, char** const argv) try {
   EnsureUtf8();
 
   fuse_args args = FUSE_ARGS_INIT(argc, argv);
+
+#ifdef __SANITIZE_ADDRESS__
+  Cleanup const global_cleanup_guard([&args] {
+    Timer const timer;
+    fuse_opt_free_args(&args);
+    g_nodes_by_path.clear_and_dispose(std::default_delete<Node>());
+    g_root_node = nullptr;
+    LOG(DEBUG) << "Deallocated tree in " << timer;
+  });
+#endif
+
   if (fuse_opt_parse(&args, &g_options, g_fuse_opts, &ProcessArg) < 0) {
     LOG(ERROR) << "Cannot parse command line arguments";
     throw ExitCode::GENERIC_FAILURE;
@@ -4173,12 +4175,15 @@ int main(int const argc, char** const argv) try {
     PrintUsage();
 #if FUSE_USE_VERSION >= 30
     fuse_opt_add_arg(&args, "--help");
-    char empty[] = "";
-    args.argv[0] = empty;
+    char empty_argv0[] = "";
+    char* const old_argv0 = args.argv[0];
+    args.argv[0] = empty_argv0;
+    fuse_main(args.argc, args.argv, &operations, nullptr);
+    args.argv[0] = old_argv0;
 #else
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
-#endif
     fuse_main(args.argc, args.argv, &operations, nullptr);
+#endif
     return EXIT_SUCCESS;
   }
 
