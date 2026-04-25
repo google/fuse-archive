@@ -4121,8 +4121,8 @@ general options:
     -o force               continue despite errors
     -o maxfilters=N        max number of filters (default 1)
     -o lazycache           incremental caching of uncompressed data
-    -o memcache            caching in memory
     -o nocache             no caching of uncompressed data
+    -o memcache            caching in memory
     -o nomerge             don't merge multiple archives in the same directory
     -o notrim              don't trim the base of the tree
     -o nodirs              no directories
