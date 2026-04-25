@@ -36,20 +36,6 @@ args = parser.parse_args()
 logging.getLogger().setLevel('DEBUG' if args.verbose else 'INFO')
 is_fast = args.fast
 
-def GetFuseMajorVersion():
-    try:
-        res = subprocess.run([mount_program, '--version'], capture_output=True, text=True, check=True)
-        for line in res.stdout.split('\n'):
-            if 'FUSE library version:' in line:
-                version_str = line.split(':')[-1].strip()
-                return int(version_str.split('.')[0])
-    except Exception as e:
-        logging.debug(f'Cannot determine FUSE version: {e}')
-    return 0
-
-fuse_major_version = GetFuseMajorVersion()
-logging.info(f'FUSE major version: {fuse_major_version}')
-
 has_memcache = sys.platform.startswith('linux')
 
 sys.setrecursionlimit(3000)
@@ -190,6 +176,17 @@ has_zstd = CanRun(['zstd', '--version'])
 has_tar = CanRun(['tar', '--version'])
 
 sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
+
+def GetFuseMajorVersion():
+    for line in sr.stdout.split('\n'):
+        if 'FUSE library version' in line:
+            # Handle "FUSE library version 3.x" and "FUSE library version: 3.x"
+            version_str = line.split('version')[-1].strip(': ').split()[0]
+            return int(version_str.split('.')[0])
+    return 0
+
+fuse_major_version = GetFuseMajorVersion()
+logging.info(f'FUSE major version: {fuse_major_version}')
 
 def HasLib(name):
     if ' ' + name + '/' in sr.stdout:

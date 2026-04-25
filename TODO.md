@@ -75,3 +75,4 @@
 - [x] Add test for `-o nomerge` and `-o notrim` options combined.
 - [x] Add test for SGID, SUID and SVTX bits with `-o default_permissions`.
 - [x] Add a `-o memcache` option.
+- [x] Fix the FUSE version detection in the tests
