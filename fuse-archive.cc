@@ -1623,10 +1623,12 @@ struct Reader : bi::list_base_hook<LinkMode> {
             {"tgz", SET_FILTER(GZIP)},
             {"tlz",
              [](Reader& r) {
-               // .tlz could mean .tar.lz or .tar.lzma
+               // .tlz could mean any TAR with LZ-based compression.
                Archive* const a = r.archive.get();
-               r.Check(archive_read_support_filter_lzip(a));
-               r.Check(archive_read_support_filter_lzma(a));
+               archive_read_support_filter_lzma(a);
+               archive_read_support_filter_lzip(a);
+               archive_read_support_filter_lzop(a);
+               archive_read_support_filter_lz4(a);
              }},
             {"tlz4", SET_FILTER(LZ4)},
             {"tlzip", SET_FILTER(LZIP)},
