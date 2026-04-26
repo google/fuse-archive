@@ -53,6 +53,16 @@ def update_version(version, date=None):
     with open('README.md', 'w') as f:
         f.write(content)
 
+    # Update DEVELOPMENT.md
+    if os.path.exists('DEVELOPMENT.md'):
+        with open('DEVELOPMENT.md', 'r') as f:
+            content = f.read()
+        state = 'Stable' if date else 'Development'
+        content = re.sub(r'Current state: \*\*.*\*\*',
+                         f'Current state: **{version} ({state})**', content)
+        with open('DEVELOPMENT.md', 'w') as f:
+            f.write(content)
+
     # Regenerate man page
     run(['make', 'doc', 'QUIET=1'])
 
@@ -107,13 +117,13 @@ def main():
 
     print(f'Releasing version {version}...')
     update_version(version, date)
-    run(['git', 'add', 'fuse-archive.cc', 'README.md', 'fuse-archive.1'])
+    run(['git', 'add', 'fuse-archive.cc', 'fuse-archive.1', 'DEVELOPMENT.md', 'README.md'])
     run(['git', 'commit', '-m', f'Release version {version}'])
     run(['git', 'tag', '-a', f'v{version}', '-m', f'Version {version}'])
 
     print(f'Starting development version {next_version}...')
     update_version(next_version)
-    run(['git', 'add', 'fuse-archive.cc', 'README.md', 'fuse-archive.1'])
+    run(['git', 'add', 'fuse-archive.cc', 'fuse-archive.1', 'DEVELOPMENT.md', 'README.md'])
     run(['git', 'commit', '-m', f'Start development version {next_version}'])
 
     print(f'\nSuccessfully released v{version} and bumped to {next_version}.')
