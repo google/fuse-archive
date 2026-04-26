@@ -641,14 +641,18 @@ struct Hash {
 
 // Set of unique (i.e. deduplicated) strings. Lazily populated.
 using HashedStrings = std::unordered_set<HashedString, Hash, IsEqual>;
-HashedStrings g_unique_strings;
+HashedStrings* g_unique_strings = nullptr;
 
 // Gets a pointer to the unique registered string matching the given string, or
 // null if no such string has been registered.
 const HashedString* GetUniqueOrNull(std::string_view const s) {
+  if (!g_unique_strings) {
+    return nullptr;
+  }
+
   HashedStrings::const_iterator const it =
-      g_unique_strings.find(HashedStringView(s));
-  if (it == g_unique_strings.cend()) {
+      g_unique_strings->find(HashedStringView(s));
+  if (it == g_unique_strings->cend()) {
     return nullptr;
   }
 
@@ -660,9 +664,14 @@ const HashedString* GetUniqueOrNull(std::string_view const s) {
 // Gets a non-null pointer to the unique registered string matching the given
 // string, creating and registering it if necessary.
 const HashedString* GetOrCreateUnique(std::string_view const s) {
+  if (!g_unique_strings) {
+    g_unique_strings = new HashedStrings();
+  }
+
+  assert(g_unique_strings);
   HashedStrings::const_iterator const it =
-      g_unique_strings.insert(HashedStringView(s)).first;
-  assert(it != g_unique_strings.cend());
+      g_unique_strings->insert(HashedStringView(s)).first;
+  assert(it != g_unique_strings->cend());
   assert(it->string == s);
   assert(it->string.data() != s.data());
   return &*it;
@@ -1467,6 +1476,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
     r->AdvanceOffset(want_offset_within_entry);
 
     return r;
+  }
+
+  static void EmptyRecycleBin() {
+    recycled.clear_and_dispose(std::default_delete<Reader>());
   }
 
  private:
@@ -4159,10 +4172,16 @@ int main(int const argc, char** const argv) try {
 #ifdef __SANITIZE_ADDRESS__
   Cleanup const global_cleanup_guard([&args] {
     Timer const timer;
-    fuse_opt_free_args(&args);
+    LOG(DEBUG) << "Cleaning up";
+    Reader::EmptyRecycleBin();
+    for (Node& n : g_nodes_by_path) {
+      n.children.clear();
+    }
     g_nodes_by_path.clear_and_dispose(std::default_delete<Node>());
     g_root_node = nullptr;
-    LOG(DEBUG) << "Deallocated tree in " << timer;
+    delete g_unique_strings;
+    fuse_opt_free_args(&args);
+    LOG(DEBUG) << "Cleaned up in " << timer;
   });
 #endif
 
@@ -4288,7 +4307,7 @@ int main(int const argc, char** const argv) try {
   }
 
   // Create the mount point if it does not already exist.
-  Cleanup cleanup;
+  Cleanup mount_point_guard;
   {
     auto const n = mount_point_basename.size();
     int i = 0;
@@ -4302,7 +4321,7 @@ int main(int const argc, char** const argv) try {
 
         // Set the cleanup function that will eventually remove this mount
         // point.
-        cleanup.fn = [mount_point_parent_fd, mount_point_basename]() {
+        mount_point_guard.fn = [mount_point_parent_fd, mount_point_basename]() {
           if (unlinkat(mount_point_parent_fd, mount_point_basename.c_str(),
                        AT_REMOVEDIR) == 0) {
             LOG(INFO) << "Removed mount point " << Path(g_mount_point);
