@@ -57,7 +57,12 @@ doc: $(MAN)
 	man -l $(MAN)
 
 $(MAN): README.md
-	pandoc $< -s -t man -o $@
+	pandoc $< -s -t man | \
+	sed -e 's/^\.IP \\\[bu\]/.PD 0\n.IP \\\[bu\]/g' \
+	    -e 's/^\.SH/.PD\n.SH/g' \
+	    -e 's/^\.SS/.PD\n.SS/g' \
+	    -e 's/^\.PP/.PD\n.PP/g' \
+	    -e 's/^\.TP/.PD\n.TP/g' > $@
 
 install: out/$(PROJECT)
 	$(INSTALL) -D "out/$(PROJECT)" "$(DESTDIR)$(BINDIR)/$(PROJECT)"

@@ -204,6 +204,7 @@ library. It supports a wide variety of archive formats and compression methods,
 either natively through **libarchive** or by invoking external filter programs.
 
 The exact set of supported formats depends on:
+
 *   The version and build-time configuration of the **libarchive** library.
 *   The availability of external filter programs in your system's `PATH`.
 
@@ -382,6 +383,7 @@ incremental caching strategies. This option is only available on Linux.
 
 The `-o force` option allows **fuse-archive** to continue mounting an archive
 even if some errors are encountered. This includes:
+
 *   Wrong or missing decryption passwords.
 *   Unsupported compression or encryption methods.
 
