@@ -54,7 +54,10 @@ clean-data:
 	rm -f test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
 
 doc: $(MAN)
-	man -l $(MAN)
+	@if [ -z "$(QUIET)" ]; then man -l $(MAN); fi
+
+release:
+	python3 release.py $(VERSION)
 
 $(MAN): README.md
 	pandoc $< -s -t man | \
@@ -92,4 +95,4 @@ test/data/deep.tar: test/make_deep.py
 test/data/many_nodes.zip: test/make_many_nodes.py
 	python3 test/make_many_nodes.py
 
-.PHONY: all check check-fast clean clean-data doc install install-strip test uninstall
+.PHONY: all check check-fast clean clean-data doc install install-strip release test uninstall
