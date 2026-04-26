@@ -242,8 +242,20 @@ detect the format by examining the file's byte contents.
 ## External Filter Programs
 
 For some formats and encodings, **fuse-archive** relies on the following
-external programs being available in your `PATH`: `base64`, `brotli`,
-`compress`, `gpg`, `lrzip`, and `lzop`.
+external programs being available in your `PATH`:
+
+*   `base64`: For `b64` and `base64` encodings.
+*   `brotli`: For `br` and `brotli` compression.
+*   `compress`: For `z`, `taz`, and `tz` compression (if not supported natively
+    by **libarchive**).
+*   `gpg`: For `asc`, `gpg`, and `pgp` encryption.
+*   `lrzip`: For `lrz` and `tlrz` compression.
+*   `lzop`: For `lzo`, `lzop`, `tlzo`, and `tlzop` compression (if not supported
+    natively by **libarchive**).
+
+Other formats, such as `uu` (UUencoded), `lzip`, `xz`, `gzip`, and `bzip2`, are
+typically handled natively by the **libarchive** library and do not require
+external programs.
 
 # ARCHIVE TREE STRUCTURE
 

@@ -372,8 +372,34 @@ contents.
 .SS External Filter Programs
 For some formats and encodings, \f[B]fuse\-archive\f[R] relies on the
 following external programs being available in your \f[CR]PATH\f[R]:
-\f[CR]base64\f[R], \f[CR]brotli\f[R], \f[CR]compress\f[R],
-\f[CR]gpg\f[R], \f[CR]lrzip\f[R], and \f[CR]lzop\f[R].
+.PD 0
+.IP \[bu] 2
+\f[CR]base64\f[R]: For \f[CR]b64\f[R] and \f[CR]base64\f[R] encodings.
+.PD 0
+.IP \[bu] 2
+\f[CR]brotli\f[R]: For \f[CR]br\f[R] and \f[CR]brotli\f[R] compression.
+.PD 0
+.IP \[bu] 2
+\f[CR]compress\f[R]: For \f[CR]z\f[R], \f[CR]taz\f[R], and \f[CR]tz\f[R]
+compression (if not supported natively by \f[B]libarchive\f[R]).
+.PD 0
+.IP \[bu] 2
+\f[CR]gpg\f[R]: For \f[CR]asc\f[R], \f[CR]gpg\f[R], and \f[CR]pgp\f[R]
+encryption.
+.PD 0
+.IP \[bu] 2
+\f[CR]lrzip\f[R]: For \f[CR]lrz\f[R] and \f[CR]tlrz\f[R] compression.
+.PD 0
+.IP \[bu] 2
+\f[CR]lzop\f[R]: For \f[CR]lzo\f[R], \f[CR]lzop\f[R], \f[CR]tlzo\f[R],
+and \f[CR]tlzop\f[R] compression (if not supported natively by
+\f[B]libarchive\f[R]).
+.PD
+.PP
+Other formats, such as \f[CR]uu\f[R] (UUencoded), \f[CR]lzip\f[R],
+\f[CR]xz\f[R], \f[CR]gzip\f[R], and \f[CR]bzip2\f[R], are typically
+handled natively by the \f[B]libarchive\f[R] library and do not require
+external programs.
 .PD
 .SH ARCHIVE TREE STRUCTURE
 By default, \f[B]fuse\-archive\f[R] optimizes the presentation of the

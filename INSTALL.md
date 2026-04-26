@@ -36,18 +36,23 @@ On Debian systems, you can get these tools by installing the following packages:
 $ sudo apt install g++ pkg-config make pandoc
 ```
 
-To test **fuse-archive**, you also need the following tools:
+To test **fuse-archive**, you also need the following external programs for
+certain formats and encodings:
 
-*   [Python 3](https://www.python.org)
-*   `umount`
-*   `base64`
+*   [Python 3](https://www.python.org) (required for the test runner)
+*   `umount` (required to unmount test file systems)
+*   `base64` (from `coreutils`)
 *   [`brotli`](https://github.com/google/brotli)
-*   [`compress`](https://en.wikipedia.org/wiki/Compress_(software))
+*   [`compress`](https://en.wikipedia.org/wiki/Compress_(software)) (from `ncompress`)
 *   [`gpg`](https://www.gnupg.org)
 *   [`lrzip`](https://github.com/ckolivas/lrzip)
 *   [`lzop`](https://www.lzop.org/)
 
-On Debian systems, you can get these tools by installing the following packages:
+Most other formats, such as ZIP, 7Z, RAR, TAR, ISO, UU, Lzip, XZ, and Gzip, are
+handled natively by the libraries or by the mounter itself and do not require
+additional tools.
+
+On Debian systems, you can install the necessary tools by running:
 
 ```sh
 $ sudo apt install mount python3 brotli coreutils gpg lrzip lzop ncompress
