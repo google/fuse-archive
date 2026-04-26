@@ -991,7 +991,7 @@ struct ArchiveDescriptor {
 
   // Is there an archive format that requires caching and random access to the
   // decompressed data?
-  bool filtered_zip = false;
+  bool is_seekable_format = false;
 };
 
 std::vector<ArchiveDescriptor> g_archives;
@@ -1633,6 +1633,14 @@ struct Reader : bi::list_base_hook<LinkMode> {
             {"tlz4", SET_FILTER(LZ4)},
             {"tlzip", SET_FILTER(LZIP)},
             {"tlzma", SET_FILTER(LZMA)},
+            {"tlrz", SET_FILTER(LRZIP)},
+#if WORK_AROUND_ISSUE_2513
+            {"tlzo", SET_FILTER_COMMAND(lzop)},
+            {"tlzop", SET_FILTER_COMMAND(lzop)},
+#else
+            {"tlzo", SET_FILTER(LZOP)},
+            {"tlzop", SET_FILTER(LZOP)},
+#endif
             {"txz", SET_FILTER(XZ)},
             {"tz2", SET_FILTER(BZIP2)},
             {"tzs", SET_FILTER(ZSTD)},
@@ -1671,16 +1679,24 @@ struct Reader : bi::list_base_hook<LinkMode> {
             {"7z", SET_FORMAT(7zip)},
             {"7zip", SET_FORMAT(7zip)},
             {"a", SET_FORMAT(ar)},
+            {"aab", SET_FORMAT(zip_seekable)},
+            {"apk", SET_FORMAT(zip_seekable)},
             {"ar", SET_FORMAT(ar)},
             {"cab", SET_FORMAT(cab)},
+            {"cbr", [](Reader& r) { r.SetRarFormat(); }},
+            {"cbz", SET_FORMAT(zip_seekable)},
             {"cpio", SET_FORMAT(cpio)},
             {"crx", SET_FORMAT(zip_seekable)},
             {"deb", SET_FORMAT(ar)},
             {"docx", SET_FORMAT(zip_seekable)},
+            {"ear", SET_FORMAT(zip_seekable)},
+            {"epub", SET_FORMAT(zip_seekable)},
+            {"ipa", SET_FORMAT(zip_seekable)},
             {"iso", SET_FORMAT(iso9660)},
             {"iso9660", SET_FORMAT(iso9660)},
             {"jar", SET_FORMAT(zip_seekable)},
             {"lha", SET_FORMAT(lha)},
+            {"lzh", SET_FORMAT(lha)},
             {"mtree", SET_FORMAT(mtree)},
             {"odf", SET_FORMAT(zip_seekable)},
             {"odg", SET_FORMAT(zip_seekable)},
@@ -1695,8 +1711,10 @@ struct Reader : bi::list_base_hook<LinkMode> {
             {"tar", [](Reader& r) { r.SetTarFormat(); }},
             {"war", SET_FORMAT(zip_seekable)},
             {"warc", SET_FORMAT(warc)},
+            {"whl", SET_FORMAT(zip_seekable)},
             {"xar", SET_FORMAT(xar)},
             {"xlsx", SET_FORMAT(zip_seekable)},
+            {"xpi", SET_FORMAT(zip_seekable)},
             {"zip", SET_FORMAT(zip_seekable)},
             {"zipx", SET_FORMAT(zip_seekable)},
         };
@@ -1721,6 +1739,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
             {"iso", SET_FORMAT(iso9660)},
             {"iso9660", SET_FORMAT(iso9660)},
             {"lha", SET_FORMAT(lha)},
+            {"lzh", SET_FORMAT(lha)},
             {"mtree", SET_FORMAT(mtree)},
             {"rar", [](Reader& r) { r.SetRarFormat(); }},
             {"tar", [](Reader& r) { r.SetTarFormat(); }},
@@ -1804,9 +1823,9 @@ struct Reader : bi::list_base_hook<LinkMode> {
         }
       } else {
         Check(archive_read_support_format_raw(archive.get()));
-        static const std::unordered_set<std::string_view> zip_exts = {
-            "7z", "7zip", "zip", "zipx"};
-        descriptor->filtered_zip = zip_exts.contains(ext);
+        static const std::unordered_set<std::string_view> seekable_exts = {
+            "7z", "7zip", "ear", "jar", "war", "zip", "zipx"};
+        descriptor->is_seekable_format = seekable_exts.contains(ext);
       }
 
       return;
@@ -3329,8 +3348,8 @@ void BuildTree() {
       std::unique_ptr<Reader> r = std::make_unique<Reader>(&archive);
       r->should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
 
-      if (g_cache == Cache::Full && archive.filtered_zip) {
-        // Cache full ZIP file.
+      if (g_cache == Cache::Full && archive.is_seekable_format) {
+        // Cache the whole archive.
         if (!r->NextEntry()) {
           LOG(ERROR) << "Reached EOF while expecting a unique entry";
           throw ExitCode::INVALID_ARCHIVE_HEADER;

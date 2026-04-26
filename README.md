@@ -221,15 +221,18 @@ $ fuse-archive --version
 extension. It recognizes the following:
 
 *   **Archive formats**: `7z`, `7zip`, `a`, `ar`, `cab`, `cpio`, `deb`, `iso`,
-    `iso9660`, `jar`, `mtree`, `rar`, `rpm`, `tar`, `war`, `warc`, `xar`, `zip`,
-    `zipx`.
-*   **ZIP-based formats**: `crx`, `odf`, `odg`, `odp`, `ods`, `odt`, `docx`,
-    `ppsx`, `pptx`, `xlsx`.
+    `iso9660`, `jar`, `lha`, `lzh`, `mtree`, `rar`, `rpm`, `tar`, `war`, `warc`,
+    `xar`, `zip`, `zipx`.
+*   **ZIP-based formats**: `aab`, `apk`, `cbz`, `crx`, `docx`, `epub`, `ipa`,
+    `jar`, `odf`, `odg`, `odp`, `ods`, `odt`, `ppsx`, `pptx`, `war`, `whl`,
+    `xlsx`, `xpi`, `zip`, `zipx`.
+*   **RAR-based formats**: `rar`, `cbr`.
 *   **Compressed TARs**: `tb2`, `tbr`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz`, `tlz4`,
-    `tlzma`, `txz`, `tz`, `taz`, `tzs`, `tzst`, `tzstd`.
+    `tlzip`, `tlzma`, `tlrz`, `tlzo`, `tlzop`, `txz`, `tz`, `taz`, `tzs`, `tzst`,
+    `tzstd`.
 *   **Compression filters**: `br`, `brotli`, `bz2`, `bzip2`, `grz`, `grzip`, `gz`,
-    `gzip`, `lha`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`, `lzop`,
-    `xz`, `z`, `zst`, `zstd`.
+    `gzip`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`, `lzop`, `xz`,
+    `z`, `zst`, `zstd`.
 *   **ASCII encoding filters**: `b64`, `base64`, `uu`.
 *   **Encryption filters**: `asc`, `gpg`, `pgp`.
 

@@ -354,17 +354,24 @@ def TestArchiveWithOptions(options=[]):
     }
 
     zip_names = [
-        'archive.rar', 'archive.tar', 'archive.tar.lz', 'archive.tar.uu', 'archive.tlzip',
-        'lz_is_lzip.tlz', '--help']
+        'archive.rar', 'archive.cbr', 'archive.tar', 'archive.tar.uu', '--help'
+    ]
 
-    if has_gzip or has_zlib:
+    if has_zlib or has_gzip:
         zip_names += ['archive.rar.gz', 'archive.tar.gz', 'archive.tgz']
 
     if has_zlib:
-        zip_names += ['archive.zip']
+        zip_names += [
+            'archive.zip', 'archive.aab', 'archive.apk', 'archive.cbz',
+            'archive.ear', 'archive.epub', 'archive.ipa', 'archive.jar',
+            'archive.war', 'archive.whl', 'archive.xpi'
+        ]
 
-    if has_bzip2 or has_bz2lib:
-        zip_names += ['archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2', 'archive.tz2']
+    if has_bz2lib or has_bzip2:
+        zip_names += [
+            'archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
+            'archive.tz2'
+        ]
 
     if has_liblz4 or has_lz4:
         zip_names += ['archive.tar.lz4', 'archive.tlz4']
@@ -372,8 +379,13 @@ def TestArchiveWithOptions(options=[]):
     if has_liblzma:
         zip_names += ['archive.7z']
 
+    if has_liblzma or has_lzip:
+        zip_names += ['archive.tar.lz', 'archive.tlzip', 'lz_is_lzip.tlz']
+
     if has_liblzma or has_lzma:
-        zip_names += ['archive.tar.lzma', 'archive.tlz', 'archive.tlzma', 'lz_is_lzma.tlz']
+        zip_names += [
+            'archive.tar.lzma', 'archive.tlz', 'archive.tlzma', 'lz_is_lzma.tlz'
+        ]
 
     if has_liblzma or has_xz:
         zip_names += ['archive.tar.xz', 'archive.txz', 'compressed.tar']
@@ -388,13 +400,13 @@ def TestArchiveWithOptions(options=[]):
         zip_names += ['archive.tar.br', 'archive.tbr']
 
     if has_compress:
-        zip_names += ['archive.tar.Z', 'archive.taz', 'archive.tz']
+        zip_names += ['archive.tar.Z', 'archive.taz', 'archive.taZ', 'archive.tz']
 
     if has_lrzip:
-        zip_names += ['archive.tar.lrz']
+        zip_names += ['archive.tar.lrz', 'archive.tlrz']
 
     if has_lzop:
-        zip_names += ['archive.tar.lzo']
+        zip_names += ['archive.tar.lzo', 'archive.tlzo', 'archive.tlzop']
 
     if has_gpg:
         zip_names += ['archive.tar.gpg', 'archive.tar.pgp', 'archive.tar.asc']
@@ -410,16 +422,19 @@ def TestArchiveWithOptions(options=[]):
         'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
     }
 
-    zip_names = ['romeo.txt.lz', 'romeo.txt.lzip', 'romeo.txt.uu']
+    zip_names = ['romeo.txt.uu']
 
-    if has_gzip or has_zlib:
+    if has_liblzma or has_lzip:
+        zip_names += ['romeo.txt.lz', 'romeo.txt.lzip']
+
+    if has_zlib or has_gzip:
         zip_names += ['romeo.txt.gz', 'romeo.txt.gzip']
 
-    if has_bzip2 or has_bz2lib:
+    if has_bz2lib or has_bzip2:
         zip_names += ['romeo.txt.bz2', 'romeo.txt.bzip2']
 
     if has_bz2lib:
-        zip_names += ['romeo.bzip2.zip', ]
+        zip_names += ['romeo.bzip2.zip']
 
     if has_liblz4 or has_lz4:
         zip_names += ['romeo.txt.lz4']
@@ -987,6 +1002,21 @@ def TestFilteredZip():
         MountArchiveAndCheckTree(zip_name, want_tree)
 
 
+# Tests that specialized ZIP formats (like APK) remain opaque when filtered.
+def TestFilteredOpaque():
+    if not has_gpg: return
+
+    # archive.apk.gpg is a symlink to archive.zip.gpg.
+    # Because .apk is not in seekable_exts, it should NOT be exploded.
+    zip_name = 'archive.apk.gpg'
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'archive.apk': {'size': 3480},
+    }
+    # Use maxfilters=1 (implicit) as .gpg is the only filter.
+    MountArchiveAndCheckTree(zip_name, want_tree, strict=True, use_md5=False)
+
+
 def TestHardlinks(options=[]):
     zip_name = 'hardlinks.tar'
 
@@ -1225,6 +1255,14 @@ def TestMultiArchive(options=[]):
         'multi2/a/b/d/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
     }
     MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'nomerge,notrim'])
+
+    # Merged with collisions.
+    want_tree = {
+        '.': {'mode': 'drwxr-xr-x'},
+        'file1': {'size': 6, 'md5': '5149d403009a139c7e085405ef762e1a'},
+        'file1 (1)': {'size': 6, 'md5': '5149d403009a139c7e085405ef762e1a'},
+    }
+    MountArchiveAndCheckTree([zip1, zip1], want_tree, options=options)
 
 
 # Tests SUID, SGID and sticky bits with -o default_permissions.
@@ -2066,6 +2104,7 @@ try:
     TestArchiveWithOptions(['-o', 'lazycache'])
     if has_memcache: TestArchiveWithOptions(['-o', 'memcache'])
     TestFilteredZip()
+    TestFilteredOpaque()
 finally:
     if has_gpg:
         subprocess.run(['gpg', '--batch', '--yes', '--delete-secret-and-public-key', '7D74961702BCAD35D591BB896EC5AAD2CC5FEC0E'])
