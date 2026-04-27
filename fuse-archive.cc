@@ -3837,7 +3837,7 @@ int ReadDir(const char*,
             off_t,
 #if FUSE_USE_VERSION >= 30
             fuse_file_info* const fi,
-            fuse_readdir_flags) try {
+            fuse_readdir_flags const flags) try {
 #else
             fuse_file_info* const fi) try {
 #endif
@@ -3847,34 +3847,41 @@ int ReadDir(const char*,
   assert(n);
   assert(n->IsDir());
 
-  const auto add = [buf, filler, n](const char* const name,
-                                    const struct stat* const z) {
 #if FUSE_USE_VERSION >= 30
-    if (filler(buf, name, z, 0, FUSE_FILL_DIR_PLUS)) {
+  const bool plus = (flags & FUSE_READDIR_PLUS) != 0;
 #else
-    if (filler(buf, name, z, 0)) {
+  const bool plus = true;
+#endif
+
+  const auto add = [buf, filler, n, plus](const char* const name,
+                                          const struct stat* const st) {
+#if FUSE_USE_VERSION >= 30
+    const fuse_fill_dir_flags flags =
+        plus ? FUSE_FILL_DIR_PLUS : fuse_fill_dir_flags(0);
+    if (filler(buf, name, st, 0, flags)) {
+#else
+    if (filler(buf, name, st, 0)) {
 #endif
       LOG(ERROR) << "Cannot list items in " << *n << ": Cannot allocate memory";
       throw std::bad_alloc();
     }
   };
 
-  struct stat z = n->GetStat();
-  add(".", &z);
+  struct stat z;
+  auto const f = [&z, plus](const Node& n) {
+    return plus ? &(z = n.GetStat()) : nullptr;
+  };
 
-  if (const Node* const parent = n->parent) {
-    z = parent->GetStat();
-    add("..", &z);
-  } else {
-    add("..", nullptr);
-  }
+  Timer const timer;
+  add(".", f(*n));
+  add("..", n->IsRoot() ? nullptr : f(*n->parent));
 
   for (const Node& child : n->children) {
-    struct stat const z = child.GetTarget()->GetStat();
-    add(child.name.c_str(), &z);
+    add(child.name.c_str(), f(child));
   }
 
-  LOG(DEBUG) << "List " << *n << " -> " << n->children.size() << " items";
+  LOG(DEBUG) << "List " << *n << " -> " << n->children.size() << " items in "
+             << timer;
   return 0;
 } catch (const std::bad_alloc&) {
   return -ENOMEM;
