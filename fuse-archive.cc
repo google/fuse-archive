@@ -2156,6 +2156,7 @@ struct Node {
 
   Stat GetStat() const {
     Stat z = {};
+    assert((nlink == 0) == (hardlink_target != nullptr));
     z.st_nlink = GetTarget()->nlink;
     assert(z.st_nlink > 0);
     z.st_ino = ino;
@@ -3155,7 +3156,7 @@ void ResolveHardlinks() {
         .name = std::string(name.empty() ? "data" : name),
         .symlink = target->symlink,
         .mode = target->mode,
-        .ino = g_hardlinks ? target->ino : ++Node::count,
+        .ino = target->ino,
         .uid = target->uid,
         .gid = target->gid,
         .descriptor = target->descriptor,
@@ -3166,19 +3167,25 @@ void ResolveHardlinks() {
         .last_hole_start = target->last_hole_start,
         .mtime = target->mtime,
         .rdev = target->rdev,
-        .nlink = g_hardlinks ? (target->nlink++, 0) : 1,
+        .nlink = 0,  // treated specially in hardlinks
+        .holes = target->holes,
         .saved_blocks = target->saved_blocks,
-        .hardlink_target = g_hardlinks ? target : nullptr,
-        // For performance reasons, we don't copy holes and attributes here.
-        // FUSE callbacks that rely on these members will explicitely get the
-        // hardlink target.
+        .attributes = target->attributes,
+        .hardlink_target = target,
     };
 
-    if (!g_hardlinks) {
-      node->holes = target->holes;
-      node->attributes = target->attributes;
-      g_inode_count += 1;
-      g_block_count += node->GetBlockCount();
+    if (g_hardlinks) {
+      target->nlink++;
+    } else {
+      // We don't want hardlinks.
+      // Then the new Node gets its own inode number.
+      node->ino = ++Node::count;
+      // And it counts as an extra separate inode.
+      node->nlink = 1;
+      g_inode_count++;
+      g_block_count = node->GetBlockCount();
+      // And it's not a hardlink anymore.
+      node->hardlink_target = nullptr;
     }
 
     parent->AddChild(node);
@@ -3488,11 +3495,9 @@ int GetAttr(const char* const path,
     }
   }
 
-  const Node* const t = n->GetTarget();
-  assert(t);
-
+  assert(n);
   assert(z);
-  *z = t->GetStat();
+  *z = n->GetStat();
   return 0;
 }
 
