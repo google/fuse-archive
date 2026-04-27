@@ -77,8 +77,10 @@
 
 namespace {
 
-// Type alias for shorter code.
+// Type aliases for shorter code.
 using i64 = std::int64_t;
+using Stat = struct stat;
+using StatVfs = struct statvfs;
 
 template <typename... Args>
 std::string StrCat(Args&&... args) {
@@ -2152,8 +2154,8 @@ struct Node {
   const Node* GetTarget() const { return hardlink_target ?: this; }
   Node* GetTarget() { return hardlink_target ?: this; }
 
-  struct stat GetStat() const {
-    struct stat z = {};
+  Stat GetStat() const {
+    Stat z = {};
     z.st_nlink = GetTarget()->nlink;
     assert(z.st_nlink > 0);
     z.st_ino = ino;
@@ -2489,7 +2491,7 @@ ScopedFile CreateCacheFile() {
 
 // Checks that the cache file specified by `fd` is open and empty.
 void CheckCacheFile(const ScopedFile& fd) {
-  struct stat z;
+  Stat z;
   if (fstat(fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat cache file";
     throw ExitCode::CANNOT_CREATE_CACHE;
@@ -3319,7 +3321,7 @@ void BuildTree() {
       }
 
       // Check archive file size and type.
-      if (struct stat z; fstat(archive.fd, &z) != 0) {
+      if (Stat z; fstat(archive.fd, &z) != 0) {
         PLOG(ERROR) << "Cannot stat " << Path(archive.path);
         throw ExitCode::CANNOT_OPEN_ARCHIVE;
       } else if (FileType const ft = GetFileType(z.st_mode);
@@ -3463,10 +3465,10 @@ void BuildTree() {
 
 int GetAttr(const char* const path,
 #if FUSE_USE_VERSION >= 30
-            struct stat* const z,
+            Stat* const z,
             fuse_file_info* const fi) {
 #else
-            struct stat* const z) {
+            Stat* const z) {
   fuse_file_info* const fi = nullptr;
 #endif
 
@@ -3854,7 +3856,7 @@ int ReadDir(const char*,
 #endif
 
   const auto add = [buf, filler, n, plus](const char* const name,
-                                          const struct stat* const st) {
+                                          const Stat* const st) {
 #if FUSE_USE_VERSION >= 30
     const fuse_fill_dir_flags flags =
         plus ? FUSE_FILL_DIR_PLUS : fuse_fill_dir_flags(0);
@@ -3867,7 +3869,7 @@ int ReadDir(const char*,
     }
   };
 
-  struct stat z;
+  Stat z;
   auto const f = [&z, plus](const Node& n) {
     return plus ? &(z = n.GetStat()) : nullptr;
   };
@@ -3887,7 +3889,7 @@ int ReadDir(const char*,
   return -ENOMEM;
 }
 
-int StatFs(const char*, struct statvfs* const z) {
+int StatFs(const char*, StatVfs* const z) {
   assert(z);
   z->f_bsize = block_size;
   z->f_frsize = block_size;
@@ -4353,7 +4355,7 @@ int main(int const argc, char** const argv) try {
     LOG(DEBUG) << "The file system contains " << g_nodes_by_path.size() - 1
                << " items totalling " << i64(g_block_count) * block_size
                << " bytes";
-    if (struct stat z; g_cache == Cache::Full && fstat(g_cache_fd, &z) == 0) {
+    if (Stat z; g_cache == Cache::Full && fstat(g_cache_fd, &z) == 0) {
       LOG(DEBUG) << "The cache takes " << i64(z.st_blocks) * block_size
                  << " bytes of disk space";
       assert(z.st_size == g_cache_size);
