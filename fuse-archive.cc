@@ -2874,9 +2874,15 @@ i64 CacheEntryData(Archive* const a,
       case ARCHIVE_OK:
         assert(offset >= 0);
         assert(dest_offset <= file_start_offset + offset);
-        if (__builtin_add_overflow(file_start_offset, offset, &dest_offset)) {
-          LOG(ERROR) << "CacheEntryData: file_start_offset + offset overflow";
-          return -EIO;
+        {
+          i64 new_dest_offset;
+          if (__builtin_add_overflow(file_start_offset, offset,
+                                     &new_dest_offset) ||
+              __builtin_add_overflow(new_dest_offset,
+                                     static_cast<i64>(len), &new_dest_offset)) {
+            throw ExitCode::INVALID_ARCHIVE_CONTENTS;
+          }
+          dest_offset = file_start_offset + offset;
         }
         last_hole_start = dest_fd.WriteBytesAndSkipHoles(
             std::string_view(static_cast<const char*>(buff), len), dest_offset,
@@ -2893,8 +2899,7 @@ i64 CacheEntryData(Archive* const a,
         // Adjust the cache size if there is a final "hole".
         // See https://github.com/google/fuse-archive/issues/40
         if (__builtin_add_overflow(file_start_offset, offset, &dest_offset)) {
-          LOG(ERROR) << "CacheEntryData: file_start_offset + offset overflow";
-          return -EIO;
+          throw ExitCode::INVALID_ARCHIVE_CONTENTS;
         }
         if (last_hole_start < dest_offset) {
           dest_fd.Truncate(dest_offset);
