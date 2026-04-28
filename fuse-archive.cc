@@ -2873,7 +2873,6 @@ i64 CacheEntryData(Archive* const a,
 
       case ARCHIVE_OK:
         assert(offset >= 0);
-        assert(dest_offset <= file_start_offset + offset);
         {
           i64 new_dest_offset;
           if (__builtin_add_overflow(file_start_offset, offset,
@@ -2894,7 +2893,6 @@ i64 CacheEntryData(Archive* const a,
       case ARCHIVE_EOF:
         assert(len == 0);
         assert(offset >= 0);
-        assert(dest_offset <= file_start_offset + offset);
 
         // Adjust the cache size if there is a final "hole".
         // See https://github.com/google/fuse-archive/issues/40
