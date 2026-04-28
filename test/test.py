@@ -361,7 +361,8 @@ def TestArchiveWithOptions(options=[]):
     }
 
     zip_names = [
-        'archive.rar', 'archive.cbr', 'archive.tar', 'archive.tar.uu', '--help'
+        'archive.rar', 'archive.cbr', 'archive.tar', 'archive.tar.uu',
+        'archive.xxx', '--help'
     ]
 
     if has_zlib or has_gzip:
@@ -2021,6 +2022,10 @@ def TestInvalidArchive():
     # 7Z encryption is not supported
     if has_liblzma: CheckArchiveMountingError("encrypted.7z", 22, password='password')
     CheckArchiveMountingError("encrypted-solidly.7z", 22, password='password')
+
+    # Test nobidding option with an unrecognized extension
+    CheckArchiveMountingError('archive.xxx', 30, options=['-o', 'nobidding'])
+    CheckArchiveMountingError('--help', 30, options=['-o', 'nobidding'])
 
     if os.getuid() != 0:
         with tempfile.NamedTemporaryFile() as f:

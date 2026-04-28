@@ -439,6 +439,7 @@ enum {
   KEY_NO_HOLES,
   KEY_NO_HARDLINKS,
   KEY_NO_XATTRS,
+  KEY_NO_BIDDING,
   KEY_DEFAULT_PERMISSIONS,
 #if FUSE_USE_VERSION >= 30
   KEY_DIRECT_IO,
@@ -478,6 +479,7 @@ fuse_opt const g_fuse_opts[] = {
     FUSE_OPT_KEY("noholes", KEY_NO_HOLES),
     FUSE_OPT_KEY("nohardlinks", KEY_NO_HARDLINKS),
     FUSE_OPT_KEY("noxattrs", KEY_NO_XATTRS),
+    FUSE_OPT_KEY("nobidding", KEY_NO_BIDDING),
     FUSE_OPT_KEY("default_permissions", KEY_DEFAULT_PERMISSIONS),
 #if FUSE_USE_VERSION >= 30
     FUSE_OPT_KEY("direct_io", KEY_DIRECT_IO),
@@ -501,6 +503,7 @@ bool g_symlinks = true;
 bool g_holes = true;
 bool g_hardlinks = true;
 bool g_xattrs = true;
+bool g_bidding = true;
 bool g_default_permissions = false;
 #if FUSE_USE_VERSION >= 30
 bool g_direct_io = false;
@@ -1832,12 +1835,13 @@ struct Reader : bi::list_base_hook<LinkMode> {
       return;
     }
 
-#ifdef NO_ARCHIVE_FORMAT_BIDDING
-    LOG(ERROR)
-        << "Cannot determine the archive format from its filename extension '"
-        << ext << "'";
-    throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
-#else
+    if (!g_bidding) {
+      LOG(ERROR)
+          << "Cannot determine the archive format from its filename extension '"
+          << ext << "'";
+      throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
+    }
+
     p = p.substr(0, i);
     if (first_time) {
       LOG(WARNING)
@@ -1884,7 +1888,6 @@ struct Reader : bi::list_base_hook<LinkMode> {
     // We use the "raw" archive format to read simple compressed files such as
     // "romeo.txt.gz".
     Check(archive_read_support_format_raw(archive.get()));
-#endif
   }
 
   // The following callbacks are used by libarchive to read the uncompressed
@@ -4060,6 +4063,10 @@ int ProcessArg(void*, const char* const arg, int const key, fuse_args*) {
       g_xattrs = false;
       return DISCARD;
 
+    case KEY_NO_BIDDING:
+      g_bidding = false;
+      return DISCARD;
+
     case KEY_DEFAULT_PERMISSIONS:
       g_default_permissions = true;
       return DISCARD;
@@ -4157,6 +4164,7 @@ general options:
     -o noholes             no sparse files
     -o nohardlinks         no hard links
     -o noxattrs            no extended attributes
+    -o nobidding           rely on file extension to detect archive format
     -o dmask=M             directory permission mask in octal (default 0022)
     -o fmask=M             file permission mask in octal (default 0022))"
 #if FUSE_USE_VERSION >= 30

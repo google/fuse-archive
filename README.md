@@ -98,6 +98,10 @@ numeric suffix (e.g., `archive (1)`).
 **-o noxattrs**
 :   Do not report extended attributes.
 
+**-o nobidding**
+:   Do not use libarchive's format bidding system to detect the archive format.
+    Instead, strictly rely on the file extension.
+
 **-o dmask=M**
 :   Directory permission mask in octal (default is 0022).
 
@@ -237,7 +241,9 @@ extension. It recognizes the following:
 *   **Encryption filters**: `asc`, `gpg`, `pgp`.
 
 If the filename extension is not recognized, **fuse-archive** will attempt to
-detect the format by examining the file's byte contents.
+detect the format by examining the file's byte contents. This fallback
+mechanism can be disabled using the `-o nobidding` option, forcing strict
+reliance on the file extension.
 
 ## External Filter Programs
 
