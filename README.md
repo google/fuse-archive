@@ -230,9 +230,9 @@ extension. It recognizes the following:
 *   **Compressed TARs**: `tb2`, `tbr`, `tbz`, `tbz2`, `tz2`, `tgz`, `tlz`, `tlz4`,
     `tlzip`, `tlzma`, `tlrz`, `tlzo`, `tlzop`, `txz`, `tz`, `taz`, `tzs`, `tzst`,
     `tzstd`.
-*   **Compression filters**: `br`, `brotli`, `bz2`, `bzip2`, `grz`, `grzip`, `gz`,
-    `gzip`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`, `lzop`, `xz`,
-    `z`, `zst`, `zstd`.
+*   **Compression filters**: `br`, `brotli`, `bz`, `bz2`, `bzip2`, `grz`,
+    `grzip`, `gz`, `gzip`, `lrz`, `lrzip`, `lz`, `lz4`, `lzip`, `lzma`, `lzo`,
+    `lzop`, `xz`, `z`, `zst`, `zstd`.
 *   **ASCII encoding filters**: `b64`, `base64`, `uu`.
 *   **Encryption filters**: `asc`, `gpg`, `pgp`.
 

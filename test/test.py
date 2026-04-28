@@ -40,6 +40,7 @@ has_memcache = sys.platform.startswith('linux')
 
 sys.setrecursionlimit(3000)
 
+
 # Computes the MD5 hash of the given file.
 # Returns the MD5 hash as an hexadecimal string.
 # Throws OSError if the file cannot be read.
@@ -150,6 +151,7 @@ data_dir = os.path.join(script_dir, 'data')
 # Path of the FUSE mounter.
 mount_program = os.path.join(script_dir, '..', 'out', 'fuse-archive')
 
+
 def CanRun(args):
     try:
         subprocess.run(args, capture_output=True, check=True)
@@ -159,6 +161,7 @@ def CanRun(args):
         logging.debug(f'Cannot run {args!r}: {e}')
         logging.info(f'Will skip tests relying on {args[0]}')
         return False
+
 
 has_base64 = CanRun(['base64', '--version'])
 has_brotli = CanRun(['brotli', '--version'])
@@ -185,14 +188,17 @@ def GetFuseMajorVersion():
             return int(version_str.split('.')[0])
     return 0
 
+
 fuse_major_version = GetFuseMajorVersion()
 logging.info(f'FUSE major version: {fuse_major_version}')
+
 
 def HasLib(name):
     if ' ' + name + '/' in sr.stdout:
         return True
     logging.info(f'Will skip tests relying on {name}')
     return False
+
 
 has_bz2lib = HasLib('bz2lib')
 has_liblz4 = HasLib('liblz4')
@@ -208,6 +214,7 @@ env = os.environ.copy()
 # https://github.com/ckolivas/lrzip/issues/266
 if not is_fast and not has_lrzip:
     env['MALLOC_PERTURB_'] = '170'
+
 
 @contextmanager
 def MountArchive(zip_names, options=[], password='', env=env):
@@ -369,8 +376,8 @@ def TestArchiveWithOptions(options=[]):
 
     if has_bz2lib or has_bzip2:
         zip_names += [
-            'archive.tar.bz2', 'archive.tb2', 'archive.tbz', 'archive.tbz2',
-            'archive.tz2'
+            'archive.tar.bzip2', 'archive.tar.bz2', 'archive.tar.bz',
+            'archive.tb2', 'archive.tbz', 'archive.tbz2', 'archive.tz2'
         ]
 
     if has_liblz4 or has_lz4:
@@ -384,14 +391,17 @@ def TestArchiveWithOptions(options=[]):
 
     if has_liblzma or has_lzma:
         zip_names += [
-            'archive.tar.lzma', 'archive.tlz', 'archive.tlzma', 'lz_is_lzma.tlz'
+            'archive.tar.lzma', 'archive.tlz', 'archive.tlzma',
+            'lz_is_lzma.tlz'
         ]
 
     if has_liblzma or has_xz:
         zip_names += ['archive.tar.xz', 'archive.txz', 'compressed.tar']
 
     if has_libzstd or has_zstd:
-        zip_names += ['archive.tar.zst', 'archive.tzs', 'archive.tzst', 'archive.tzstd']
+        zip_names += [
+            'archive.tar.zst', 'archive.tzs', 'archive.tzst', 'archive.tzstd'
+        ]
 
     if has_base64:
         zip_names += ['archive.tar.b64']
@@ -400,7 +410,9 @@ def TestArchiveWithOptions(options=[]):
         zip_names += ['archive.tar.br', 'archive.tbr']
 
     if has_compress:
-        zip_names += ['archive.tar.Z', 'archive.taz', 'archive.taZ', 'archive.tz']
+        zip_names += [
+            'archive.tar.Z', 'archive.taz', 'archive.taZ', 'archive.tz'
+        ]
 
     if has_lrzip:
         zip_names += ['archive.tar.lrz', 'archive.tlrz']
@@ -431,7 +443,7 @@ def TestArchiveWithOptions(options=[]):
         zip_names += ['romeo.txt.gz', 'romeo.txt.gzip']
 
     if has_bz2lib or has_bzip2:
-        zip_names += ['romeo.txt.bz2', 'romeo.txt.bzip2']
+        zip_names += ['romeo.txt.bz2', 'romeo.txt.bz', 'romeo.txt.bzip2']
 
     if has_bz2lib:
         zip_names += ['romeo.bzip2.zip']
@@ -552,7 +564,6 @@ def TestArchiveWithOptions(options=[]):
 
     for zip_name in zip_names:
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
-
 
     want_tree = {
         # Don't check mtime for this archive.
@@ -972,7 +983,9 @@ def TestFilteredZip():
     zip_names = []
     if has_gpg:
         if has_zlib:
-            zip_names += ['archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc']
+            zip_names += [
+                'archive.zip.gpg', 'archive.zip.pgp', 'archive.zip.asc'
+            ]
 
         if has_liblzma:
             zip_names += ['archive.7z.gpg']
@@ -1128,7 +1141,7 @@ def TestSeek(options=[]):
     zip_name = 'seek.tar.gz'
     with MountArchive(zip_name, options=options) as mount_point:
         path = os.path.join(mount_point, 'complex_sparse')
-        
+
         # In lazycache mode, holes are not known until the file is read.
         if '-o' in options and 'lazycache' in options:
             with open(path, 'rb') as f:
@@ -1173,7 +1186,7 @@ def TestSeek(options=[]):
                 # [6144, 8192): HOLE
                 # Resulting Holes: [0, 2048), [3072, 5632), [6144, 8192)
                 # Resulting Data: [2048, 3072), [5632, 6144)
-                
+
                 check_seek(0, os.SEEK_DATA, 2048)
                 check_seek(2048, os.SEEK_DATA, 2048)
                 check_seek(3000, os.SEEK_DATA, 3000)
@@ -1584,7 +1597,7 @@ def TestDirectories():
         want_tree,
         want_blocks=20,
         want_inodes=9,
-        options = ['-o', 'nodirs'],
+        options=['-o', 'nodirs'],
     )
 
     if is_fast: return
@@ -1602,12 +1615,12 @@ def TestDirectories():
         want_tree,
         want_blocks=20001,
         want_inodes=10001,
-        options = ['-o', 'nodirs'],
+        options=['-o', 'nodirs'],
         strict=False,
     )
 
     # Too many directories to get the tree.
-    want_tree = None  
+    want_tree = None
 
     MountArchiveAndCheckTree(
         'many_nodes.zip',
@@ -1660,7 +1673,7 @@ def TestDirectories():
         want_tree,
         want_blocks=69,
         want_inodes=35,
-        options = ['-o', 'nodirs'],
+        options=['-o', 'nodirs'],
     )
 
     want_tree = {
@@ -1728,7 +1741,7 @@ def TestBigArchiveRandomOrder(options=[]):
                 capture_output=True,
                 input='',
                 encoding='UTF-8',
-                env = env,
+                env=env,
             )
             try:
                 logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
@@ -1794,7 +1807,7 @@ def TestBigArchiveStreamed(options=[]):
                 capture_output=True,
                 input='',
                 encoding='UTF-8',
-                env = env,
+                env=env,
             )
             try:
                 logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
@@ -1826,7 +1839,7 @@ def TestBigArchiveStreamed(options=[]):
 # Tests encrypted archive.
 def TestEncryptedArchive(options=[]):
     if not has_openssl and not has_nettle: return
-    
+
     zip_name = 'different-encryptions.zip'
 
     # With correct password.
@@ -2013,6 +2026,7 @@ def TestInvalidArchive():
         with tempfile.NamedTemporaryFile() as f:
             os.chmod(f.name, 0)
             CheckArchiveMountingError(f.name, 11)
+
 
 # Tests extended attributes functionality
 def TestExtendedAttributes(options=[]):
