@@ -131,6 +131,9 @@ def CheckTree(got_tree, want_tree, strict=False):
             got_entry = got_tree.pop(name)
             for key, want_value in want_entry.items():
                 got_value = got_entry.get(key)
+                if key in ('atime', 'mtime', 'ctime') and want_value % 1000000000 == 0:
+                    got_value //= 1000000000
+                    want_value //= 1000000000
                 if got_value != want_value:
                     LogError(
                         f'Mismatch for {name!r}[{key}] got: {got_value!r}, want:'

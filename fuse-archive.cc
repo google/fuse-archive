@@ -94,7 +94,10 @@ struct Timer {
   using Clock = std::chrono::steady_clock;
 
   // Start time.
-  Clock::time_point const start = Clock::now();
+  Clock::time_point start = Clock::now();
+
+  // Resets this timer.
+  void Reset() { start = Clock::now(); }
 
   // Elapsed time in milliseconds.
   auto Milliseconds() const {
@@ -106,6 +109,33 @@ struct Timer {
   friend std::ostream& operator<<(std::ostream& out, const Timer& timer) {
     return out << timer.Milliseconds() << " ms";
   }
+};
+
+// Throttler for progress log messages.
+class Beat {
+ public:
+  explicit Beat(std::chrono::milliseconds period = std::chrono::seconds(1))
+      : period_(period), next_(Clock::now() + period) {}
+
+  bool Keep() const {
+    auto const now = Clock::now();
+    if (now < next_) {
+      return false;
+    }
+
+    count_ += 1;
+    next_ = now + period_;
+    return true;
+  }
+
+  // Gets the number of produced beats.
+  int Count() const { return count_; }
+
+ private:
+  using Clock = std::chrono::steady_clock;
+  std::chrono::milliseconds const period_;
+  mutable int count_ = 0;
+  mutable Clock::time_point next_;
 };
 
 enum class LogLevel {
@@ -145,7 +175,7 @@ class Logger {
     }
 
     if (g_latest_log_is_ephemeral && isatty(STDERR_FILENO)) {
-      std::string_view const s = "\e[F\e[K";
+      std::string_view const s = "\033[F\033[K";
       std::ignore = write(STDERR_FILENO, s.data(), s.size());
     }
 
@@ -619,7 +649,7 @@ gid_t const g_gid = getgid();
 using Clock = std::chrono::system_clock;
 time_t const g_now = Clock::to_time_t(Clock::now());
 
-size_t hash(std::string_view const s) {
+size_t ComputeStringHash(std::string_view const s) {
   size_t h = 0;
 
   for (char const c : s) {
@@ -632,15 +662,17 @@ size_t hash(std::string_view const s) {
 // A string view and its hashed value.
 struct HashedStringView {
   std::string_view string;
-  size_t string_hash = hash(string);
+  size_t hash;
+
+  HashedStringView(std::string_view s) : string(s), hash(ComputeStringHash(s)) {}
+  HashedStringView(std::string_view s, size_t h) : string(s), hash(h) {}
 };
 
 // A string and its hashed value.
 struct HashedString {
   std::string string;
-  size_t string_hash;
-  HashedString(const HashedStringView& x)
-      : string(x.string), string_hash(x.string_hash) {}
+  size_t hash;
+  HashedString(const HashedStringView& x) : string(x.string), hash(x.hash) {}
 };
 
 // Function object that compares HashedStringView and HashedString objects for
@@ -648,7 +680,7 @@ struct HashedString {
 struct IsEqual {
   using is_transparent = std::true_type;
   bool operator()(const auto& a, const auto& b) const {
-    return a.string_hash == b.string_hash && a.string == b.string;
+    return a.hash == b.hash && a.string == b.string;
   }
 };
 
@@ -656,7 +688,7 @@ struct IsEqual {
 // HashedString objects.
 struct Hash {
   using is_transparent = std::true_type;
-  size_t operator()(const auto& x) const { return x.string_hash; }
+  size_t operator()(const auto& x) const { return x.hash; }
 };
 
 // Set of unique (i.e. deduplicated) strings. Lazily populated.
@@ -677,7 +709,6 @@ const HashedString* GetUniqueOrNull(std::string_view const s) {
   }
 
   assert(it->string == s);
-  assert(it->string.data() != s.data());
   return &*it;
 }
 
@@ -693,7 +724,6 @@ const HashedString* GetOrCreateUnique(std::string_view const s) {
       g_unique_strings->insert(HashedStringView(s)).first;
   assert(it != g_unique_strings->cend());
   assert(it->string == s);
-  assert(it->string.data() != s.data());
   return &*it;
 }
 
@@ -1966,25 +1996,17 @@ struct Reader : bi::list_base_hook<LinkMode> {
     return delta;
   };
 
+  Beat g_progress_beat;
+
   // Print progress if necessary.
   void PrintProgress() const {
-    if (!should_print_progress) {
-      return;
+    if (should_print_progress && g_progress_beat.Keep()) {
+      assert(descriptor->size > 0);
+      LOG(INFO) << "Loading " << Path(descriptor->path) << "... "
+                << ProgressMessage(100 *
+                                   std::min<i64>(raw_pos, descriptor->size) /
+                                   descriptor->size);
     }
-
-    constexpr auto period = std::chrono::seconds(1);
-    auto const now = std::chrono::steady_clock::now();
-    static auto next = now + period;
-    if (now < next) {
-      return;
-    }
-
-    next = now + period;
-    assert(descriptor->size > 0);
-    LOG(INFO) << "Loading " << Path(descriptor->path) << "... "
-              << ProgressMessage(100 *
-                                 std::min<i64>(raw_pos, descriptor->size) /
-                                 descriptor->size);
   }
 
   // A cache of warm Readers. Libarchive is designed for streaming access, not
@@ -2015,26 +2037,26 @@ bi::list<Reader> Reader::recycled;
 
 // A node of the virtual file system: either a directory or a file.
 struct Node {
-  // Name of this node in the context of its parent. This name should be a valid
-  // and non-empty filename, and it shouldn't contain any '/' separator. The
-  // only exception is the root directory, which is just named "/".
-  std::string name;
-  std::string symlink;
-  mode_t mode;
-  static ino_t count;
-  ino_t ino = ++count;
+#ifdef NDEBUG
+  using LinkMode = bi::link_mode<bi::normal_link>;
+#else
+  using LinkMode = bi::link_mode<bi::safe_link>;
+#endif
 
-  uid_t uid = g_uid;
-  gid_t gid = g_gid;
+  // --- 16-byte members (Highest alignment) ---
 
-  // File descriptor of the archive holding the entry represented by this node,
-  // or nullptr if it is not directly represented in the archive (like any
-  // directory).
-  ArchiveDescriptor* const descriptor = nullptr;
+  timespec mtime = {.tv_sec = g_now};
+  timespec atime = {.tv_sec = g_now};
+  timespec ctime = {.tv_sec = g_now};
+
+  // --- 8-byte members (Fixed size) ---
 
   // Index of the entry represented by this node in the archive, or 0 if it is
   // not directly represented in the archive (like any directory).
   i64 const index_within_archive = 0;
+
+  // Inode-specific data.
+  ino_t ino = ++count;
 
   // Number of bytes of this file.
   i64 size = 0;
@@ -2047,17 +2069,73 @@ struct Node {
 
   i64 last_hole_start = 0;
 
+  // Number of blocks saved by "holes" (sparse regions) in the file.
+  i64 saved_blocks = 0;
+
+  dev_t dev = 0;
+
+  // --- Architecture-dependent members ---
+
+  // File descriptor of the archive holding the entry represented by this node,
+  // or nullptr if it is not directly represented in the archive (like any
+  // directory).
+  ArchiveDescriptor* const descriptor = nullptr;
+
+  // If this Node is a hardlink, this points to the target node.
+  Node* hardlink_target = nullptr;
+
+  // Pointer to the parent node. Should be non null. The only exception is the
+  // root directory which has a null parent pointer.
+  Node* parent = nullptr;
+
   Reader::Ptr reader;
 
-  time_t mtime = 0;
-  dev_t rdev = 0;
-  i64 nlink = 1;
+  size_t path_length = 0;
+  size_t path_hash = 0;
 
-  // Sorted list of holes in this file.
+  // --- Intrusive Hooks ---
+
+  // Hook used to index Nodes by full path.
+  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<false>>;
+  ByPath by_path;
+
+  // Hook used to index Nodes by parent.
+  using ByParent = bi::slist_member_hook<LinkMode>;
+  ByParent by_parent;
+
+  // Children of this node. The children are not sorted and their order is not
+  // relevant. This collection doesn't own the children nodes. The |parent|
+  // pointer of every child in |children| should point back to this node.
+  using Children = bi::slist<Node,
+                             bi::member_hook<Node, ByParent, &Node::by_parent>,
+                             bi::constant_time_size<false>,
+                             bi::linear<true>,
+                             bi::cache_last<true>>;
+  Children children;
+
+  // --- Remaining members (Strings and 4-byte types) ---
+
+  // Name of this node in the context of its parent. This name should be a valid
+  // and non-empty filename, and it shouldn't contain any '/' separator. The
+  // only exception is the root directory, which is just named "/".
+  std::string name;
+
+  // Symbolic link target.
+  std::string symlink;
+
+  uid_t uid = g_uid;
+  gid_t gid = g_gid;
+  mode_t mode = 0;
+  mutable nlink_t nlink = 1;
+
+  // Number of entries whose name have initially collided with this node.
+  int collision_count = 0;
+
+  // Number of open file descriptors that are currently reading this file node.
+  std::atomic<int> fd_count = 0;
+
+  // List of holes in this sparse file.
   Holes holes;
-
-  // Number of blocks saved by the presence of holes in this file.
-  i64 saved_blocks = 0;
 
   // Extended attributes.
   struct Attribute {
@@ -2068,39 +2146,9 @@ struct Node {
   using Attributes = std::vector<Attribute>;
   Attributes attributes;
 
-  // Number of entries whose name have initially collided with this file node.
-  int collision_count = 0;
+  static ino_t count;
 
-  // Number of open file descriptors that are currently reading this file node.
-  std::atomic<int> fd_count = 0;
-
-  // Hard link target.
-  Node* hardlink_target = nullptr;
-
-  // Pointer to the parent node. Should be non null. The only exception is the
-  // root directory which has a null parent pointer.
-  Node* parent = nullptr;
-
-  size_t path_length = 0;
-  size_t path_hash = 0;
-
-  // Hook used to index Nodes by parent.
-  using ByParent = bi::slist_member_hook<LinkMode>;
-  ByParent by_parent;
-
-  // Children of this Node. The children are not sorted and their order is not
-  // relevant. This Node doesn't own its children nodes. The `parent` pointer of
-  // every child in `children` should point back to this Node.
-  using Children = bi::slist<Node,
-                             bi::member_hook<Node, ByParent, &Node::by_parent>,
-                             bi::constant_time_size<false>,
-                             bi::linear<true>,
-                             bi::cache_last<true>>;
-  Children children;
-
-  // Hooks used to index Nodes by full path.
-  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<false>>;
-  ByPath by_path;
+  using Ptr = std::unique_ptr<Node>;
 
   bool IsRoot() const { return !parent; }
 
@@ -2164,12 +2212,20 @@ struct Node {
     z.st_uid = uid;
     z.st_gid = gid;
     z.st_size = size;
-    z.st_atime = g_now;
-    z.st_ctime = g_now;
-    z.st_mtime = mtime ?: g_now;
     z.st_blksize = block_size;
     z.st_blocks = GetBlockCount();
-    z.st_rdev = rdev;
+    z.st_rdev = dev;
+
+#if __APPLE__
+    z.st_atimespec = atime;
+    z.st_mtimespec = mtime;
+    z.st_ctimespec = ctime;
+#else
+    z.st_atim = atime;
+    z.st_mtim = mtime;
+    z.st_ctim = ctime;
+#endif
+
     return z;
   }
 
@@ -2376,10 +2432,7 @@ std::ostream& operator<<(std::ostream& out, const Node& n) {
 // directory of archive entries.
 
 struct GetHash {
-  size_t operator()(const HashedStringView& hsv) const {
-    return hsv.string_hash;
-  }
-
+  size_t operator()(const HashedStringView& hsv) const { return hsv.hash; }
   size_t operator()(const Node& n) const { return n.path_hash; }
 };
 
@@ -2390,12 +2443,12 @@ struct HasSamePath {
   }
 
   bool operator()(const HashedStringView& hsv, const Node& n) const {
-    return hsv.string_hash == n.path_hash &&
-           hsv.string.size() == n.path_length && n.HasPath(hsv.string);
+    return hsv.hash == n.path_hash && hsv.string.size() == n.path_length &&
+           n.HasPath(hsv.string);
   }
 };
 
-using NodesByPath =
+using NodesByPathBase =
     bi::unordered_set<Node,
                       bi::member_hook<Node, Node::ByPath, &Node::by_path>,
                       bi::constant_time_size<true>,
@@ -2403,6 +2456,11 @@ using NodesByPath =
                       bi::compare_hash<false>,
                       bi::equal<HasSamePath>,
                       bi::hash<GetHash>>;
+
+struct NodesByPath : NodesByPathBase {
+  using NodesByPathBase::NodesByPathBase;
+  ~NodesByPath() { clear_and_dispose(std::default_delete<Node>()); }
+};
 
 using Bucket = NodesByPath::bucket_type;
 using Buckets = std::vector<Bucket>;
@@ -2667,12 +2725,12 @@ void RehashIfNecessary() {
 //   filename extension, until the path becomes unique.
 // - `node` is successfully inserted into `g_nodes_by_path`.
 // - The path hash for `node` is recomputed if it was renamed.
-void RenameIfCollision(Node* const node) {
+Node* RenameIfCollision(Node::Ptr node) {
   assert(node);
   auto const [pos, ok] = g_nodes_by_path.insert(*node);
   if (ok) {
     RehashIfNecessary();
-    return;
+    return node.release();  // Now owned by |g_nodes_by_path|.
   }
 
   // There is a name collision
@@ -2700,7 +2758,7 @@ void RenameIfCollision(Node* const node) {
     if (ok) {
       LOG(DEBUG) << "Resolved conflict for " << *node;
       RehashIfNecessary();
-      return;
+      return node.release();  // Now owned by |g_nodes_by_path|.
     }
 
     LOG(DEBUG) << *node << " conflicts with " << *pos;
@@ -2729,8 +2787,7 @@ Node* GetOrCreateDirNode(std::string_view path) {
 
   struct Segment {
     std::string_view name;
-    size_t begin;
-    size_t end;
+    size_t path_length;
     size_t path_hash;
   };
 
@@ -2749,27 +2806,27 @@ Node* GetOrCreateDirNode(std::string_view path) {
       char const c = path[i];
       if (c == '/') {
         assert(segment_begin < i);
-        segments.emplace_back(path.substr(segment_begin, i - segment_begin),
-                              segment_begin, i, path_hash);
+        segments.emplace_back(path.substr(segment_begin, i - segment_begin), i,
+                              path_hash);
         segment_begin = i + 1;
       }
       boost::hash_combine(path_hash, c);
     }
 
     assert(segment_begin < i);
-    segments.emplace_back(path.substr(segment_begin, i - segment_begin),
-                          segment_begin, i, path_hash);
+    segments.emplace_back(path.substr(segment_begin, i - segment_begin), i,
+                          path_hash);
   }
 
   Node* node = nullptr;
   size_t i = segments.size();
   while (!node && i > 0) {
     const Segment& segment = segments[--i];
-    node = FindNode(
-        HashedStringView(path.substr(0, segment.end), segment.path_hash));
+    node = FindNode(HashedStringView(path.substr(0, segment.path_length),
+                                     segment.path_hash));
   }
 
-  Node* to_rename = nullptr;
+  Node::Ptr to_rename;
   if (!node) {
     assert(i == 0);
     node = g_root_node;
@@ -2782,8 +2839,8 @@ Node* GetOrCreateDirNode(std::string_view path) {
 
     // Remove it from g_nodes_by_path, in order to insert it again later with a
     // different name.
-    to_rename = node;
     g_nodes_by_path.erase(g_nodes_by_path.iterator_to(*node));
+    to_rename.reset(node);
     node = node->parent;
     --i;
   }
@@ -2794,24 +2851,26 @@ Node* GetOrCreateDirNode(std::string_view path) {
   while (++i < segments.size()) {
     const Segment& segment = segments[i];
     // Create a Directory node.
-    Node* const child = new Node{
+    Node::Ptr child(new Node{
+        .path_length = segment.path_length,
+        .path_hash = segment.path_hash,
         .name = std::string(segment.name),
         .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
         .nlink = 2,
-        .path_length = segment.end,
-        .path_hash = segment.path_hash,
-    };
+    });
 
     g_inode_count += 1;
-    node->AddChild(child);
-    node = child;
-    [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*node);
-    assert(ok);
-    RehashIfNecessary();
+    node->AddChild(child.get());
+#ifndef NDEBUG
+    child->ComputePathHash();
+    assert(child->path_length == segment.path_length);
+    assert(child->path_hash == segment.path_hash);
+#endif
+    node = RenameIfCollision(std::move(child));
   }
 
   if (to_rename) {
-    RenameIfCollision(to_rename);
+    RenameIfCollision(std::move(to_rename));
   }
 
   return node;
@@ -2996,7 +3055,18 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     Node* const node = GetOrCreateDirNode(path);
     assert(node);
 
-    node->mtime = archive_entry_mtime(e);
+    if (archive_entry_mtime_is_set(e)) {
+      node->mtime = {.tv_sec = archive_entry_mtime(e),
+                     .tv_nsec = archive_entry_mtime_nsec(e)};
+    }
+    if (archive_entry_atime_is_set(e)) {
+      node->atime = {.tv_sec = archive_entry_atime(e),
+                     .tv_nsec = archive_entry_atime_nsec(e)};
+    }
+    if (archive_entry_ctime_is_set(e)) {
+      node->ctime = {.tv_sec = archive_entry_ctime(e),
+                     .tv_nsec = archive_entry_ctime_nsec(e)};
+    }
 
     if (g_default_permissions) {
       node->uid = archive_entry_uid(e);
@@ -3022,13 +3092,26 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   assert(parent->IsDir());
 
   // Create the node for this entry.
-  Node* const node =
-      new Node{.name = std::string(name),
-               .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
-                                           (0666 & ~g_options.fmask)),
-               .descriptor = r.descriptor,
-               .index_within_archive = i,
-               .mtime = archive_entry_mtime(e)};
+  Node::Ptr node(new Node{
+      .index_within_archive = i,
+      .descriptor = r.descriptor,
+      .name = std::string(name),
+      .mode = static_cast<mode_t>(static_cast<mode_t>(ft) |
+                                  (0666 & ~g_options.fmask)),
+  });
+
+  if (archive_entry_mtime_is_set(e)) {
+    node->mtime = {.tv_sec = archive_entry_mtime(e),
+                   .tv_nsec = archive_entry_mtime_nsec(e)};
+  }
+  if (archive_entry_atime_is_set(e)) {
+    node->atime = {.tv_sec = archive_entry_atime(e),
+                   .tv_nsec = archive_entry_atime_nsec(e)};
+  }
+  if (archive_entry_ctime_is_set(e)) {
+    node->ctime = {.tv_sec = archive_entry_ctime(e),
+                   .tv_nsec = archive_entry_ctime_nsec(e)};
+  }
 
   g_inode_count += 1;
 
@@ -3043,16 +3126,16 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
     node->mode |= xbits & ~g_options.fmask;
   }
 
-  parent->AddChild(node);
+  parent->AddChild(node.get());
   node->ComputePathHash();
 
   // Add to g_nodes_by_path.
-  RenameIfCollision(node);
+  Node* const n = RenameIfCollision(std::move(node));
 
   // Do some extra processing depending on the file type.
   // Block or Char Device.
   if (ft == FileType::BlockDevice || ft == FileType::CharDevice) {
-    node->rdev = archive_entry_rdev(e);
+    n->dev = archive_entry_rdev(e);
     return;
   }
 
@@ -3060,9 +3143,9 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   if (ft == FileType::Symlink) {
     if (const char* const s =
             archive_entry_symlink_utf8(e) ?: archive_entry_symlink(e)) {
-      node->symlink = s;
-      node->size = node->symlink.size();
-      g_block_count += node->GetBlockCount();
+      n->symlink = s;
+      n->size = n->symlink.size();
+      g_block_count += n->GetBlockCount();
     }
     return;
   }
@@ -3074,30 +3157,30 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   // Regular file.
   if (g_cache == Cache::Full) {
     // Cache file data.
-    node->size = archive_entry_size(e);
+    n->size = archive_entry_size(e);
     i64 const offset = g_cache_size;
-    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size, node);
+    g_cache_size = CacheEntryData(a, g_cache_fd, g_cache_size, n);
     // Now that CacheEntryData has succeeded without throwing an exception, we
     // can remember the cache offset.
-    node->cache_offset = offset;
-    node->cached_size = node->size = g_cache_size - offset;
-    node->last_hole_start = g_cache_size;
+    n->cache_offset = offset;
+    n->cached_size = n->size = g_cache_size - offset;
+    n->last_hole_start = g_cache_size;
   } else {
     // Get the entry size without caching the data.
-    node->size = r.GetEntrySize();
+    n->size = r.GetEntrySize();
   }
 
   // Extract extended attributes.
   if (g_xattrs) {
-    if (int const n = archive_entry_xattr_reset(e)) {
-      node->attributes.reserve(n);
+    if (int const n_xattrs = archive_entry_xattr_reset(e)) {
+      n->attributes.reserve(n_xattrs);
       const char* key;
       const void* value;
       size_t len;
       while (archive_entry_xattr_next(e, &key, &value, &len) == ARCHIVE_OK) {
         assert(key);
         assert(value);
-        node->attributes.push_back(
+        n->attributes.push_back(
             {.key = GetOrCreateUnique(key),
              .value = std::string(static_cast<const char*>(value), len)});
       }
@@ -3108,7 +3191,7 @@ void ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   r.CheckPassword();
 
   // Adjust the total block count.
-  g_block_count += node->GetBlockCount();
+  g_block_count += n->GetBlockCount();
 }
 
 // Resolve the hard links set aside in g_hardlinks_to_resolve.
@@ -3152,27 +3235,29 @@ void ResolveHardlinks() {
     assert(parent->IsDir());
 
     // Create the node for this entry.
-    Node* const node = new Node{
-        .name = std::string(name.empty() ? "data" : name),
-        .symlink = target->symlink,
-        .mode = target->mode,
-        .ino = target->ino,
-        .uid = target->uid,
-        .gid = target->gid,
-        .descriptor = target->descriptor,
+    Node::Ptr node(new Node{
+        .mtime = target->mtime,
+        .atime = target->atime,
+        .ctime = target->ctime,
         .index_within_archive = target->index_within_archive,
+        .ino = target->ino,
         .size = target->size,
         .cache_offset = target->cache_offset,
         .cached_size = target->cached_size,
         .last_hole_start = target->last_hole_start,
-        .mtime = target->mtime,
-        .rdev = target->rdev,
+        .saved_blocks = target->saved_blocks,
+        .dev = target->dev,
+        .descriptor = target->descriptor,
+        .hardlink_target = target->GetTarget(),
+        .name = std::string(name.empty() ? "data" : name),
+        .symlink = target->symlink,
+        .uid = target->uid,
+        .gid = target->gid,
+        .mode = target->mode,
         .nlink = 0,  // treated specially in hardlinks
         .holes = target->holes,
-        .saved_blocks = target->saved_blocks,
         .attributes = target->attributes,
-        .hardlink_target = target,
-    };
+    });
 
     if (g_hardlinks) {
       target->nlink++;
@@ -3188,14 +3273,14 @@ void ResolveHardlinks() {
       node->hardlink_target = nullptr;
     }
 
-    parent->AddChild(node);
+    parent->AddChild(node.get());
     node->ComputePathHash();
 
     // Add to g_nodes_by_path.
-    RenameIfCollision(node);
+    Node* const n = RenameIfCollision(std::move(node));
 
     LOG(DEBUG) << "Resolved hard link [" << entry.index_within_archive << "] "
-               << Path(node->GetPath()) << " -> " << *target;
+               << Path(n->GetPath()) << " -> " << *target;
   }
 
   g_hardlinks_to_resolve.clear();
@@ -3254,6 +3339,7 @@ void Reindex(Node& node) {
   node.ComputePathHash();
   [[maybe_unused]] bool const ok = g_nodes_by_path.insert(node).second;
   assert(ok);
+  RehashIfNecessary();
 
   for (Node& c : node.children) {
     Reindex(c);
@@ -3283,7 +3369,9 @@ void Trim(Node& a) {
   a.gid = p->gid;
   a.mode = p->mode;
   a.size = p->size;
+  a.atime = p->atime;
   a.mtime = p->mtime;
+  a.ctime = p->ctime;
   a.nlink = p->nlink;
   assert(!a.hardlink_target);
   assert(!p->hardlink_target);
@@ -3354,13 +3442,15 @@ void BuildTree() {
 
   // Create root node.
   assert(!g_root_node);
-  g_root_node =
-      new Node{.name = "/",
-               .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
-               .nlink = 2};
-  g_root_node->ComputePathHash();
-  [[maybe_unused]] auto const [_, ok] = g_nodes_by_path.insert(*g_root_node);
-  assert(ok);
+  {
+    Node::Ptr root_node(new Node{
+        .name = "/",
+        .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
+        .nlink = 2,
+    });
+    root_node->ComputePathHash();
+    g_root_node = RenameIfCollision(std::move(root_node));
+  }
 
   // Declare this variable outside of the following loop in order to keep its
   // internal buffer.
@@ -3401,16 +3491,16 @@ void BuildTree() {
       Node* local_root = g_root_node;
       if (!g_merge) {
         // Create a Directory node for the archive.
-        local_root = new Node{
+        Node::Ptr archive_node(new Node{
             .name = archive.name_without_extension,
             .mode = static_cast<mode_t>(S_IFDIR | (0777 & ~g_options.dmask)),
             .nlink = 2,
-        };
+        });
 
         g_inode_count += 1;
-        g_root_node->AddChild(local_root);
-        local_root->ComputePathHash();
-        RenameIfCollision(local_root);
+        g_root_node->AddChild(archive_node.get());
+        archive_node->ComputePathHash();
+        local_root = RenameIfCollision(std::move(archive_node));
         path += local_root->name;
         assert(local_root->GetPath() == path);
 
