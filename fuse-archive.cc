@@ -227,6 +227,16 @@ std::string_view GetErrorString(archive* const a) {
   return archive_error_string(a) ?: "Unspecified error";
 }
 
+i64 SafeAdd(i64 const a, i64 const b) {
+  i64 r;
+  if (__builtin_add_overflow(a, b, &r)) {
+    LOG(ERROR) << "Integer overflow with " << a << " + " << b;
+    throw ExitCode::INVALID_ARCHIVE_CONTENTS;
+  }
+
+  return r;
+}
+
 constexpr blksize_t block_size = 512;
 
 // A hole in a sparse file.
@@ -240,10 +250,14 @@ struct Hole {
   // Returns the number of blocks saved by this hole in a file of the given
   // size.
   i64 GetSavedBlocks(i64 const file_size) const {
-    constexpr i64 bsm1 = block_size - 1;
-    i64 const effective_to = (to < file_size) ? to : file_size + bsm1;
-    i64 const saved = effective_to / block_size - (from + bsm1) / block_size;
-    return std::max<i64>(0, saved);
+    const i64 effective_to = std::min(to, file_size);
+    const i64 blocks_to = effective_to / block_size;
+    const i64 blocks_from = (from + block_size - 1) / block_size;
+    i64 n = blocks_to - blocks_from;
+    if (to >= file_size && file_size % block_size != 0) {
+      n++;
+    }
+    return std::max<i64>(0, n);
   }
 
   friend std::ostream& operator<<(std::ostream& out, const Hole& h) {
@@ -301,6 +315,7 @@ class ScopedFile {
   // - `new_size >= 0`.
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
+  // Throws ExitCode::INVALID_ARCHIVE_CONTENTS in case of integer overflow.
   void Truncate(i64 const new_size) const {
     assert(IsValid());
     assert(new_size >= 0);
@@ -342,7 +357,7 @@ class ScopedFile {
 
       assert(r <= b.size());
       b.remove_prefix(r);
-      pos += r;
+      pos = SafeAdd(pos, r);
     }
 
     return pos;
@@ -2127,8 +2142,10 @@ struct Node {
 
   // Returns the number of blocks used by this node.
   i64 GetBlockCount() const {
-    constexpr i64 bsm1 = block_size - 1;
-    i64 const n = (size + bsm1) / block_size - saved_blocks;
+    if (size <= 0) {
+      return 0;
+    }
+    i64 const n = size / block_size + (size % block_size != 0) - saved_blocks;
     return std::max<i64>(0, n);
   }
 
@@ -2877,23 +2894,23 @@ i64 CacheEntryData(Archive* const a,
 
       case ARCHIVE_OK:
         assert(offset >= 0);
-        assert(dest_offset <= file_start_offset + offset);
-        dest_offset = file_start_offset + offset;
+        assert(dest_offset <= SafeAdd(file_start_offset, offset));
+        dest_offset = SafeAdd(file_start_offset, offset);
         last_hole_start = dest_fd.WriteBytesAndSkipHoles(
             std::string_view(static_cast<const char*>(buff), len), dest_offset,
             last_hole_start, on_hole);
-        dest_offset += len;
+        dest_offset = SafeAdd(dest_offset, len);
 
         continue;
 
       case ARCHIVE_EOF:
         assert(len == 0);
         assert(offset >= 0);
-        assert(dest_offset <= file_start_offset + offset);
+        assert(dest_offset <= SafeAdd(file_start_offset, offset));
 
         // Adjust the cache size if there is a final "hole".
         // See https://github.com/google/fuse-archive/issues/40
-        dest_offset = file_start_offset + offset;
+        dest_offset = SafeAdd(file_start_offset, offset);
         if (last_hole_start < dest_offset) {
           dest_fd.Truncate(dest_offset);
           if (on_hole) {
