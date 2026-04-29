@@ -2018,6 +2018,7 @@ def TestInvalidArchive():
 
     # https://github.com/google/fuse-archive/issues/36
     CheckArchiveMountingError('truncated.7z', 32)
+    CheckArchiveMountingError('overflow.tar.gz', 32)
 
     # 7Z encryption is not supported
     if has_liblzma: CheckArchiveMountingError("encrypted.7z", 22, password='password')
