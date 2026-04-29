@@ -195,11 +195,37 @@ $ umount mnt
     *   **Sparse Files**: Detects and exposes "holes" in sparse files for
         efficient reading.
     *   **Extended Attributes**: Supports reading xattrs from archives.
+    *   **High-precision timestamps**: Supports full nanosecond precision
+        for access, modification, and creation times.
 *   **Permissions**: Honors Unix access modes, ownership (UID/GID), and special
     bits (SUID/SGID/SVTX).
 *   **Deduplication**: Gracefully handles name collisions between multiple
     archives or within a single archive.
 *   **Performance**: Optimized for speed through efficient caching.
+
+# NAME DEDUPLICATION
+
+In case of name collision, **fuse-archive** adds a number to deduplicate the
+conflicting file name:
+
+```
+$ fuse-archive -o nomerge archive1.zip archive2.zip mnt
+
+$ tree -F mnt
+mnt
+├── archive1/
+│   ├── file.txt
+│   ├── file (1).txt
+│   └── file (2).txt
+└── archive2/
+    ├── file.txt
+    └── file (1).txt
+
+2 directories, 5 files
+```
+
+Directories are never renamed. If a file is colliding with a directory, the file
+will be the one getting renamed.
 
 # ARCHIVE FORMATS
 
@@ -313,13 +339,31 @@ Some archive formats (such as ZIP) have native encryption capabilities built-in.
 **fuse-archive** can leverage these when supported by the underlying
 **libarchive** library.
 
-*   **ZIP**: Supported (may require specific **libarchive** build options).
+*   **ZIP**: Supported (understand legacy ZIP encryption as well as AES-128,
+    AES-192 and AES-256).
 *   **7Z and RAR**: Native encryption for these formats is currently **not**
     supported.
 
 When mounting a natively encrypted archive, **fuse-archive** will securely
-prompt for a password in the terminal. You can also pipe the password to
-**fuse-archive**'s standard input.
+prompt for a password in the terminal:
+
+```
+$ fuse-archive encrypted.zip mnt
+Need password for File [1] '/secret.txt'
+Password > Got it!
+Password is Ok
+
+$ cat mnt/secret.txt
+This was encrypted.
+```
+
+For security reasons, **fuse-archive** doesn't allow the password to be
+specified on the command line. However, it is possible to pipe the password to
+**fuse-archive**'s standard input:
+
+```
+$ echo password | fuse-archive encrypted.zip mnt
+```
 
 ## GPG Encryption
 
@@ -520,11 +564,16 @@ GPG Encryption            | ✅                | ❌             | ❌
 Native ZIP Encryption     | ✅                | ✅             | ✅
 Native 7Z/RAR Encryption  | ❌                | ❌             | ❌
 Lazy Decompression        | ✅                | ✅             | ❌
+Default Caching           | Pre-emptive      | Lazy          | N/A
 Memory Caching            | ✅                | ✅             | ❌
+Temp File Caching         | ✅                | ✅             | ❌
+Handles Huge Files        | ✅                | ✅             | ❌
 Sparse File Detection     | ✅                | ❌             | ❌
+Linear Complexity         | ✅                | ✅             | ❌
+Precision Timestamps      | ✅                | ✅             | ✅
 Several Archives          | ✅                | ✅             | ❌
 Automatic Mount Point     | ✅                | ✅             | ❌
-Linear Complexity         | ✅                | ✅             | ❌
+FUSE 3 Support            | ✅                | ✅             | ❌
 
 # RETURN VALUE
 
