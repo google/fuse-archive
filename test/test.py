@@ -227,8 +227,11 @@ def MountArchive(zip_names, options=[], password='', env=env):
             os.path.join(script_dir, 'data', zip_name) for zip_name in zip_names
         ]
         logging.debug(f'Mounting {zip_paths!r} on {mount_point!r}...')
+        command = [mount_program, *options, *zip_paths, mount_point]
+        if 'MOUNT_WRAPPER' in env:
+            command = env['MOUNT_WRAPPER'].split() + command
         subprocess.run(
-            [mount_program, *options, *zip_paths, mount_point],
+            command,
             check=True,
             capture_output=True,
             input=password,

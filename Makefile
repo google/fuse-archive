@@ -50,6 +50,9 @@ check: out/$(PROJECT) test/data/big.zip test/data/collisions.zip test/data/deep.
 check-fast: out/$(PROJECT)
 	python3 test/test.py --fast
 
+valgrind: out/$(PROJECT)
+	MOUNT_WRAPPER="valgrind -q --leak-check=full --error-exitcode=33" python3 test/test.py --fast
+
 test: check
 
 clean:
@@ -100,4 +103,4 @@ test/data/deep.tar: test/make_deep.py
 test/data/many_nodes.zip: test/make_many_nodes.py
 	python3 test/make_many_nodes.py
 
-.PHONY: all check check-fast clean clean-data doc install install-strip release test uninstall
+.PHONY: all check check-fast clean clean-data doc install install-strip release test uninstall valgrind
