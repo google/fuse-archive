@@ -30,6 +30,11 @@ COMMON_CXXFLAGS += -fsanitize=address
 PKG_LDFLAGS += -fsanitize=address
 endif
 
+ifeq ($(UBSAN), 1)
+COMMON_CXXFLAGS += -fsanitize=undefined
+PKG_LDFLAGS += -fsanitize=undefined
+endif
+
 PREFIX ?= /usr
 BINDIR = $(PREFIX)/bin
 MANDIR = $(PREFIX)/share/man/man1
