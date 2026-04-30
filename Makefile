@@ -74,21 +74,40 @@ $(MAN): README.md
 	    -e 's/^\.SS/.PD\n.SS/g' \
 	    -e 's/^\.PP/.PD\n.PP/g' \
 	    -e 's/^\.TP/.PD\n.TP/g' > $@
+LIB_DIR = lib
+LIB_OUT = out/$(LIB_DIR)
+LIB_SOURCES = $(wildcard $(LIB_DIR)/*.cc)
+LIB_OBJECTS = $(addprefix out/,$(LIB_SOURCES:.cc=.o))
+LIB_ARCHIVE = out/lib$(PROJECT).a
+
+all: out/$(PROJECT)
+
+$(LIB_ARCHIVE): $(LIB_OBJECTS)
+	$(AR) $(ARFLAGS) $@ $(LIB_OBJECTS)
+
+out/$(LIB_DIR)/%.o: $(LIB_DIR)/%.cc
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
+
+out/$(PROJECT): $(PROJECT).cc $(LIB_ARCHIVE)
+	mkdir -p out
+	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< $(LIB_ARCHIVE) $(PKG_LDFLAGS) $(LDFLAGS) -o $@
+
+ifneq ($(filter clean%,$(MAKECMDGOALS)),)
+else
+-include $(LIB_OBJECTS:.o=.d)
+endif
 
 install: out/$(PROJECT)
 	$(INSTALL) -D "out/$(PROJECT)" "$(DESTDIR)$(BINDIR)/$(PROJECT)"
 	$(INSTALL) -D -m 644 $(MAN) "$(DESTDIR)$(MANDIR)/$(MAN)"
 
 install-strip: out/$(PROJECT)
-	$(INSTALL) -D -s "out/$(PROJECT)" "$(BINDIR)/$(PROJECT)"
+	$(INSTALL) -D -s "out/$(PROJECT)" "$(DESTDIR)$(BINDIR)/$(PROJECT)"
 	$(INSTALL) -D -m 644 $(MAN) "$(DESTDIR)$(MANDIR)/$(MAN)"
 
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(PROJECT)" "$(DESTDIR)$(MANDIR)/$(MAN)"
-
-out/$(PROJECT): $(PROJECT).cc
-	mkdir -p out
-	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< $(PKG_LDFLAGS) $(LDFLAGS) -o $@
 
 
 test/data/big.zip: test/make_big_zip.py
