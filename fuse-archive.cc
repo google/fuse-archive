@@ -303,35 +303,36 @@ struct Hole {
 using Holes = std::vector<Hole>;
 
 // A scoped file descriptor.
-class ScopedFile {
+class FileDescriptor {
  public:
   // Closes this file descriptor if it is valid.
-  ~ScopedFile() {
+  ~FileDescriptor() {
     if (IsValid() && close(fd_) < 0) {
       PLOG(ERROR) << "Cannot close file";
     }
   }
 
   // Creates an invalid file descriptor.
-  ScopedFile() noexcept : fd_(-1) {}
+  FileDescriptor() noexcept : fd_(-1) {}
 
   // Takes ownership of the given file descriptor, if it is valid.
-  explicit ScopedFile(int fd) noexcept : fd_(fd) {}
+  explicit FileDescriptor(int fd) noexcept : fd_(fd) {}
 
   // Move constructor.
-  ScopedFile(ScopedFile&& other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
+  FileDescriptor(FileDescriptor&& other) noexcept
+      : fd_(std::exchange(other.fd_, -1)) {}
 
   // Swaps this file descriptor with the other one.
-  void SwapWith(ScopedFile& other) noexcept { std::swap(fd_, other.fd_); }
+  void SwapWith(FileDescriptor& other) noexcept { std::swap(fd_, other.fd_); }
 
   // Closes this file descriptor if it is valid.
   void Close() noexcept {
-    ScopedFile other;
+    FileDescriptor other;
     SwapWith(other);
   }
 
   // Universal assignment operator.
-  ScopedFile& operator=(ScopedFile other) noexcept {
+  FileDescriptor& operator=(FileDescriptor other) noexcept {
     SwapWith(other);
     return *this;
   }
@@ -573,7 +574,7 @@ Cache g_cache = Cache::Full;
 bool g_memcache = false;
 
 // File descriptor of the cache file.
-ScopedFile g_cache_fd;
+FileDescriptor g_cache_fd;
 
 // Size of the cache file.
 i64 g_cache_size = 0;
@@ -1030,7 +1031,7 @@ struct ArchiveDescriptor {
   std::string name_without_extension;
 
   // File descriptor of the opened archive file.
-  ScopedFile fd;
+  FileDescriptor fd;
 
   // Size of this archive file.
   i64 size = 0;
@@ -2377,7 +2378,7 @@ struct Node {
     i64 const old_cached_size = cached_size;
     i64 const old_blocks = GetBlockCount();
 
-    ScopedFile::HoleCallback on_hole;
+    FileDescriptor::HoleCallback on_hole;
     if (g_holes) {
       on_hole = [this](i64 from, i64 to) {
         from -= cache_offset;
@@ -2490,12 +2491,12 @@ std::string GetCacheDir() {
 }
 
 // Creates a hidden temp file. Returns a file descriptor to this temp file.
-ScopedFile CreateCacheFile() {
-  ScopedFile fd;
+FileDescriptor CreateCacheFile() {
+  FileDescriptor fd;
 
   if (g_memcache) {
 #if defined(__linux__)
-    fd = ScopedFile(memfd_create(PROGRAM_NAME, MFD_CLOEXEC));
+    fd = FileDescriptor(memfd_create(PROGRAM_NAME, MFD_CLOEXEC));
     if (fd.IsValid()) {
       LOG(DEBUG) << "Created memory-backed cache file";
       return fd;
@@ -2512,7 +2513,7 @@ ScopedFile CreateCacheFile() {
   std::string const cache_dir = GetCacheDir();
 
 #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__APPLE__)
-  fd = ScopedFile(open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0));
+  fd = FileDescriptor(open(cache_dir.c_str(), O_TMPFILE | O_RDWR | O_EXCL, 0));
   if (fd.IsValid()) {
     LOG(DEBUG) << "Created anonymous cache file in " << Path(cache_dir);
     return fd;
@@ -2534,7 +2535,7 @@ ScopedFile CreateCacheFile() {
 
   std::string path = cache_dir;
   Path::Append(&path, "XXXXXX");
-  fd = ScopedFile(mkstemp(path.data()));
+  fd = FileDescriptor(mkstemp(path.data()));
 
   if (!fd.IsValid()) {
     PLOG(ERROR) << "Cannot create named cache file in " << Path(cache_dir);
@@ -2552,7 +2553,7 @@ ScopedFile CreateCacheFile() {
 }
 
 // Checks that the cache file specified by `fd` is open and empty.
-void CheckCacheFile(const ScopedFile& fd) {
+void CheckCacheFile(const FileDescriptor& fd) {
   Stat z;
   if (fstat(fd, &z) != 0) {
     PLOG(ERROR) << "Cannot stat cache file";
@@ -2924,14 +2925,14 @@ bool ShouldSkip(FileType const ft) {
 // - ExitCode::CANNOT_WRITE_CACHE in case of an I/O error when writing.
 // - ExitCode::INVALID_ARCHIVE_CONTENTS if libarchive fails to read the data.
 i64 CacheEntryData(Archive* const a,
-                   const ScopedFile& dest_fd,
+                   const FileDescriptor& dest_fd,
                    i64 const file_start_offset,
                    Node* const node = nullptr) try {
   assert(file_start_offset >= 0);
   i64 dest_offset = file_start_offset;
   i64 last_hole_start = file_start_offset;
 
-  ScopedFile::HoleCallback on_hole;
+  FileDescriptor::HoleCallback on_hole;
   if (node && g_holes) {
     assert(node->holes.empty());
     assert(node->saved_blocks == 0);
@@ -3412,7 +3413,7 @@ void BuildTree() {
 
       // Open archive file.
       assert(!archive.fd.IsValid());
-      archive.fd = ScopedFile(open(archive.path.c_str(), O_RDONLY));
+      archive.fd = FileDescriptor(open(archive.path.c_str(), O_RDONLY));
       if (!archive.fd.IsValid()) {
         PLOG(ERROR) << "Cannot open " << Path(archive.path);
         throw ExitCode::CANNOT_OPEN_ARCHIVE;
@@ -3478,7 +3479,7 @@ void BuildTree() {
           throw ExitCode::INVALID_ARCHIVE_HEADER;
         }
 
-        ScopedFile fd = CreateCacheFile();
+        FileDescriptor fd = CreateCacheFile();
         CheckCacheFile(fd);
         i64 const size = CacheEntryData(r->archive.get(), fd, 0);
         r.reset();

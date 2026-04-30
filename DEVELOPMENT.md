@@ -50,7 +50,7 @@ The project aims for full **ASAN compliance**. Always verify changes with `ASAN=
 ### Resource Management (RAII)
 - Use RAII guards for resource cleanup.
 - **Specific Helpers**:
-  - `ScopedFile`: Manages file descriptors.
+  - `FileDescriptor`: Manages file descriptors.
   - `Cleanup`: A generic helper that runs a provided lambda/function in its destructor, used for one-off cleanup tasks like removing temporary mount points (e.g., `mount_point_guard`) or performing the global teardown (e.g., `global_cleanup_guard`).
 - **Shutdown Performance**: Global teardown (clearing the virtual node tree, disposing of children, emptying the reader recycle bin, and deleting the global string pool) is wrapped in a `Cleanup` guard inside `#ifdef __SANITIZE_ADDRESS__`. This complex cleanup is **only** performed in ASAN builds to keep production shutdown nearly instant for archives with millions of files, while ensuring a perfectly clean exit for diagnostic builds.
 
