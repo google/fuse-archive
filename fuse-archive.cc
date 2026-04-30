@@ -259,6 +259,8 @@ std::string_view GetErrorString(archive* const a) {
   return archive_error_string(a) ?: "Unspecified error";
 }
 
+// Returns a + b.
+// Throws ExitCode::INVALID_ARCHIVE_CONTENTS in case of integer overflow.
 i64 SafeAdd(i64 const a, i64 const b) {
   i64 r;
   if (__builtin_add_overflow(a, b, &r)) {
@@ -347,7 +349,6 @@ class ScopedFile {
   // - `new_size >= 0`.
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
-  // Throws ExitCode::INVALID_ARCHIVE_CONTENTS in case of integer overflow.
   void Truncate(i64 const new_size) const {
     assert(IsValid());
     assert(new_size >= 0);
@@ -372,6 +373,7 @@ class ScopedFile {
   // - The data in `b` is fully written to the file at `pos`.
   //
   // Throws ExitCode::CANNOT_WRITE_CACHE in case of an I/O error.
+  // Throws ExitCode::INVALID_ARCHIVE_CONTENTS in case of integer overflow.
   i64 Write(std::string_view b, i64 pos) const {
     assert(IsValid());
     assert(pos >= 0);
@@ -664,7 +666,8 @@ struct HashedStringView {
   std::string_view string;
   size_t hash;
 
-  HashedStringView(std::string_view s) : string(s), hash(ComputeStringHash(s)) {}
+  HashedStringView(std::string_view s)
+      : string(s), hash(ComputeStringHash(s)) {}
   HashedStringView(std::string_view s, size_t h) : string(s), hash(h) {}
 };
 
