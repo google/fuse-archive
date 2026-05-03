@@ -12,11 +12,15 @@ FUSE_CXXFLAGS = -DFUSE_USE_VERSION=26
 endif
 
 DEPS += libarchive
+UNIT_TEST_DEPS = gtest gtest_main
 
 PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(DEPS))
 PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(DEPS))
 
-COMMON_CXXFLAGS = -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter
+UNIT_TEST_PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(UNIT_TEST_DEPS))
+UNIT_TEST_PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(UNIT_TEST_DEPS))
+
+COMMON_CXXFLAGS = -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter -I.
 COMMON_CXXFLAGS += -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64 $(FUSE_CXXFLAGS)
 
 ifeq ($(DEBUG), 1)
@@ -41,19 +45,60 @@ MANDIR = $(PREFIX)/share/man/man1
 MAN = $(PROJECT).1
 INSTALL = install
 
+# ---- Library
+
+LIB_DIR = lib
+LIB_OUT = out/$(LIB_DIR)
+LIB_SOURCES = $(wildcard $(LIB_DIR)/*.cc)
+LIB_OBJECTS = $(addprefix out/,$(LIB_SOURCES:.cc=.o))
+LIB_ARCHIVE = out/lib$(PROJECT).a
+
+$(LIB_ARCHIVE): $(LIB_OBJECTS)
+	$(AR) $(ARFLAGS) $@ $(LIB_OBJECTS)
+
+out/$(LIB_DIR)/%.o: $(LIB_DIR)/%.cc
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
+
+# ---- Binaries
 
 all: out/$(PROJECT)
 
-check: out/$(PROJECT) test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
+out/$(PROJECT): $(PROJECT).cc $(LIB_ARCHIVE)
+	mkdir -p out
+	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< $(LIB_ARCHIVE) $(PKG_LDFLAGS) $(LDFLAGS) -o $@
+
+# ---- Unit Tests
+
+UNIT_TEST = unit_tests
+UNIT_TEST_SOURCES = test/unit_tests.cc
+UNIT_TEST_OBJECTS = $(addprefix out/,$(UNIT_TEST_SOURCES:.cc=.o))
+
+out/$(UNIT_TEST): $(UNIT_TEST_OBJECTS) $(LIB_ARCHIVE)
+	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(UNIT_TEST_PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $^ $(PKG_LDFLAGS) $(UNIT_TEST_PKG_LDFLAGS) $(LDFLAGS) -o $@
+
+out/test/%.o: test/%.cc
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(UNIT_TEST_PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
+
+# ---- Standard targets
+
+check: out/$(PROJECT) out/$(UNIT_TEST) test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
+	out/$(UNIT_TEST)
 	python3 test/test.py
 
-check-fast: out/$(PROJECT)
+check-fast: out/$(PROJECT) out/$(UNIT_TEST)
+	out/$(UNIT_TEST)
 	python3 test/test.py --fast
 
-valgrind: out/$(PROJECT)
+valgrind: out/$(PROJECT) out/$(UNIT_TEST)
+	valgrind -q --leak-check=full --error-exitcode=33 out/$(UNIT_TEST)
 	MOUNT_WRAPPER="valgrind -q --leak-check=full --error-exitcode=33" python3 test/test.py --fast
 
 test: check
+
+unit_tests: out/$(UNIT_TEST)
+	out/$(UNIT_TEST)
 
 clean:
 	rm -rf out
@@ -74,28 +119,11 @@ $(MAN): README.md
 	    -e 's/^\.SS/.PD\n.SS/g' \
 	    -e 's/^\.PP/.PD\n.PP/g' \
 	    -e 's/^\.TP/.PD\n.TP/g' > $@
-LIB_DIR = lib
-LIB_OUT = out/$(LIB_DIR)
-LIB_SOURCES = $(wildcard $(LIB_DIR)/*.cc)
-LIB_OBJECTS = $(addprefix out/,$(LIB_SOURCES:.cc=.o))
-LIB_ARCHIVE = out/lib$(PROJECT).a
-
-all: out/$(PROJECT)
-
-$(LIB_ARCHIVE): $(LIB_OBJECTS)
-	$(AR) $(ARFLAGS) $@ $(LIB_OBJECTS)
-
-out/$(LIB_DIR)/%.o: $(LIB_DIR)/%.cc
-	@mkdir -p $(dir $@)
-	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
-
-out/$(PROJECT): $(PROJECT).cc $(LIB_ARCHIVE)
-	mkdir -p out
-	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< $(LIB_ARCHIVE) $(PKG_LDFLAGS) $(LDFLAGS) -o $@
 
 ifneq ($(filter clean%,$(MAKECMDGOALS)),)
 else
 -include $(LIB_OBJECTS:.o=.d)
+-include $(UNIT_TEST_OBJECTS:.o=.d)
 endif
 
 install: out/$(PROJECT)
@@ -122,4 +150,4 @@ test/data/deep.tar: test/make_deep.py
 test/data/many_nodes.zip: test/make_many_nodes.py
 	python3 test/make_many_nodes.py
 
-.PHONY: all check check-fast clean clean-data doc install install-strip release test uninstall valgrind
+.PHONY: all check check-fast check-format clean clean-data doc format install install-strip release test uninstall unit_test valgrind

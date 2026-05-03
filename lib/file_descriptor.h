@@ -102,6 +102,8 @@ class FileDescriptor {
                              const HoleCallback& on_hole = nullptr) const;
 
  private:
+  friend class FileDescriptorTest;
+
   // Raw file descriptor.
   int fd_;
 };

@@ -106,6 +106,7 @@ class Tree {
   i64 GetInodeCount() const { return inode_count_; }
 
  private:
+  friend class TreeTest;
   friend struct Reader;
 
   // Returns true if entries of the given type should be ignored during loading.

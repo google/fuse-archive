@@ -155,6 +155,10 @@ struct Node {
 
   using Ptr = std::unique_ptr<Node>;
 
+ private:
+  friend class NodeTest;
+
+ public:
   // Returns true if this node is the root directory of the virtual file system.
   bool IsRoot() const { return !parent; }
 

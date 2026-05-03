@@ -167,6 +167,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
   using Ptr = std::unique_ptr<Reader, Recycler>;
 
  private:
+  friend class ReaderTest;
   friend struct Tree;
 
   // Read a password from the standard input if necessary.
