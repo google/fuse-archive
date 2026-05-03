@@ -30,15 +30,10 @@
 
 namespace fuse_archive {
 
-i64 Hole::GetSavedBlocks(i64 const file_size) const {
-  const i64 effective_to = std::min(to, file_size);
-  const i64 blocks_to = effective_to / block_size;
+i64 Hole::GetSavedBlocks() const {
+  const i64 blocks_to = to / block_size;
   const i64 blocks_from = (from + block_size - 1) / block_size;
-  i64 n = blocks_to - blocks_from;
-  if (to >= file_size && file_size % block_size != 0) {
-    n++;
-  }
-  return std::max<i64>(0, n);
+  return std::max<i64>(0, blocks_to - blocks_from);
 }
 
 std::ostream& operator<<(std::ostream& out, const Hole& h) {

@@ -215,7 +215,7 @@ struct Hole {
   }
 
   // Calculates the number of filesystem blocks saved by this hole.
-  i64 GetSavedBlocks(i64 file_size) const;
+  i64 GetSavedBlocks() const;
 
   // Formats a Hole for logging (e.g. "Hole [1024, 2048)").
   friend std::ostream& operator<<(std::ostream& out, const Hole& h);

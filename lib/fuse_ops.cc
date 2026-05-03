@@ -579,6 +579,9 @@ off_t Seek(const char*,
              << " and offset = " << offset;
 
   const Node* const t = n->GetTarget();
+
+  i64 const last_hole_start = t->GetSizeToLastHole();
+
   Holes::const_iterator const it =
       std::ranges::upper_bound(t->holes, offset, std::less<i64>(), &Hole::to);
 
@@ -588,15 +591,17 @@ off_t Seek(const char*,
         return -EINVAL;
       }
 
-      if (offset >= t->size) {
+      if (offset >= last_hole_start) {
+        // offset is in terminal hole
+        LOG(DEBUG) << "Past the start of the last hole";
         return -ENXIO;
       }
 
       if (it != t->holes.end() && it->from <= offset) {
         assert(offset < it->to);
-        // offset is located in a hole
+        // offset is located in a non-terminal hole
         LOG(DEBUG) << "In " << *it;
-        return it->to < t->size ? it->to : -ENXIO;
+        return it->to;
       }
 
       LOG(DEBUG) << "In Data";
@@ -608,13 +613,21 @@ off_t Seek(const char*,
       }
 
       if (offset >= t->size) {
+        // offset is past the end of the file
+        LOG(DEBUG) << "Past the end of the file";
         return -ENXIO;
       }
 
+      if (offset >= last_hole_start) {
+        // offset is in terminal hole
+        LOG(DEBUG) << "In the last hole";
+        return offset;
+      }
+
       if (it == t->holes.end()) {
-        // offset is past the last hole
-        LOG(DEBUG) << "In Data past the last hole";
-        return t->size;
+        // offset is data before the terminal hole
+        LOG(DEBUG) << "In Data before the last hole";
+        return last_hole_start;
       }
 
       assert(it != t->holes.end());

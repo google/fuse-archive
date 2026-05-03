@@ -559,13 +559,7 @@ void Tree::ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   if (options_.cache == Cache::Full) {
     // Cache file data.
     n->size = archive_entry_size(e);
-    i64 const offset = cache_size_;
     cache_size_ = r.CacheEntryData(cache_fd_, cache_size_, n);
-    // Now that CacheEntryData has succeeded without throwing an exception, we
-    // can mark this file as cached.
-    n->cache_offset = offset;
-    n->cached_size = n->size = cache_size_ - offset;
-    n->last_hole_start = cache_size_;
   } else {
     n->size = r.GetEntrySize();
   }
@@ -919,8 +913,7 @@ void Tree::CacheUpTo(Node& node, i64 const want_cached_size) {
     on_hole = [&node](i64 from, i64 to) {
       from -= node.cache_offset;
       to -= node.cache_offset;
-      node.saved_blocks +=
-          node.holes.emplace_back(from, to).GetSavedBlocks(node.size);
+      node.saved_blocks += node.holes.emplace_back(from, to).GetSavedBlocks();
     };
   }
 
@@ -941,14 +934,8 @@ void Tree::CacheUpTo(Node& node, i64 const want_cached_size) {
     assert(node.reader->offset_within_entry == node.cached_size);
   }
 
-  if (node.cached_size == node.size) {
-    i64 const file_end = node.cache_offset + node.size;
-    if (node.last_hole_start < file_end) {
-      if (on_hole) {
-        on_hole(node.last_hole_start, file_end);
-      }
-      node.last_hole_start = file_end;
-    }
+  if (node.IsFullyCached() && !options_.holes) {
+    node.last_hole_start = node.cache_offset + node.cached_size;
   }
 
   block_count_ += node.GetBlockCount();

@@ -1146,6 +1146,9 @@ def TestSeek(options=[]):
         logging.info('Skipping TestSeek (FUSE version < 3)')
         return
     zip_name = 'seek.tar.gz'
+    s = f'Test {zip_name!r}'
+    if options: s += f', options = {" ".join(options)!r}'
+    logging.info(s)
     with MountArchive(zip_name, options=options) as mount_point:
         path = os.path.join(mount_point, 'complex_sparse')
 

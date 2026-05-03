@@ -73,6 +73,8 @@ i64 Node::GetBlockCount() const {
   if (size <= 0) {
     return 0;
   }
+
+  i64 const size = GetSizeToLastHole();
   i64 const n = size / block_size + (size % block_size != 0) - saved_blocks;
   return std::max<i64>(0, n);
 }

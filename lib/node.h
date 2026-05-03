@@ -195,6 +195,13 @@ struct Node {
   // directory, returns a pointer to that child. Otherwise returns nullptr.
   // This is used for tree trimming/optimization.
   Node* GetUniqueChildDirectory();
+
+  // Is the contents of this file fully cached?
+  bool IsFullyCached() const { return cached_size == size; }
+
+  i64 GetSizeToLastHole() const {
+    return IsFullyCached() ? last_hole_start - cache_offset : size;
+  }
 };
 
 // Formats a Node for logging output (e.g. "File /path/to/file").
