@@ -258,9 +258,13 @@ Node* Node::GetUniqueChildDirectory() {
 }
 
 std::ostream& operator<<(std::ostream& out, const Node& n) {
-  out << n.GetType();
+  out << n.GetType() << " [" << n.ino;
+  if (n.hardlink_target) {
+    out << "->" << n.hardlink_target->ino;
+  }
+  out << "]";
   if (n.index_within_archive > 0) {
-    out << " [" << n.index_within_archive << "]";
+    out << " index [" << n.index_within_archive << "]";
   }
   return out << " " << Path(n.GetPath());
 }

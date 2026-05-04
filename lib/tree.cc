@@ -363,20 +363,31 @@ bool Tree::ShouldSkip(FileType const ft) const {
 }
 
 void Tree::CheckRawArchive(Reader& r) const {
-  if (r.descriptor->format != ArchiveFormat::RAW) {
+  if (r.descriptor->format != ArchiveFormat::NONE) {
+    // Already checked.
     return;
   }
 
-  if (r.descriptor->filter_count == 0) {
-    LOG(ERROR) << "Archive " << Path(r.descriptor->path)
-               << " is a regular file but not a recognized archive";
-    throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
+  Archive* const a = r.archive.get();
+  r.descriptor->format = ArchiveFormat(archive_format(a));
+  LOG(DEBUG) << "Archive format is " << archive_format_name(a) << " ("
+             << r.descriptor->format << ")";
+
+  assert(r.descriptor->filter_count == 0);
+  for (int i = archive_filter_count(a); i > 0;) {
+    if (archive_filter_code(a, --i) != ARCHIVE_FILTER_NONE) {
+      ++r.descriptor->filter_count;
+      LOG(DEBUG) << "Filter #" << r.descriptor->filter_count << " is "
+                 << archive_filter_name(a, i);
+    }
   }
 
-  if (r.index_within_archive > 1) {
-    LOG(ERROR) << "A raw archive (" << Path(r.descriptor->path)
-               << ") should only contain 1 entry, but at least "
-               << r.index_within_archive << " were found";
+  // For 'raw' archives, check that at least one of the compression filters
+  // (e.g. bzip2, gzip) actually triggered. We don't want to mount arbitrary
+  // data (e.g. foo.jpeg).
+  if (r.descriptor->format == ArchiveFormat::RAW &&
+      r.descriptor->filter_count == 0) {
+    LOG(ERROR) << "Cannot recognize the archive format";
     throw ExitCode::UNKNOWN_ARCHIVE_FORMAT;
   }
 
@@ -391,8 +402,6 @@ void Tree::GetNormalizedEntryPath(const Reader& r,
   assert(path);
   const char* const s =
       archive_entry_pathname_utf8(r.entry) ?: archive_entry_pathname(r.entry);
-
-  LOG(DEBUG) << "GetNormalizedEntryPath: s=" << (s ? s : "nullptr");
 
   if (!s || !*s) {
     LOG(ERROR) << "Archive entry " << r.index_within_archive << " of "
@@ -656,6 +665,7 @@ void Tree::Load(std::span<const std::string> const archives) {
     LOG(DEBUG) << "Loading " << Path(archive.path) << "...";
 
     try {
+      Timer const timer;
       std::unique_ptr<Reader> r = std::make_unique<Reader>(&archive, *this);
       r->should_print_progress = LOG_IS_ON(INFO) && archive.size > 0;
 
@@ -734,6 +744,8 @@ void Tree::Load(std::span<const std::string> const archives) {
         LOG(INFO) << "Loading " << Path(r->descriptor->path) << "... "
                   << ProgressMessage(100);
       }
+
+      LOG(DEBUG) << "Loaded " << Path(archive.path) << " in " << timer;
     } catch (ExitCode const error) {
       if (!options_.force) {
         throw;

@@ -145,7 +145,7 @@ Reader::Reader(ArchiveDescriptor* descriptor, Tree& tree)
   // Open the archive.
   Check(archive_read_open1(archive.get()));
 
-  LOG(DEBUG) << "Created " << *this;
+  LOG(DEBUG) << "Created " << *this << " for " << Path(descriptor->path);
 }
 
 std::ostream& operator<<(std::ostream& out, const Reader& r) {
@@ -166,14 +166,6 @@ Entry* Reader::NextEntry() {
 
       case ARCHIVE_OK:
         assert(entry);
-        descriptor->format =
-            static_cast<ArchiveFormat>(archive_format(archive.get()));
-        descriptor->filter_count = 0;
-        for (int i = archive_filter_count(archive.get()); i > 0;) {
-          if (archive_filter_code(archive.get(), --i) != ARCHIVE_FILTER_NONE) {
-            descriptor->filter_count++;
-          }
-        }
         return entry;
 
       case ARCHIVE_EOF:

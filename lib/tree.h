@@ -112,7 +112,13 @@ class Tree {
   // Returns true if entries of the given type should be ignored during loading.
   bool ShouldSkip(FileType ft) const;
 
-  // Verifies that a raw archive (e.g. .gz) only contains one entry.
+  // Verifies the archive format.
+  //
+  // Preconditions:
+  // - `r` must be a valid Reader positioned at an archive entry.
+  //
+  // Throws ExitCode::UNKNOWN_ARCHIVE_FORMAT if no valid compression filters are
+  // found for a 'raw' archive.
   void CheckRawArchive(Reader& r) const;
 
   // Normalizes an archive entry path to be used within the virtual tree.
