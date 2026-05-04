@@ -375,7 +375,10 @@ def TestArchiveWithOptions(options=[]):
     ]
 
     if has_zlib or has_gzip:
-        zip_names += ['archive.rar.gz', 'archive.tar.gz', 'archive.tgz']
+        zip_names += [
+            'archive.rar.gz', 'archive.tar.gz', 'archive.tgz', 'archive.rpm',
+            'archive.spm'
+        ]
 
     if has_zlib:
         zip_names += [
@@ -2177,6 +2180,13 @@ def TestUsage():
         if res.returncode != 0:
             LogError(f"Option {opt} failed with {res.returncode}")
 
+    # maxfilters=0 flag
+    logging.info("Testing maxfilters=0 flag")
+    zip_name = 'archive.tar'
+    with MountArchive(zip_name, options=['-o', 'maxfilters=0']) as mount_point:
+        if not os.path.exists(os.path.join(mount_point, 'romeo.txt')):
+            LogError("Missing romeo.txt with maxfilters=0")
+
     # Quiet flag
     logging.info("Testing quiet flag")
     zip_name = 'archive.tar'
@@ -2189,12 +2199,12 @@ def TestAutoMountPoint():
     logging.info("Testing automatic mount point creation and removal")
     zip_path = os.path.join(script_dir, 'data', 'archive.tar')
     dash_archive_path = os.path.join(script_dir, 'data', '--help')
-    
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         # 1. Standard auto-mount (relative path to trigger './' prepending)
         mount_point = os.path.join(tmp_dir, 'archive')
         command = [mount_program, '-f', '-v', zip_path]
-        
+
         proc = subprocess.Popen(command, cwd=tmp_dir)
         try:
             for _ in range(20):
@@ -2212,7 +2222,7 @@ def TestAutoMountPoint():
         # Create 'archive' directory first
         os.mkdir(os.path.join(tmp_dir, 'archive'))
         dedup_mount_point = os.path.join(tmp_dir, 'archive (1)')
-        
+
         proc = subprocess.Popen(command, cwd=tmp_dir)
         try:
             for _ in range(20):
