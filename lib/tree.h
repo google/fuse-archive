@@ -56,10 +56,9 @@ class Tree {
 
   // Returns a warm reader from the recycle bin or creates a new one,
   // positioned at the requested entry and offset.
-  Reader::Ptr GetReader(
-      ArchiveDescriptor* descriptor,
-      i64 want_index_within_archive,
-      i64 want_offset_within_entry);
+  Reader::Ptr GetReader(ArchiveDescriptor* descriptor,
+                        i64 want_index_within_archive,
+                        i64 want_offset_within_entry);
 
   // Scans the provided archives and populates the virtual file system tree.
   void Load(std::span<const std::string> archives);

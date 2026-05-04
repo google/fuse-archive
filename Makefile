@@ -45,6 +45,19 @@ MANDIR = $(PREFIX)/share/man/man1
 MAN = $(PROJECT).1
 INSTALL = install
 
+# ---- Formatting
+
+FORMAT = clang-format
+CC_FILES = $(wildcard *.cc lib/*.cc test/*.cc)
+H_FILES = $(wildcard lib/*.h)
+ALL_CXX_FILES = $(CC_FILES) $(H_FILES)
+
+format:
+	$(FORMAT) -i -style=file $(ALL_CXX_FILES)
+
+check-format:
+	$(FORMAT) --dry-run -Werror -style=file $(ALL_CXX_FILES)
+
 # ---- Library
 
 LIB_DIR = lib

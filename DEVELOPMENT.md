@@ -24,6 +24,8 @@ Current state: **1.21 (Development)**.
 - `make all`: Build the `fuse-archive` binary and the man page.
 - `make check-fast`: Run the fast subset of tests (recommended for most dev work).
 - `make check`: Run the full test suite (including large file tests).
+- `make check-format`: Verify that all C++ files are correctly formatted.
+- `make format`: Apply `clang-format` to all C++ files.
 - `make doc`: Regenerate the `fuse-archive.1` man page from `README.md`.
 - `make release`: Run the automated release workflow (see below).
 - `make clean-data`: Remove large generated test archives from `test/data`.

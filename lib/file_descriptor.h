@@ -88,7 +88,7 @@ class FileDescriptor {
   // Writes the data in 'b' to the file at 'pos' while detecting and skipping
   // large NUL sequences. This creates a sparse file to save disk space.
   // 'last_hole_start' tracks the start of the current potentially sparse
-  // region. 'on_hole' is called whenever a new hole is finalized. 
+  // region. 'on_hole' is called whenever a new hole is finalized.
   //
   // Returns the position immediately following the last written bytes,
   // or `last_hole_start` if nothing was written.

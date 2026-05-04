@@ -458,7 +458,8 @@ i64 Reader::CacheEntryData(const FileDescriptor& dest_fd,
           node->cache_offset = file_start_offset;
           node->cached_size = offset;
           node->size = offset;
-          node->last_hole_start = tree.options_.holes ? last_hole_start : dest_offset;
+          node->last_hole_start =
+              tree.options_.holes ? last_hole_start : dest_offset;
           assert(node->IsFullyCached());
         }
 
