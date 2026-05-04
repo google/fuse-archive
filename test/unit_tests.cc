@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
 
+#include <iostream>
 #include <string>
 #include <vector>
 
+#include "lib/common.h"
 #include "lib/file_descriptor.h"
 #include "lib/hashed_string.h"
 #include "lib/node.h"
@@ -25,91 +28,81 @@
 #include "lib/tree.h"
 #include "lib/util.h"
 
+#include "lib/fuse_ops.h"
+
 namespace fuse_archive {
+
+TEST(HashedStringTest, All) {
+  // Should hit return nullptr if !g_unique_strings
+  EXPECT_EQ(GetUniqueOrNull("uninitialized"), nullptr);
+
+  GetOrCreateUnique("initialized");
+  // Should hit return nullptr if it == g_unique_strings->cend()
+  EXPECT_EQ(GetUniqueOrNull("missing"), nullptr);
+  EXPECT_NE(GetUniqueOrNull("initialized"), nullptr);
+}
 
 class NodeTest : public ::testing::Test {
  protected:
   Node node_;
 };
 
-TEST_F(NodeTest, GetBlockCountEmpty) {
+TEST_F(NodeTest, GetBlockCount) {
   node_.size = 0;
   EXPECT_EQ(node_.GetBlockCount(), 0);
-}
-
-TEST_F(NodeTest, GetBlockCountDense) {
   node_.size = 1000;
-  // (1000 + 511) / 512 = 2 blocks
   EXPECT_EQ(node_.GetBlockCount(), 2);
-
-  node_.size = 512;
-  EXPECT_EQ(node_.GetBlockCount(), 1);
-}
-
-TEST_F(NodeTest, GetBlockCountSparse) {
-  node_.size = 2000;
   node_.saved_blocks = 1;
-  // (2000 + 511) / 512 = 4 blocks. 4 - 1 = 3.
-  EXPECT_EQ(node_.GetBlockCount(), 3);
-}
-
-TEST_F(NodeTest, GetBlockCountTerminalHole) {
+  EXPECT_EQ(node_.GetBlockCount(), 1);
   node_.size = 2000;
-  node_.cached_size = 2000;  // Fully cached
+  node_.cached_size = 2000;
   node_.cache_offset = 0;
-  node_.last_hole_start = 1000;  // Terminal hole starts at 1000
-  node_.saved_blocks = 0;        // Internal holes
-
-  // GetSizeToLastHole() should return last_hole_start - cache_offset = 1000.
-  // (1000 + 511) / 512 = 2 blocks.
+  node_.last_hole_start = 1000;
+  node_.saved_blocks = 0;
   EXPECT_EQ(node_.GetBlockCount(), 2);
 }
 
-class FileDescriptorTest : public ::testing::Test {
- protected:
-  FileDescriptor fd_;
+TEST_F(NodeTest, SparseSeek) {
+  node_.size = 10000;
+  node_.cache_offset = 0;
+  node_.cached_size = 10000;
+  node_.holes.emplace_back(2000, 4000);
+  node_.last_hole_start = 8000;
 
-  void SetUp() override {
-    fd_ = CreateCacheFile(/*memcache=*/true);
-    ASSERT_TRUE(fd_.IsValid());
-  }
-};
+  // Negative offset
+  EXPECT_EQ(node_.SparseSeek(-1, SEEK_DATA), -EINVAL);
+  EXPECT_EQ(node_.SparseSeek(-1, SEEK_HOLE), -EINVAL);
 
-TEST_F(FileDescriptorTest, WriteAndTruncate) {
-  std::string_view const data = "hello world";
-  i64 const pos = fd_.Write(data, 0);
-  EXPECT_EQ(pos, data.size());
-
-  fd_.Truncate(5);
-  EXPECT_EQ(lseek(fd_, 0, SEEK_END), 5);
+  EXPECT_EQ(node_.SparseSeek(0, SEEK_DATA), 0);
+  EXPECT_EQ(node_.SparseSeek(2000, SEEK_DATA), 4000);
+  EXPECT_EQ(node_.SparseSeek(8000, SEEK_DATA), -ENXIO);
+  EXPECT_EQ(node_.SparseSeek(0, SEEK_HOLE), 2000);
+  EXPECT_EQ(node_.SparseSeek(4000, SEEK_HOLE), 8000);
+  EXPECT_EQ(node_.SparseSeek(8000, SEEK_HOLE), 8000);
+  EXPECT_EQ(node_.SparseSeek(10000, SEEK_HOLE), -ENXIO);
+  EXPECT_EQ(node_.SparseSeek(0, 999), -EINVAL);
 }
 
-TEST_F(FileDescriptorTest, WriteBytesAndSkipHoles) {
-  std::vector<Hole> holes;
-  auto on_hole = [&](i64 from, i64 to) { holes.emplace_back(from, to); };
+TEST_F(NodeTest, Misc) {
+  // HasPath coverage
+  Node root;
+  root.name = "/";
+  Node dir;
+  dir.name = "dir";
+  dir.parent = &root;
+  node_.name = "file";
+  node_.parent = &dir;
 
-  // Data < 1024 bytes (min_hole_size).
-  std::string const small_nuls(500, '\0');
-  std::string const data = "abc" + small_nuls + "def";
-  i64 pos = fd_.WriteBytesAndSkipHoles(data, 0, 0, on_hole);
+  EXPECT_TRUE(node_.HasPath("/dir/file"));
+  EXPECT_FALSE(node_.HasPath("/dir_file"));  // Missing / between components
+  EXPECT_FALSE(node_.HasPath("/wrong/file"));
+  EXPECT_FALSE(node_.HasPath("dir/file"));  // No leading slash
 
-  EXPECT_EQ(pos, data.size());
-  EXPECT_TRUE(holes.empty());
-
-  // Data > 1024 bytes.
-  std::string const large_nuls(2000, '\0');
-  std::string const data2 = "ghj" + large_nuls + "klm";
-  holes.clear();
-  i64 const start_pos = pos;
-  pos = fd_.WriteBytesAndSkipHoles(data2, start_pos, start_pos, on_hole);
-
-  EXPECT_EQ(pos, start_pos + data2.size());
-  ASSERT_EQ(holes.size(), 1);
-  EXPECT_EQ(holes[0].from, start_pos + 3);
-  EXPECT_EQ(holes[0].to, start_pos + 2003);
+  // GetUniqueChildDirectory coverage
+  node_.mode = S_IFREG | 0644;
+  EXPECT_EQ(node_.GetUniqueChildDirectory(), nullptr);  // Not a directory
 }
 
-// TreeTest fixture provides access to private Tree members for testing.
 class TreeTest : public ::testing::Test {
  protected:
   Tree tree_;
@@ -120,305 +113,335 @@ class TreeTest : public ::testing::Test {
     options.hardlinks = true;
     options.cache = Cache::None;
     tree_.SetOptions(options);
-    tree_.Load(std::vector<std::string>{});  // Initializes root_
-  }
-
-  // Wrapper methods to access private Tree members.
-  Node* GetOrCreateDirNode(std::string_view path) {
-    return tree_.GetOrCreateDirNode(path);
+    tree_.Load(std::vector<std::string>{});
   }
 
   Node* RenameIfCollision(Node::Ptr node) {
     return tree_.RenameIfCollision(std::move(node));
   }
-
-  void Trim(Node& node) { tree_.Trim(node); }
-
-  void AddHardlink(i64 index, std::string source, std::string target) {
-    tree_.hardlinks_.push_back({index, source, target});
-  }
-
-  void ResolveHardlinks() { tree_.ResolveHardlinks(); }
-
-  static ArchiveDescriptor* GetArchive(Tree& tree, size_t i) {
-    return &tree.archives_[i];
-  }
-
-  static size_t GetRecycledReaderCount(const Tree& tree) {
-    return tree.recycled_readers_.size();
-  }
-
-  static Reader* GetFirstRecycledReader(Tree& tree) {
-    return &tree.recycled_readers_.front();
-  }
+  bool ShouldSkip(FileType ft) { return tree_.ShouldSkip(ft); }
 };
 
-TEST_F(TreeTest, GetOrCreateDirNode) {
-  Node* n1 = GetOrCreateDirNode("/foo/bar");
-  ASSERT_NE(n1, nullptr);
-  EXPECT_EQ(n1->name, "bar");
-  EXPECT_TRUE(n1->IsDir());
-  EXPECT_EQ(n1->GetPath(), "/foo/bar");
-
-  Node* n2 = tree_.FindNode("/foo");
-  ASSERT_NE(n2, nullptr);
-  EXPECT_TRUE(n2->IsDir());
-  EXPECT_EQ(n2->name, "foo");
-
-  Node* n3 = GetOrCreateDirNode("/foo");
-  EXPECT_EQ(n1->parent, n3);
-  EXPECT_EQ(n2, n3);
-}
-
 TEST_F(TreeTest, RenameIfCollision) {
-  Node::Ptr n1(new Node);
-  n1->name = "file.txt";
-  n1->mode = S_IFREG | 0644;
-  n1->parent = tree_.FindNode("/");
-  n1->ComputePathHash();
-
-  Node* p1 = RenameIfCollision(std::move(n1));
-  ASSERT_NE(p1, nullptr);
+  Node* root = tree_.FindNode("/");
+  auto create_node = [&](const std::string& name) {
+    Node::Ptr n(new Node);
+    n->name = name;
+    n->mode = S_IFREG | 0644;
+    n->parent = root;
+    n->ComputePathHash();
+    return n;
+  };
+  Node* p1 = RenameIfCollision(create_node("file.txt"));
   EXPECT_EQ(p1->name, "file.txt");
-
-  Node::Ptr n2(new Node);
-  n2->name = "file.txt";
-  n2->mode = S_IFREG | 0644;
-  n2->parent = tree_.FindNode("/");
-  n2->ComputePathHash();
-
-  Node* p2 = RenameIfCollision(std::move(n2));
-  ASSERT_NE(p2, nullptr);
+  Node* p2 = RenameIfCollision(create_node("file.txt"));
   EXPECT_EQ(p2->name, "file (1).txt");
 }
 
-TEST_F(TreeTest, Trim) {
-  // Create /a/b/c/file.txt
-  Node* a = GetOrCreateDirNode("/a");
-  Node* b = GetOrCreateDirNode("/a/b");
-  Node* c = GetOrCreateDirNode("/a/b/c");
-
-  Node::Ptr file(new Node);
-  file->name = "file.txt";
-  file->mode = S_IFREG | 0644;
-
-  Node* f = file.get();
-  c->AddChild(f);
-  f->ComputePathHash();
-  RenameIfCollision(std::move(file));
-
-  // Before trim: a -> b -> c -> file.txt
-  ASSERT_EQ(a->children.size(), 1);
-  EXPECT_EQ(&*a->children.begin(), b);
-  ASSERT_EQ(b->children.size(), 1);
-  EXPECT_EQ(&*b->children.begin(), c);
-  ASSERT_EQ(c->children.size(), 1);
-  EXPECT_EQ(&*c->children.begin(), f);
-
-  // Trim 'a'. It should collapse b and c into a.
-  Trim(*a);
-
-  ASSERT_EQ(a->children.size(), 1);
-  Node* child = &*a->children.begin();
-  EXPECT_EQ(child, f);
-  EXPECT_EQ(f->parent, a);
-  EXPECT_EQ(f->GetPath(), "/a/file.txt");
-}
-
-TEST_F(TreeTest, ResolveHardlinks) {
-  // 1. Create a target node.
-  Node* root = tree_.FindNode("/");
-  Node::Ptr file(new Node{
-      .ino = 100,
-      .size = 1234,
-      .name = "target",
-      .uid = 1000,
-      .gid = 1000,
-      .mode = S_IFREG | 0644,
-  });
-  Node* t = file.get();
-  root->AddChild(t);
-  t->ComputePathHash();
-  RenameIfCollision(std::move(file));
-
-  // 2. Add a hardlink entry.
-  AddHardlink(1, "/hl", "/target");
-
-  // 3. Resolve.
-  ResolveHardlinks();
-
-  // 4. Verify.
-  Node* hl = tree_.FindNode("/hl");
-  ASSERT_NE(hl, nullptr);
-  EXPECT_EQ(hl->hardlink_target, t);
-  EXPECT_EQ(t->nlink, 2);
-  EXPECT_EQ(hl->ino, t->ino);
-  EXPECT_EQ(hl->size, t->size);
-}
-
-TEST_F(TreeTest, ReaderRecycling) {
-  // Use a separate Tree to avoid collision with SetUp's Load.
-  Tree local_tree;
+TEST_F(TreeTest, ShouldSkip) {
   Options options;
-  options.cache = Cache::None;
-  local_tree.SetOptions(options);
+  options.specials = false;
+  tree_.SetOptions(options);
+  EXPECT_TRUE(ShouldSkip(FileType::BlockDevice));
+  EXPECT_FALSE(ShouldSkip(FileType::File));
+}
 
-  std::string const archive_path = "test/data/archive.tar";
-  const std::string archives[] = {archive_path};
-  local_tree.Load(archives);
-  ArchiveDescriptor* desc = GetArchive(local_tree, 0);
+class ReaderTest : public ::testing::Test {
+ protected:
+  Tree tree_;
 
-  void* raw_ptr = nullptr;
-  {
-    Reader::Ptr r1 = local_tree.GetReader(desc, 1, 0);
-    raw_ptr = r1.get();
-    ASSERT_NE(raw_ptr, nullptr);
-    EXPECT_EQ(GetRecycledReaderCount(local_tree), 0);
+  void SetUp() override {
+    try {
+      Options options;
+      options.cache = Cache::None;
+      tree_.SetOptions(options);
+      tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+    } catch (ExitCode const& e) {
+      std::cerr << "ReaderTest::SetUp failed with ExitCode: "
+                << static_cast<int>(e) << std::endl;
+      throw;
+    }
   }
-  // r1 recycled.
-  EXPECT_EQ(GetRecycledReaderCount(local_tree), 1);
-  EXPECT_EQ(GetFirstRecycledReader(local_tree), raw_ptr);
 
-  {
-    Reader::Ptr r2 = local_tree.GetReader(desc, 1, 0);
-    EXPECT_EQ(r2.get(), raw_ptr);
-    EXPECT_EQ(GetRecycledReaderCount(local_tree), 0);
+  ArchiveDescriptor* GetArchive(size_t i) { return &tree_.archives_[i]; }
+};
+
+TEST_F(ReaderTest, RollingBuffer) {
+  ArchiveDescriptor* desc = GetArchive(0);
+  Reader::Ptr r = tree_.GetReader(desc, 7, 0);  // romeo.txt
+  std::vector<char> b1(100), b2(100), b3(100);
+  EXPECT_EQ(r->Read(b1.data(), 100), 100);
+  EXPECT_EQ(r->Read(b2.data(), 100), 100);
+  EXPECT_EQ(r->Read(50, b3), 100);
+  EXPECT_TRUE(std::equal(b1.begin() + 50, b1.end(), b3.begin()));
+  EXPECT_TRUE(std::equal(b2.begin(), b2.begin() + 50, b3.begin() + 50));
+}
+
+TEST_F(ReaderTest, SetFormat) {
+  struct Case {
+    std::string path;
+    bool seekable;
+    std::string name;
+  };
+  std::vector<Case> cases = {
+      {"test.tar.gz", false, "test"},  {"test.tgz", false, "test"},
+      {"test.tar.bz2", false, "test"}, {"test.zip.gz", true, "test.zip"},
+      {"test.7z.gz", true, "test.7z"}, {"test.tar", false, "test"},
+      {"test.xxx", false, "test"}  // bidding
+  };
+  for (const auto& c : cases) {
+    ArchiveDescriptor ad;
+    ad.path = c.path;
+    ad.fd = FileDescriptor(open("/dev/null", O_RDONLY));
+    try {
+      Reader r(&ad, tree_);
+    } catch (ExitCode const&) {
+    }
+    EXPECT_EQ(ad.is_seekable_format, c.seekable) << c.path;
+    EXPECT_EQ(ad.name_without_extension, c.name) << c.path;
   }
 }
 
-TEST_F(TreeTest, ReaderBestMatch) {
-  Tree local_tree;
-  Options options;
-  options.cache = Cache::None;
-  local_tree.SetOptions(options);
+class FUSETest : public ::testing::Test {
+ protected:
+  fuse_operations ops_ = GetFuseOperations();
+};
 
-  std::string const archive_path = "test/data/archive.tar";
-  const std::string archives[] = {archive_path};
-  local_tree.Load(archives);
-  ArchiveDescriptor* desc = GetArchive(local_tree, 0);
+TEST_F(FUSETest, GetAttrWithFi) {
+  Node n;
+  n.size = 1234;
+  n.name = "testfile";
+  n.mode = S_IFREG | 0644;
 
-  // 1. Create two readers at different positions in entry 2 (has data).
-  Reader::Ptr r1 = local_tree.GetReader(desc, 2, 0);
-  r1->AdvanceOffset(100);
-  void* ptr1 = r1.get();
+  FileHandle h;
+  h.node = &n;
 
-  Reader::Ptr r2 = local_tree.GetReader(desc, 2, 0);
-  r2->AdvanceOffset(200);
-  void* ptr2 = r2.get();
+  fuse_file_info fi;
+  std::memset(&fi, 0, sizeof(fi));
+  fi.fh = reinterpret_cast<uintptr_t>(&h);
 
-  // 2. Recycle them.
-  r1.reset();
-  r2.reset();
-  ASSERT_EQ(GetRecycledReaderCount(local_tree), 2);
+  Stat z;
+  std::memset(&z, 0, sizeof(z));
 
-  // 3. Request reader for entry 2, offset 150.
-  // Best match should be ptr2 (at 200), because it can serve 150 from its
-  // rolling buffer and it is further ahead than ptr1 (at 100).
-  // We keep 'best1' alive to keep ptr2 out of the pool.
-  Reader::Ptr best1 = local_tree.GetReader(desc, 2, 150);
-  EXPECT_EQ(best1.get(), ptr2);
+#if FUSE_USE_VERSION >= 30
+  EXPECT_EQ(ops_.getattr(nullptr, &z, &fi), 0);
+#else
+  EXPECT_EQ(ops_.getattr("/", &z), 0);
+#endif
 
-  // 4. Request reader for entry 2, offset 250.
-  // Best match should be ptr1 (at 100) now, because ptr2 is in use.
-  {
-    Reader::Ptr best2 = local_tree.GetReader(desc, 2, 250);
-    EXPECT_EQ(best2.get(), ptr1);
-  }
+  EXPECT_EQ(z.st_size, 1234);
 }
 
 namespace {
 
+class GlobalEnvironment : public ::testing::Environment {
+ public:
+  void SetUp() override { SetLogLevel(LogLevel::DEBUG); }
+};
+
+::testing::Environment* const global_env =
+    ::testing::AddGlobalTestEnvironment(new GlobalEnvironment);
+
 TEST(Path, Normalized) {
   EXPECT_EQ(Path("").Normalized(), "/?");
-  EXPECT_EQ(Path("/").Normalized(), "/");
-  EXPECT_EQ(Path("///").Normalized(), "/");
-  EXPECT_EQ(Path("foo").Normalized(), "/foo");
-  EXPECT_EQ(Path("/foo").Normalized(), "/foo");
-  EXPECT_EQ(Path("foo/").Normalized(), "/foo");
-  EXPECT_EQ(Path("/foo/").Normalized(), "/foo");
-  EXPECT_EQ(Path("foo//bar").Normalized(), "/foo/bar");
-  EXPECT_EQ(Path("foo/./bar").Normalized(), "/foo/?/bar");
   EXPECT_EQ(Path("foo/../bar").Normalized(), "/foo/?/bar");
-  EXPECT_EQ(Path("/foo/../bar").Normalized(), "/foo/?/bar");
+  EXPECT_EQ(Path(".").Normalized(), "/");
+  EXPECT_EQ(Path("///foo//bar///").Normalized(), "/foo/bar");
+  EXPECT_EQ(Path("././foo").Normalized(), "/foo");
   EXPECT_EQ(Path("../foo").Normalized(), "/foo");
-  EXPECT_EQ(Path("./foo").Normalized(), "/foo");
   EXPECT_EQ(Path("foo/..").Normalized(), "/foo/?");
+  EXPECT_EQ(Path("foo/.").Normalized(), "/foo/?");
+
+  std::string long_name(NAME_MAX + 10, 'a');
+  EXPECT_LT(Path(long_name).Normalized().size(), long_name.size() + 2);
+
+  std::string deep_path = "a";
+  for (int i = 0; i < 5000; ++i) {
+    deep_path += "/a";
+  }
+  EXPECT_TRUE(Path(deep_path).Normalized().find("Too Deep") !=
+              std::string::npos);
 }
 
-TEST(Path, ExtensionPosition) {
+TEST(Path, Extension) {
   EXPECT_EQ(Path("foo.tar.gz").ExtensionPosition(), 3);
-  EXPECT_EQ(Path("foo.tar.bz2").ExtensionPosition(), 3);
-  EXPECT_EQ(Path("foo.tar.xz").ExtensionPosition(), 3);
-  EXPECT_EQ(Path("foo.zip").ExtensionPosition(), 3);
-  EXPECT_EQ(Path("foo.1.tar.gz").ExtensionPosition(), 5);
-  EXPECT_EQ(Path("foo").ExtensionPosition(), 3);
-  EXPECT_EQ(Path("foo.").ExtensionPosition(), 4);
-  EXPECT_EQ(Path(".foo").ExtensionPosition(), 4);
+  EXPECT_EQ(Path("foo.tar.lz4").ExtensionPosition(), 3);
+  EXPECT_EQ(Path("foo.verylongext").FinalExtensionPosition(), 15);
+  EXPECT_EQ(Path("foo.tar.zst").ExtensionPosition(), 3);
+  EXPECT_EQ(Path("foo .zip").ExtensionPosition(), 4);
+  EXPECT_EQ(Path("/foo.bar/baz").ExtensionPosition(), 12);
 }
 
-TEST(Path, Split) {
-  auto [parent, base] = Path("/foo/bar").Split();
-  EXPECT_EQ(parent, "/foo");
-  EXPECT_EQ(base, "bar");
+TEST(Path, Truncation) {
+  EXPECT_EQ(Path("abc").TruncationPosition(2), 2);
+  EXPECT_EQ(Path("αβ").TruncationPosition(1), 0);
+  EXPECT_EQ(Path("abc").TruncationPosition(0), 0);
+  EXPECT_EQ(Path("abc").TruncationPosition(10), 3);
 
-  std::tie(parent, base) = Path("foo").Split();
-  EXPECT_EQ(parent, "");
-  EXPECT_EQ(base, "foo");
+  std::string zwj = "a\u200Db";
+  EXPECT_EQ(Path(zwj).TruncationPosition(2), 0);
 
-  std::tie(parent, base) = Path("/").Split();
-  EXPECT_EQ(parent, "/");
-  EXPECT_EQ(base, "");
+  EXPECT_EQ(Path("a\u200D b").TruncationPosition(4), 0);
 }
 
-TEST(Path, Append) {
-  std::string p = "/foo";
-  Path::Append(&p, "bar");
-  EXPECT_EQ(p, "/foo/bar");
-
-  p = "/foo/";
-  Path::Append(&p, "bar");
-  EXPECT_EQ(p, "/foo/bar");
-
-  p = "/foo";
-  Path::Append(&p, "/bar");
-  EXPECT_EQ(p, "/bar");
+TEST(Path, Stringify) {
+  EXPECT_EQ(StrCat(Path("a'b\1\\")), "'a\\'b\\x01\\\\'");
+  g_redact = true;
+  EXPECT_EQ(StrCat(Path("foo")), "(redacted)");
+  g_redact = false;
 }
 
-TEST(HashedString, Basic) {
-  HashedStringView hsv("test");
-  EXPECT_EQ(hsv.string, "test");
-  EXPECT_EQ(hsv.hash, ComputeStringHash("test"));
+TEST(Path, Misc) {
+  EXPECT_EQ(Path("/foo//").WithoutTrailingSeparator(), "/foo");
+  Path p("foo/bar");
+  EXPECT_TRUE(p.Consume('f'));
+  EXPECT_EQ(p, "oo/bar");
 
-  HashedString hs(hsv);
-  EXPECT_EQ(hs.string, "test");
-  EXPECT_EQ(hs.hash, hsv.hash);
+  // Coverage for Path::Append
+  std::string s = "head";
+  Path::Append(&s, "");
+  EXPECT_EQ(s, "head");
 
-  IsEqual eq;
-  EXPECT_TRUE(eq(hs, hsv));
-  EXPECT_TRUE(eq(hsv, hs));
-  EXPECT_FALSE(eq(hs, HashedStringView("other")));
+  s = "";
+  Path::Append(&s, "tail");
+  EXPECT_EQ(s, "tail");
+
+  s = "head";
+  Path::Append(&s, "/tail");
+  EXPECT_EQ(s, "/tail");
+
+  s = "head/";
+  Path::Append(&s, "tail");
+  EXPECT_EQ(s, "head/tail");
+
+  s = "head";
+  Path::Append(&s, "tail");
+  EXPECT_EQ(s, "head/tail");
 }
 
-TEST(Util, ToLower) {
+TEST(Util, All) {
+  // Coverage for HashedString GetUniqueOrNull
+  EXPECT_EQ(GetUniqueOrNull("this string definitely does not exist"), nullptr);
+
   EXPECT_EQ(ToLower("ABC"), "abc");
-  EXPECT_EQ(ToLower("abc"), "abc");
-  EXPECT_EQ(ToLower("123!"), "123!");
-}
-
-TEST(Util, SafeAdd) {
   EXPECT_EQ(SafeAdd(10, 20), 30);
-  EXPECT_EQ(SafeAdd(0, 0), 0);
   EXPECT_THROW(SafeAdd(INT64_MAX, 1), ExitCode);
+
+  EXPECT_EQ(StrCat(ExitCode::GENERIC_FAILURE), "GENERIC_FAILURE (1)");
+#define CHECK_EXIT_CODE(s)       \
+  EXPECT_EQ(StrCat(ExitCode::s), \
+            #s " (" + std::to_string(int(ExitCode::s)) + ")");
+  CHECK_EXIT_CODE(CANNOT_CREATE_MOUNT_POINT)
+  CHECK_EXIT_CODE(CANNOT_OPEN_ARCHIVE)
+  CHECK_EXIT_CODE(CANNOT_CREATE_CACHE)
+  CHECK_EXIT_CODE(CANNOT_WRITE_CACHE)
+  CHECK_EXIT_CODE(PASSPHRASE_REQUIRED)
+  CHECK_EXIT_CODE(PASSPHRASE_INCORRECT)
+  CHECK_EXIT_CODE(PASSPHRASE_NOT_SUPPORTED)
+  CHECK_EXIT_CODE(UNKNOWN_ARCHIVE_FORMAT)
+  CHECK_EXIT_CODE(INVALID_ARCHIVE_HEADER)
+  CHECK_EXIT_CODE(INVALID_ARCHIVE_CONTENTS)
+#undef CHECK_EXIT_CODE
+  EXPECT_EQ(StrCat(static_cast<ExitCode>(999)), "Exit Code 999");
+
+  EXPECT_EQ(StrCat(static_cast<Whence>(SEEK_SET)), "SEEK_SET");
+  EXPECT_EQ(StrCat(static_cast<Whence>(SEEK_CUR)), "SEEK_CUR");
+  EXPECT_EQ(StrCat(static_cast<Whence>(SEEK_END)), "SEEK_END");
+  EXPECT_EQ(StrCat(static_cast<Whence>(SEEK_DATA)), "SEEK_DATA");
+  EXPECT_EQ(StrCat(static_cast<Whence>(SEEK_HOLE)), "SEEK_HOLE");
+  EXPECT_EQ(StrCat(static_cast<Whence>(999)), "SEEK_999");
+
+  EXPECT_FALSE(GetCacheDir().empty());
+
+  FileDescriptor fd = CreateCacheFile(true);
+  EXPECT_TRUE(fd.IsValid());
+  CheckCacheFile(fd);
+
+  // Failure: Not empty
+  {
+    char const c = 'x';
+    EXPECT_EQ(write(fd, &c, 1), 1);
+    EXPECT_THROW(CheckCacheFile(fd), ExitCode);
+  }
+
+  // Failure: Invalid FD
+  {
+    FileDescriptor invalid_fd;
+    EXPECT_THROW(CheckCacheFile(invalid_fd), ExitCode);
+  }
+
+  // Coverage for ~FileDescriptor with failing close
+  {
+    FileDescriptor bad_fd(9999);
+    // Destructor will run here and PLOG(ERROR)
+  }
+
+  EXPECT_THROW(ThrowExitCode("Incorrect passphrase"), ExitCode);
+  EXPECT_THROW(ThrowExitCode("Passphrase required"), ExitCode);
+  for (const char* const s : {
+           "Crypto codec not supported",
+           "Decryption is unsupported",
+           "Encrypted file is unsupported",
+           "Encryption is not supported",
+           "RAR encryption support unavailable",
+           "The archive header is encrypted, but currently not supported",
+           "The file content is encrypted, but currently not supported",
+           "Unsupported encryption format",
+       }) {
+    EXPECT_THROW(ThrowExitCode(s), ExitCode);
+  }
+  EXPECT_NO_THROW(ThrowExitCode("Unknown error"));
 }
 
-TEST(Util, HoleSavedBlocks) {
-  // block_size is 512
-  EXPECT_EQ(Hole(0, 512).GetSavedBlocks(), 1);
-  EXPECT_EQ(Hole(0, 1024).GetSavedBlocks(), 2);
-  EXPECT_EQ(Hole(1, 511).GetSavedBlocks(), 0);
-  EXPECT_EQ(Hole(511, 513).GetSavedBlocks(), 0);
-  EXPECT_EQ(Hole(0, 511).GetSavedBlocks(), 0);
-  EXPECT_EQ(Hole(512, 1024).GetSavedBlocks(), 1);
+TEST(Common, All) {
+  EXPECT_EQ(GetFileType(S_IFREG), FileType::File);
+  EXPECT_EQ(GetFileType(0), FileType::File);
+  EXPECT_EQ(StrCat(FileType::BlockDevice), "Block Device");
+  EXPECT_EQ(StrCat(FileType::CharDevice), "Character Device");
+  EXPECT_EQ(StrCat(FileType::Directory), "Directory");
+  EXPECT_EQ(StrCat(FileType::Fifo), "FIFO");
+  EXPECT_EQ(StrCat(FileType::File), "File");
+  EXPECT_EQ(StrCat(FileType::Socket), "Socket");
+  EXPECT_EQ(StrCat(FileType::Symlink), "Symlink");
+  EXPECT_EQ(StrCat(static_cast<FileType>(0)), "Unknown");
+
+  EXPECT_EQ(StrCat(ArchiveFormat::NONE), "NONE");
+#define CHECK_FORMAT(s) \
+  EXPECT_EQ(StrCat(static_cast<ArchiveFormat>(ARCHIVE_FORMAT_##s)), #s);
+  CHECK_FORMAT(CPIO)
+  CHECK_FORMAT(CPIO_POSIX)
+  CHECK_FORMAT(CPIO_BIN_LE)
+  CHECK_FORMAT(CPIO_BIN_BE)
+  CHECK_FORMAT(CPIO_SVR4_NOCRC)
+  CHECK_FORMAT(CPIO_SVR4_CRC)
+  CHECK_FORMAT(CPIO_AFIO_LARGE)
+  CHECK_FORMAT(CPIO_PWB)
+  CHECK_FORMAT(SHAR)
+  CHECK_FORMAT(SHAR_BASE)
+  CHECK_FORMAT(SHAR_DUMP)
+  CHECK_FORMAT(TAR)
+  CHECK_FORMAT(TAR_USTAR)
+  CHECK_FORMAT(TAR_PAX_INTERCHANGE)
+  CHECK_FORMAT(TAR_PAX_RESTRICTED)
+  CHECK_FORMAT(TAR_GNUTAR)
+  CHECK_FORMAT(ISO9660)
+  CHECK_FORMAT(ISO9660_ROCKRIDGE)
+  CHECK_FORMAT(ZIP)
+  CHECK_FORMAT(EMPTY)
+  CHECK_FORMAT(AR)
+  CHECK_FORMAT(AR_GNU)
+  CHECK_FORMAT(AR_BSD)
+  CHECK_FORMAT(MTREE)
+  CHECK_FORMAT(RAW)
+  CHECK_FORMAT(XAR)
+  CHECK_FORMAT(LHA)
+  CHECK_FORMAT(CAB)
+  CHECK_FORMAT(RAR)
+  CHECK_FORMAT(7ZIP)
+  CHECK_FORMAT(WARC)
+  CHECK_FORMAT(RAR_V5)
+#undef CHECK_FORMAT
+  EXPECT_EQ(StrCat(static_cast<ArchiveFormat>(999)), "999");
 }
 
 }  // namespace

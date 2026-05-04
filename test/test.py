@@ -227,7 +227,10 @@ def MountArchive(zip_names, options=[], password='', env=env):
             os.path.join(script_dir, 'data', zip_name) for zip_name in zip_names
         ]
         logging.debug(f'Mounting {zip_paths!r} on {mount_point!r}...')
-        command = [mount_program, *options, *zip_paths, mount_point]
+        command = [mount_program, *options]
+        if args.verbose: command.append('-v')
+        command.extend([*zip_paths, mount_point])
+        logging.debug(f'Command: {command}')
         if 'MOUNT_WRAPPER' in env:
             command = env['MOUNT_WRAPPER'].split() + command
         subprocess.run(
@@ -2101,6 +2104,334 @@ def TestExtendedAttributes(options=[]):
     }
     MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
 
+# Tests FUSE error paths.
+# Tests automatic mount point creation, removal, and deduplication.
+# Tests multi-archive usage constraints.
+def TestMultiArchiveUsage():
+    logging.info("Testing multi-archive usage constraints")
+    zip_path1 = os.path.join(script_dir, 'data', 'multi1.tar.gz')
+    zip_path2 = os.path.join(script_dir, 'data', 'multi2.tar.gz')
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        mount_point = os.path.join(tmp_dir, 'mnt')
+        os.mkdir(mount_point)
+
+        # 1. Correct usage: 2 archives + 1 mount point
+        command = [mount_program, '-f', '-o', 'notrim', zip_path1, zip_path2, mount_point]
+        if args.verbose: command.append('-v')
+
+        proc = subprocess.Popen(command)
+        try:
+            for _ in range(20):
+                if os.path.ismount(mount_point): break
+                time.sleep(0.1)
+            if not os.path.ismount(mount_point):
+                LogError("Multi-archive mount failed with explicit mount point")
+            else:
+                if not os.path.exists(os.path.join(mount_point, 'a/b/c/file1')):
+                    LogError("Missing file1 in multi-archive mount")
+                if not os.path.exists(os.path.join(mount_point, 'a/b/d/file2')):
+                    LogError("Missing file2 in multi-archive mount")
+        finally:
+            proc.terminate()
+            proc.wait()
+
+        # 2. Ambiguous usage: 2 archives, no mount point provided.
+        # The second archive will be treated as the mount point.
+        # We use symlinks to avoid copying and messing up the test data.
+        zip_link1 = os.path.join(tmp_dir, 'link1.tar.gz')
+        zip_link2 = os.path.join(tmp_dir, 'link2.tar.gz')
+        os.symlink(zip_path1, zip_link1)
+        os.symlink(zip_path2, zip_link2)
+
+        # This will attempt to mount zip_link1 ON zip_link2.
+        command = [mount_program, '-f', zip_link1, zip_link2]
+        if args.verbose: command.append('-v')
+
+        proc = subprocess.Popen(command)
+        try:
+            for _ in range(20):
+                if os.path.ismount(zip_link2): break
+                time.sleep(0.1)
+            # Mounting on a file might not work on all systems or might require special flags,
+            # but we check if fuse-archive at least attempted it.
+            # On Linux, mounting on a file IS allowed.
+            if not os.path.ismount(zip_link2):
+                logging.info("Note: Mounting on a file (auto-mount point) not supported or failed as expected")
+        finally:
+            proc.terminate()
+            proc.wait()
+
+# Tests usage information, help, and version options.
+def TestUsage():
+    logging.info("Testing usage information")
+    # No arguments
+    res = subprocess.run([mount_program], capture_output=True)
+    if res.returncode != 1:
+        LogError(f"Expected exit code 1 for no arguments, got {res.returncode}")
+
+    # Help and version options
+    logging.info("Testing help and version options")
+    for opt in ['-h', '--help', '-V', '--version']:
+        res = subprocess.run([mount_program, opt], capture_output=True, text=True)
+        if res.returncode != 0:
+            LogError(f"Option {opt} failed with {res.returncode}")
+
+    # Quiet flag
+    logging.info("Testing quiet flag")
+    zip_name = 'archive.tar'
+    with MountArchive(zip_name, options=['-q']) as mount_point:
+        if not os.path.exists(mount_point):
+            LogError("Mount point does not exist with -q flag")
+
+# Tests automatic mount point creation, removal, and deduplication.
+def TestAutoMountPoint():
+    logging.info("Testing automatic mount point creation and removal")
+    zip_path = os.path.join(script_dir, 'data', 'archive.tar')
+    dash_archive_path = os.path.join(script_dir, 'data', '--help')
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # 1. Standard auto-mount (relative path to trigger './' prepending)
+        mount_point = os.path.join(tmp_dir, 'archive')
+        command = [mount_program, '-f', '-v', zip_path]
+        
+        proc = subprocess.Popen(command, cwd=tmp_dir)
+        try:
+            for _ in range(20):
+                if os.path.ismount(mount_point): break
+                time.sleep(0.1)
+            if not os.path.ismount(mount_point):
+                LogError("Automatic mount point was not created or mounted")
+        finally:
+            proc.terminate()
+            proc.wait()
+            if os.path.exists(mount_point):
+                LogError("Automatic mount point was not removed")
+
+        # 2. Deduplication
+        # Create 'archive' directory first
+        os.mkdir(os.path.join(tmp_dir, 'archive'))
+        dedup_mount_point = os.path.join(tmp_dir, 'archive (1)')
+        
+        proc = subprocess.Popen(command, cwd=tmp_dir)
+        try:
+            for _ in range(20):
+                if os.path.ismount(dedup_mount_point): break
+                time.sleep(0.1)
+            if not os.path.ismount(dedup_mount_point):
+                LogError("Deduplicated mount point 'archive (1)' was not created")
+        finally:
+            proc.terminate()
+            proc.wait()
+            if os.path.exists(dedup_mount_point):
+                LogError("Deduplicated mount point was not removed")
+            if not os.path.exists(os.path.join(tmp_dir, 'archive')):
+                LogError("Original 'archive' directory was accidentally removed")
+            os.rmdir(os.path.join(tmp_dir, 'archive'))
+
+        # 3. Mount point starting with '-' (using permanent symlink test/data/--help)
+        command_dash = [mount_program, '-f', dash_archive_path]
+        if args.verbose: command_dash.append('-v')
+
+        proc = subprocess.Popen(command_dash, cwd=tmp_dir)
+        try:
+            mount_point_dash = os.path.join(tmp_dir, '--help')
+            for _ in range(20):
+                if os.path.ismount(mount_point_dash):
+                    break
+                time.sleep(0.1)
+            if not os.path.ismount(mount_point_dash):
+                LogError(
+                    f"Automatic mount point '--help' was not created or mounted"
+                )
+        finally:
+            proc.terminate()
+            proc.wait()
+            if os.path.exists(mount_point_dash):
+                LogError(f"Automatic mount point '--help' was not removed")
+
+        # 4. Mount point creation failure (e.g. read-only directory)
+        readonly_dir = os.path.join(tmp_dir, 'readonly')
+        os.mkdir(readonly_dir)
+        os.chmod(readonly_dir, 0o555) # Read and execute, but no write
+        try:
+            command_fail = [mount_program, zip_path]
+            res = subprocess.run(command_fail, capture_output=True, cwd=readonly_dir)
+            if res.returncode != 10:
+                LogError(f"Expected exit code 10 for mount point creation failure, got {res.returncode}")
+        finally:
+            os.chmod(readonly_dir, 0o777)
+            os.rmdir(readonly_dir)
+
+        # 5. Mounting in non-existent parent directory
+        nonexistent_parent = os.path.join(tmp_dir, 'no/such/dir/mnt')
+        try:
+            command_nonexistent = [mount_program, zip_path, nonexistent_parent]
+            res = subprocess.run(command_nonexistent, capture_output=True)
+            if res.returncode != 10:
+                LogError(f"Expected exit code 10 for non-existent parent, got {res.returncode}")
+        except:
+            pass
+
+        # 6. Empty string for mount point
+        try:
+            command_empty = [mount_program, zip_path, ""]
+            res = subprocess.run(command_empty, capture_output=True)
+            if res.returncode != 10:
+                LogError(f"Expected exit code 10 for empty mount point, got {res.returncode}")
+        except:
+            pass
+
+def TestFuseErrors():
+    logging.info("Testing FUSE error paths")
+    zip_name = 'archive.tar'
+    # Use direct_io to ensure Seek callback is triggered for SEEK_DATA/HOLE
+    with MountArchive(zip_name, options=['-o', 'direct_io']) as mount_point:
+        # ENOENT
+        path = os.path.join(mount_point, 'nonexistent')
+        try:
+            os.stat(path)
+            LogError(f"Expected ENOENT for {path}")
+        except OSError as e:
+            if e.errno != 2: LogError(f"Expected ENOENT (2), got {e.errno}")
+
+        # ENOENT on xattrs
+        try:
+            os.getxattr(path, 'user.attr')
+            LogError(f"Expected ENOENT for xattr on nonexistent path")
+        except OSError as e:
+            if e.errno != 2: LogError(f"Expected ENOENT (2), got {e.errno}")
+
+        # ENOTDIR
+        path = os.path.join(mount_point, 'romeo.txt', 'inside')
+        try:
+            os.stat(path)
+            LogError(f"Expected ENOTDIR for {path}")
+        except OSError as e:
+            if e.errno != 20: LogError(f"Expected ENOTDIR, got {e.errno}")
+
+        # EISDIR on open
+        path = mount_point
+        try:
+            fd = os.open(path, os.O_RDONLY)
+            os.close(fd)
+        except OSError as e:
+            if e.errno != 21: LogError(f"Expected EISDIR, got {e.errno}")
+
+        # EINVAL on readlink of a file
+        path = os.path.join(mount_point, 'romeo.txt')
+        try:
+            os.readlink(path)
+            LogError(f"Expected EINVAL for readlink on file")
+        except OSError as e:
+            if e.errno != 22: LogError(f"Expected EINVAL (22), got {e.errno}")
+
+        # ENODATA on getxattr for missing attribute
+        try:
+            os.getxattr(path, 'user.nonexistent')
+            LogError(f"Expected ENODATA for missing xattr")
+        except OSError as e:
+            # ENODATA is 61 on Linux
+            if e.errno != 61: LogError(f"Expected ENODATA (61), got {e.errno}")
+
+    # ERANGE on getxattr with small buffer
+    zip_name = 'many-xattrs.tar'
+    with MountArchive(zip_name) as mount_point:
+        path = os.path.join(mount_point, 'file.txt')
+        # Use subprocess to call getxattr with a small buffer via 'getfattr'
+        # Actually, getfattr doesn't easily allow specifying buffer size.
+        # Let's skip ERANGE for now or use a different method if needed.
+        pass
+
+    # ENOTSUP for xattrs if disabled
+    zip_name = 'archive.tar'
+    with MountArchive(zip_name, options=['-o', 'noxattrs']) as mount_point:
+        # 'romeo.txt' exists in archive.tar
+        path = os.path.join(mount_point, 'romeo.txt')
+        # When xattrs are enabled (default) but the file has none, listxattr returns empty.
+        # But here we used -o noxattrs.
+        # As seen in fuse_ops.cc, GetXattr/ListXattr are always set if HAVE_XATTR is defined.
+        # They don't check g_options.xattrs.
+        # So they will just see empty node->attributes and return success (empty list) or ENODATA.
+        try:
+            os.listxattr(path)
+        except OSError:
+            pass
+
+        # Path traversal / security components
+        for p in ['.', '..', 'foo/../bar']:
+            path = os.path.join(mount_point, p)
+            # FUSE/OS usually resolves these before they reach the FS,
+            # but we want to ensure no crashes or unexpected behavior.
+            try:
+                os.stat(path)
+            except OSError:
+                pass
+
+        # ENAMETOOLONG
+        path = os.path.join(mount_point, 'a' * 5000)
+        try:
+            os.stat(path)
+        except OSError as e:
+            # ENAMETOOLONG is 36 on Linux
+            if e.errno != 36: LogError(f"Expected ENAMETOOLONG (36), got {e.errno}")
+
+        # ENOTDIR on opendir of a file
+        path = os.path.join(mount_point, 'romeo.txt')
+        try:
+            os.listdir(path)
+            LogError(f"Expected ENOTDIR for listdir on {path}")
+        except OSError as e:
+            if e.errno != 20: LogError(f"Expected ENOTDIR (20), got {e.errno}")
+
+        # SEEK_DATA / SEEK_HOLE errors
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            # fstat should trigger GetAttr with fi
+            st = os.fstat(fd)
+            if st.st_size == 0:
+                LogError(f"fstat returned 0 size for {path}")
+
+            # SEEK_DATA past end should return ENXIO
+            try:
+                os.lseek(fd, 1000000, 3) # os.SEEK_DATA is 3
+                LogError(f"Expected ENXIO for seek data past end")
+            except OSError as e:
+                # ENXIO is 6 on Linux
+                if e.errno != 6: LogError(f"Expected ENXIO (6), got {e.errno}")
+        finally:
+            os.close(fd)
+
+        # StatFs
+        os.statvfs(mount_point)
+
+    # Jump tests for Read
+    with MountArchive(zip_name, options=['-o', 'nocache,direct_io']) as mount_point:
+        path = os.path.join(mount_point, 'romeo.txt')
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            # Read at offset 512KB (past default 256KB rolling buffer)
+            os.lseek(fd, 512 * 1024, os.SEEK_SET)
+            os.read(fd, 100)
+            # Jump backwards to 0 (should reset reader)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.read(fd, 100)
+            # Jump forwards past rolling buffer (another 512KB)
+            os.lseek(fd, 1024 * 1024, os.SEEK_SET)
+            os.read(fd, 100)
+        finally:
+            os.close(fd)
+
+    # Testing redact option
+    with MountArchive(zip_name, options=['-o', 'redact']) as mount_point:
+        os.stat(mount_point)
+
+    # Multiple archives
+    with MountArchive(['multi1.tar.gz', 'multi2.tar.gz'], options=['-o', 'notrim', '-v']) as mount_point:
+        if not os.path.exists(os.path.join(mount_point, 'a/b/c/file1')):
+            LogError("Missing a/b/c/file1 in multi-archive mount")
+        if not os.path.exists(os.path.join(mount_point, 'a/b/d/file2')):
+            LogError("Missing a/b/d/file2 in multi-archive mount")
 
 if has_gpg:
     b = b' BLOCK'
@@ -2170,6 +2501,11 @@ TestExtendedAttributes()
 TestExtendedAttributes(['-o', 'nocache'])
 TestExtendedAttributes(['-o', 'lazycache'])
 if has_memcache: TestExtendedAttributes(['-o', 'memcache'])
+
+TestMultiArchiveUsage()
+TestUsage()
+TestAutoMountPoint()
+TestFuseErrors()
 TestInvalidArchive()
 TestMasks()
 TestArchiveWithManyFiles()

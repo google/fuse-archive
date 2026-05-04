@@ -17,7 +17,16 @@
 
 #include <fuse.h>
 
+#include "reader.h"
+
 namespace fuse_archive {
+
+struct Node;
+
+struct FileHandle {
+  Node* node = nullptr;
+  Reader::Ptr reader;
+};
 
 // Returns a populated fuse_operations struct containing all the callback
 // functions required for the FUSE filesystem behavior.

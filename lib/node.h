@@ -189,6 +189,10 @@ struct Node {
   // Returns the POSIX 'struct stat' representation of this node's metadata.
   Stat GetStat() const;
 
+  // Performs a sparse seek (SEEK_DATA or SEEK_HOLE) on this node.
+  // Returns the new offset or a negative error code (e.g., -ENXIO, -EINVAL).
+  off_t SparseSeek(off_t offset, int whence) const;
+
   // Returns the full absolute path of this node within the virtual file system.
   std::string GetPath() const;
 

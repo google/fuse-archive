@@ -106,6 +106,64 @@ Stat Node::GetStat() const {
   return z;
 }
 
+off_t Node::SparseSeek(off_t const offset, int const whence) const {
+  const Node* const t = GetTarget();
+  i64 const last_hole_start = t->GetSizeToLastHole();
+  Holes::const_iterator const it =
+      std::ranges::upper_bound(t->holes, offset, std::less<i64>(), &Hole::to);
+
+  switch (whence) {
+    case SEEK_DATA:
+      if (offset < 0) {
+        return -EINVAL;
+      }
+
+      if (offset >= last_hole_start) {
+        // offset is in terminal hole
+        return -ENXIO;
+      }
+
+      if (it != t->holes.end() && it->from <= offset) {
+        assert(offset < it->to);
+        // offset is located in a non-terminal hole
+        return it->to;
+      }
+
+      return offset;
+
+    case SEEK_HOLE:
+      if (offset < 0) {
+        return -EINVAL;
+      }
+
+      if (offset >= t->size) {
+        // offset is past the end of the file
+        return -ENXIO;
+      }
+
+      if (offset >= last_hole_start) {
+        // offset is in terminal hole
+        return offset;
+      }
+
+      if (it == t->holes.end()) {
+        // offset is data before the terminal hole
+        return last_hole_start;
+      }
+
+      if (offset < it->from) {
+        // offset is in data between holes
+        return it->from;
+      }
+
+      // offset is in a non-terminal hole
+      return offset;
+
+    default:
+      return -EINVAL;
+  }
+}
+
 // Gets the full absolute path of this node.
 std::string Node::GetPath() const {
   if (IsRoot()) {

@@ -179,16 +179,31 @@ FileDescriptor CreateCacheFile(bool memcache) {
 #if defined(__linux__)
     fd = FileDescriptor(memfd_create("fuse-archive", MFD_CLOEXEC));
     if (fd.IsValid()) {
-      LOG(DEBUG) << "Created memory-backed cache file";
+      LOG(DEBUG) << "Created memory-backed cache file (memfd_create)";
+      return fd;
+    }
+#endif
+
+#if defined(SHM_ANON)
+    fd = FileDescriptor(shm_open(SHM_ANON, O_RDWR | O_CLOEXEC, 0600));
+    if (fd.IsValid()) {
+      LOG(DEBUG) << "Created memory-backed cache file (shm_open SHM_ANON)";
+      return fd;
+    }
+#endif
+
+    std::string const shm_name = "/fuse-archive-" + std::to_string(getpid());
+    fd = FileDescriptor(
+        shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
+    if (fd.IsValid()) {
+      shm_unlink(shm_name.c_str());
+      LOG(DEBUG) << "Created memory-backed cache file (shm_open " << shm_name
+                 << ")";
       return fd;
     }
 
     PLOG(ERROR) << "Cannot create memory-backed cache file";
     throw ExitCode::CANNOT_CREATE_CACHE;
-#else
-    LOG(ERROR) << "Memory-backed cache file is only supported on Linux";
-    throw ExitCode::CANNOT_CREATE_CACHE;
-#endif
   }
 
   std::string const cache_dir = GetCacheDir();

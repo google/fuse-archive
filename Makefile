@@ -39,6 +39,11 @@ COMMON_CXXFLAGS += -fsanitize=undefined
 PKG_LDFLAGS += -fsanitize=undefined
 endif
 
+ifeq ($(COVERAGE), 1)
+COMMON_CXXFLAGS += -fprofile-arcs -ftest-coverage
+LDFLAGS += --coverage
+endif
+
 PREFIX ?= /usr
 BINDIR = $(PREFIX)/bin
 MANDIR = $(PREFIX)/share/man/man1
@@ -108,6 +113,14 @@ valgrind: out/$(PROJECT) out/$(UNIT_TEST)
 	valgrind -q --leak-check=full --error-exitcode=33 out/$(UNIT_TEST)
 	MOUNT_WRAPPER="valgrind -q --leak-check=full --error-exitcode=33" python3 test/test.py --fast
 
+coverage:
+	$(MAKE) clean
+	$(MAKE) DEBUG=1 COVERAGE=1 check-fast
+	lcov --capture --directory out --output-file out/coverage.info --ignore-errors mismatch,inconsistent
+	lcov --remove out/coverage.info '/usr/include/*' '/usr/lib/*' 'test/*' --output-file out/coverage.info --ignore-errors unused,inconsistent
+	genhtml out/coverage.info --output-directory out/coverage --ignore-errors inconsistent
+	@echo "Coverage report generated at out/coverage/index.html"
+
 test: check
 
 unit_tests: out/$(UNIT_TEST)
@@ -163,4 +176,5 @@ test/data/deep.tar: test/make_deep.py
 test/data/many_nodes.zip: test/make_many_nodes.py
 	python3 test/make_many_nodes.py
 
-.PHONY: all check check-fast check-format clean clean-data doc format install install-strip release test uninstall unit_test valgrind
+.PHONY: all check check-fast check-format clean clean-data coverage doc format install install-strip release test uninstall unit_tests valgrind
+

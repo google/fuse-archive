@@ -105,6 +105,7 @@ class Tree {
   i64 GetInodeCount() const { return inode_count_; }
 
  private:
+  friend class ReaderTest;
   friend class TreeTest;
   friend struct Reader;
 
