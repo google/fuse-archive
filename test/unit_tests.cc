@@ -30,6 +30,10 @@
 
 #include "lib/fuse_ops.h"
 
+#ifndef ENOATTR
+#define ENOATTR ENODATA
+#endif
+
 namespace fuse_archive {
 
 TEST(HashedStringTest, All) {
@@ -256,6 +260,24 @@ TEST_F(FUSETest, GetAttrByPath) {
 #endif
 }
 
+TEST_F(FUSETest, GetAttrByFi) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  fuse_file_info fi;
+  std::memset(&fi, 0, sizeof(fi));
+  EXPECT_EQ(ops_.open("/romeo.txt", &fi), 0);
+  EXPECT_NE(fi.fh, 0);
+
+  Stat z;
+#if FUSE_USE_VERSION >= 30
+  EXPECT_EQ(ops_.getattr(nullptr, &z, &fi), 0);
+#else
+  EXPECT_EQ(ops_.getattr("/romeo.txt", &z), 0);
+#endif
+  EXPECT_GT(z.st_size, 0);
+
+  ops_.release("/romeo.txt", &fi);
+}
+
 TEST_F(FUSETest, Xattr) {
   tree_.Load(std::vector<std::string>{"test/data/many-xattrs.tar"});
   char buf[1024];
@@ -269,7 +291,10 @@ TEST_F(FUSETest, Xattr) {
 
   // Missing attribute
   EXPECT_EQ(ops_.getxattr("/file.txt", "user.nonexistent", buf, sizeof(buf)),
-            -ENODATA);
+            -ENOATTR);
+
+  // Attribute exists on another node (file.txt) but not on the root directory
+  EXPECT_EQ(ops_.getxattr("/", "user.attr_0001", buf, sizeof(buf)), -ENOATTR);
 
   // Missing file
   EXPECT_EQ(ops_.getxattr("/nonexistent", "user.test", buf, sizeof(buf)),
@@ -342,6 +367,22 @@ TEST_F(FUSETest, Seek) {
   ops_.release("/romeo.txt", &fi);
 }
 #endif
+
+TEST_F(FUSETest, OpenDir) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  fuse_file_info fi;
+  std::memset(&fi, 0, sizeof(fi));
+
+  // Success
+  EXPECT_EQ(ops_.opendir("/", &fi), 0);
+  EXPECT_NE(fi.fh, 0);
+
+  // Non-existent path
+  EXPECT_EQ(ops_.opendir("/nonexistent", &fi), -ENOENT);
+
+  // Not a directory (romeo.txt is a file)
+  EXPECT_EQ(ops_.opendir("/romeo.txt", &fi), -ENOTDIR);
+}
 
 TEST_F(FUSETest, ReadDir) {
   tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
