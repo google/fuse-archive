@@ -84,7 +84,11 @@ using namespace ::fuse_archive;
 // ---- Context
 
 struct Context {
+  static_assert(sizeof(Cache) == sizeof(int));
+  static_assert(sizeof(LogLevel) == sizeof(int));
+
   Options options;
+  LogLevel log_level = LogLevel::INFO;
   int help = 0;
   int version = 0;
   std::vector<std::string> archives;
@@ -92,34 +96,27 @@ struct Context {
 
 // ---- Globals
 
-enum {
-  KEY_QUIET,
-  KEY_VERBOSE,
-  KEY_LAZY_CACHE,
-  KEY_NO_CACHE,
-  KEY_NO_DIRS,
-};
-
 fuse_opt const g_fuse_opts[] = {
     {"--help", offsetof(Context, help), 1},
     {"-h", offsetof(Context, help), 1},
     {"--version", offsetof(Context, version), 1},
     {"-V", offsetof(Context, version), 1},
-    FUSE_OPT_KEY("--quiet", KEY_QUIET),
-    FUSE_OPT_KEY("quiet", KEY_QUIET),
-    FUSE_OPT_KEY("-q", KEY_QUIET),
-    FUSE_OPT_KEY("--verbose", KEY_VERBOSE),
-    FUSE_OPT_KEY("verbose", KEY_VERBOSE),
-    FUSE_OPT_KEY("-v", KEY_VERBOSE),
+    {"--verbose", offsetof(Context, log_level), int(LogLevel::DEBUG)},
+    {"verbose", offsetof(Context, log_level), int(LogLevel::DEBUG)},
+    {"-v", offsetof(Context, log_level), int(LogLevel::DEBUG)},
+    {"--quiet", offsetof(Context, log_level), int(LogLevel::ERROR)},
+    {"quiet", offsetof(Context, log_level), int(LogLevel::ERROR)},
+    {"-q", offsetof(Context, log_level), int(LogLevel::ERROR)},
     {"--redact", offsetof(Context, options.redact), 1},
     {"redact", offsetof(Context, options.redact), 1},
     {"force", offsetof(Context, options.force), 1},
-    FUSE_OPT_KEY("lazycache", KEY_LAZY_CACHE),
+    {"precache", offsetof(Context, options.cache), int(Cache::Full)},
+    {"lazycache", offsetof(Context, options.cache), int(Cache::Lazy)},
+    {"nocache", offsetof(Context, options.cache), int(Cache::None)},
     {"memcache", offsetof(Context, options.memcache), 1},
-    FUSE_OPT_KEY("nocache", KEY_NO_CACHE),
     {"nomerge", offsetof(Context, options.merge), 0},
     {"notrim", offsetof(Context, options.trim), 0},
-    FUSE_OPT_KEY("nodirs", KEY_NO_DIRS),
+    {"nodirs", offsetof(Context, options.dirs), 0},
     {"nospecials", offsetof(Context, options.specials), 0},
     {"nosymlinks", offsetof(Context, options.symlinks), 0},
     {"noholes", offsetof(Context, options.holes), 0},
@@ -148,27 +145,6 @@ int ProcessArg(void* data, const char* const arg, int const key, fuse_args*) {
   switch (key) {
     case FUSE_OPT_KEY_NONOPT:
       ctx.archives.push_back(arg);
-      return DISCARD;
-
-    case KEY_QUIET:
-      SetLogLevel(LogLevel::ERROR);
-      return DISCARD;
-
-    case KEY_VERBOSE:
-      SetLogLevel(LogLevel::DEBUG);
-      return DISCARD;
-
-    case KEY_LAZY_CACHE:
-      ctx.options.cache = Cache::Lazy;
-      return DISCARD;
-
-    case KEY_NO_CACHE:
-      ctx.options.cache = Cache::None;
-      return DISCARD;
-
-    case KEY_NO_DIRS:
-      ctx.options.dirs = false;
-      ctx.options.hardlinks = false;
       return DISCARD;
   }
 
@@ -251,6 +227,7 @@ general options:
     -o redact              redact paths from log messages
     -o force               continue despite errors
     -o maxfilters=N        max number of filters (default 1)
+    -o precache            pre-emptive caching of uncompressed data (default)
     -o lazycache           incremental caching of uncompressed data
     -o nocache             no caching of uncompressed data
     -o memcache            caching in memory
@@ -324,6 +301,12 @@ int main(int const argc, char** const argv) try {
   }
 
   g_redact = ctx.options.redact;
+  SetLogLevel(ctx.log_level);
+
+  if (!ctx.options.dirs) {
+    ctx.options.hardlinks = false;
+  }
+
   const fuse_operations ops = GetFuseOperations();
 
   if (ctx.help) {

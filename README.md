@@ -61,6 +61,9 @@ numeric suffix (e.g., `archive (1)`).
 **-o maxfilters=N**
 :   Maximum number of filters per archive (default is 1).
 
+**-o precache**
+:   Preemptive caching of uncompressed data (default).
+
 **-o lazycache**
 :   Incremental caching of uncompressed data.
 
@@ -402,7 +405,7 @@ balance performance, mount time, and resource usage.
 The following strategies are mutually exclusive. If none is specified,
 pre-emptive caching is used by default.
 
-### Pre-emptive Caching (Default)
+### Pre-emptive Caching (`-o precache`, Default)
 
 By default, **fuse-archive** decompresses and caches the whole archive before
 serving its contents. The cost of decompression is incurred upfront at mount
