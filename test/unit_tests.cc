@@ -166,6 +166,24 @@ class ReaderTest : public ::testing::Test {
   ArchiveDescriptor* GetArchive(size_t i) { return &tree_.archives_[i]; }
 };
 
+TEST_F(ReaderTest, Advance) {
+  ArchiveDescriptor* desc = GetArchive(0);
+  Reader::Ptr r = tree_.GetReader(desc, 1, 0);
+
+  // AdvanceIndex
+  r->AdvanceIndex(7);
+  EXPECT_EQ(r->index_within_archive, 7);
+
+  // AdvanceOffset
+  r->AdvanceOffset(100);
+  EXPECT_EQ(r->offset_within_entry, 100);
+
+  // Read from advanced offset
+  std::vector<char> buf(100);
+  EXPECT_EQ(r->Read(buf.data(), 100), 100);
+  EXPECT_EQ(r->offset_within_entry, 200);
+}
+
 TEST_F(ReaderTest, RollingBuffer) {
   ArchiveDescriptor* desc = GetArchive(0);
   Reader::Ptr r = tree_.GetReader(desc, 7, 0);  // romeo.txt
@@ -202,34 +220,166 @@ TEST_F(ReaderTest, SetFormat) {
   }
 }
 
+// Mock fuse_get_context
+static fuse_context g_fuse_context;
+extern "C" fuse_context* fuse_get_context() {
+  return &g_fuse_context;
+}
+
 class FUSETest : public ::testing::Test {
  protected:
   fuse_operations ops_ = GetFuseOperations();
+  Tree tree_;
+
+  void SetUp() override {
+    g_fuse_context.private_data = &tree_;
+    Options options;
+    options.cache = Cache::None;
+    tree_.SetOptions(options);
+  }
 };
 
-TEST_F(FUSETest, GetAttrWithFi) {
-  Node n;
-  n.size = 1234;
-  n.name = "testfile";
-  n.mode = S_IFREG | 0644;
-
-  FileHandle h;
-  h.node = &n;
-
-  fuse_file_info fi;
-  std::memset(&fi, 0, sizeof(fi));
-  fi.fh = reinterpret_cast<uintptr_t>(&h);
-
+TEST_F(FUSETest, GetAttrByPath) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
   Stat z;
-  std::memset(&z, 0, sizeof(z));
+#if FUSE_USE_VERSION >= 30
+  EXPECT_EQ(ops_.getattr("/romeo.txt", &z, nullptr), 0);
+#else
+  EXPECT_EQ(ops_.getattr("/romeo.txt", &z), 0);
+#endif
+  EXPECT_GT(z.st_size, 0);
 
 #if FUSE_USE_VERSION >= 30
-  EXPECT_EQ(ops_.getattr(nullptr, &z, &fi), 0);
+  EXPECT_EQ(ops_.getattr("/nonexistent", &z, nullptr), -ENOENT);
 #else
-  EXPECT_EQ(ops_.getattr("/", &z), 0);
+  EXPECT_EQ(ops_.getattr("/nonexistent", &z), -ENOENT);
+#endif
+}
+
+TEST_F(FUSETest, Xattr) {
+  tree_.Load(std::vector<std::string>{"test/data/many-xattrs.tar"});
+  char buf[1024];
+
+  // Success
+  int res = ops_.getxattr("/file.txt", "user.attr_0001", buf, sizeof(buf));
+  EXPECT_GT(res, 0);
+
+  // Buffer too small
+  EXPECT_EQ(ops_.getxattr("/file.txt", "user.attr_0001", buf, 1), -ERANGE);
+
+  // Missing attribute
+  EXPECT_EQ(ops_.getxattr("/file.txt", "user.nonexistent", buf, sizeof(buf)),
+            -ENODATA);
+
+  // Missing file
+  EXPECT_EQ(ops_.getxattr("/nonexistent", "user.test", buf, sizeof(buf)),
+            -ENOENT);
+
+  // List xattrs
+  res = ops_.listxattr("/file.txt", buf, sizeof(buf));
+  EXPECT_GT(res, 0);
+
+  // List xattrs size query
+  res = ops_.listxattr("/file.txt", nullptr, 0);
+  EXPECT_GT(res, 0);
+
+  // List xattrs buffer too small
+  EXPECT_EQ(ops_.listxattr("/file.txt", buf, 1), -ERANGE);
+
+  // List xattrs missing file
+  EXPECT_EQ(ops_.listxattr("/nonexistent", buf, sizeof(buf)), -ENOENT);
+}
+
+TEST_F(FUSETest, ReadLink) {
+  tree_.Load(std::vector<std::string>{"test/data/specials.tar"});
+  char buf[1024];
+
+  // Success
+  EXPECT_EQ(ops_.readlink("/symlink", buf, sizeof(buf)), 0);
+  EXPECT_STREQ(buf, "regular");
+
+  // Not a symlink
+  EXPECT_EQ(ops_.readlink("/regular", buf, sizeof(buf)), -EINVAL);
+
+  // Missing item
+  EXPECT_EQ(ops_.readlink("/nonexistent", buf, sizeof(buf)), -ENOENT);
+}
+
+TEST_F(FUSETest, OpenRelease) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  fuse_file_info fi;
+  std::memset(&fi, 0, sizeof(fi));
+
+  // Success
+  EXPECT_EQ(ops_.open("/romeo.txt", &fi), 0);
+  EXPECT_NE(fi.fh, 0);
+
+  // Release
+  EXPECT_EQ(ops_.release("/romeo.txt", &fi), 0);
+
+  // Open directory as file (failure)
+  EXPECT_EQ(ops_.open("/non-ascii", &fi), -EISDIR);
+
+  // Open nonexistent
+  EXPECT_EQ(ops_.open("/nonexistent", &fi), -ENOENT);
+}
+
+#if FUSE_USE_VERSION >= 30
+TEST_F(FUSETest, Seek) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  fuse_file_info fi;
+  std::memset(&fi, 0, sizeof(fi));
+  ops_.open("/romeo.txt", &fi);
+
+  // Success (data)
+  EXPECT_EQ(ops_.lseek("/romeo.txt", 0, SEEK_DATA, &fi), 0);
+
+  // Success (hole - none in archive.tar regular file usually)
+  // Actually archive.tar entries are not sparse by default.
+  // But let's check past end.
+  EXPECT_EQ(ops_.lseek("/romeo.txt", 1000000, SEEK_DATA, &fi), -ENXIO);
+
+  ops_.release("/romeo.txt", &fi);
+}
 #endif
 
-  EXPECT_EQ(z.st_size, 1234);
+TEST_F(FUSETest, ReadDir) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  fuse_file_info fi;
+  std::memset(&fi, 0, sizeof(fi));
+  ops_.opendir("/", &fi);
+
+  struct Data {
+    std::vector<std::string> names;
+  } data;
+
+  auto filler = [](void* buf, const char* name, const struct stat*, off_t,
+#if FUSE_USE_VERSION >= 30
+                   enum fuse_fill_dir_flags
+#endif
+                ) {
+    static_cast<Data*>(buf)->names.push_back(name);
+    return 0;
+  };
+
+#if FUSE_USE_VERSION >= 30
+  EXPECT_EQ(ops_.readdir("/", &data, filler, 0, &fi, (fuse_readdir_flags)0), 0);
+#else
+  EXPECT_EQ(ops_.readdir("/", &data, filler, 0, &fi), 0);
+#endif
+
+  EXPECT_FALSE(data.names.empty());
+  EXPECT_TRUE(std::find(data.names.begin(), data.names.end(), "romeo.txt") !=
+              data.names.end());
+}
+
+TEST_F(FUSETest, StatFs) {
+  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  StatVfs z;
+  std::memset(&z, 0, sizeof(z));
+  EXPECT_EQ(ops_.statfs("/", &z), 0);
+  EXPECT_GT(z.f_blocks, 0);
+  EXPECT_GT(z.f_files, 0);
 }
 
 namespace {

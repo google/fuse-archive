@@ -28,14 +28,12 @@ To build **fuse-archive**, you also need the following tools:
 *   C++20 compiler (g++ or clang++)
 *   [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/)
 *   [GNU make](https://www.gnu.org/software/make/)
-*   [clang-format](https://clang.llvm.org/docs/ClangFormat.html) (to format the code)
-*   [GoogleTest](https://github.com/google/googletest) (for unit tests)
 *   [Pandoc](https://pandoc.org) to regenerate the man page
 
 On Debian systems, you can get these tools by installing the following packages:
 
 ```sh
-$ sudo apt install g++ pkg-config make clang-format libgtest-dev pandoc
+$ sudo apt install g++ pkg-config make pandoc
 ```
 
 To test **fuse-archive**, you also need the following external programs for

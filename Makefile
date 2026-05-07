@@ -50,6 +50,8 @@ MANDIR = $(PREFIX)/share/man/man1
 MAN = $(PROJECT).1
 INSTALL = install
 
+all: out/$(PROJECT)
+
 # ---- Formatting
 
 FORMAT = clang-format
@@ -79,8 +81,6 @@ out/$(LIB_DIR)/%.o: $(LIB_DIR)/%.cc
 	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
 
 # ---- Binaries
-
-all: out/$(PROJECT)
 
 out/$(PROJECT): $(PROJECT).cc $(LIB_ARCHIVE)
 	mkdir -p out
