@@ -24,7 +24,7 @@ UNIT_TEST_PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(UNIT_TEST_DEPS) 2>/de
 UNIT_TEST_PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(UNIT_TEST_DEPS) 2>/dev/null)
 endif
 
-COMMON_CXXFLAGS = -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter -I.
+COMMON_CXXFLAGS = -std=c++23 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter -I.
 COMMON_CXXFLAGS += -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64 $(FUSE_CXXFLAGS)
 
 ifeq ($(DEBUG), 1)

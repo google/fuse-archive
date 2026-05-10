@@ -4,7 +4,11 @@ This document provides project-specific context, conventions, and workflows for 
 
 ## Project Overview
 
-`fuse-archive` is a read-only FUSE filesystem that mounts various archive and compressed file formats (ZIP, TAR, 7Z, RAR, ISO, etc.) using the `libarchive` library. The primary implementation is contained in `fuse-archive.cc`.
+`fuse-archive` is a read-only FUSE filesystem that mounts various archive and compressed file formats (ZIP, TAR, 7Z, RAR, ISO, etc.) using the `libarchive` library. The project is structured as a core library in `lib/` and a slim CLI wrapper in `fuse-archive.cc`.
+
+## C++ Standard
+
+The project uses **C++23**. Ensure you are using a modern compiler (e.g., GCC 13+ or Clang 16+) that supports the C++23 standard.
 
 ## Versioning Policy
 
