@@ -2679,15 +2679,14 @@ def TestFuseErrors():
             if st.st_size == 0:
                 LogError(f"fstat returned 0 size for {path}")
 
-            # macFUSE does not support SEEK_DATA and returns EINVAL
-            if not on_mac:
-                try:
-                    os.lseek(fd, 1000000, 3)  # os.SEEK_DATA is 3
-                    LogError(f"Expected ENXIO for seek data past end")
-                except OSError as e:
-                    if e.errno != errno.ENXIO:
-                        LogError(
-                            f"Expected ENXIO ({errno.ENXIO}), got {e.errno}")
+            try:
+                os.lseek(fd, 1000000, os.SEEK_DATA)
+                LogError(f"Expected error when seeking data past the end")
+            except OSError as e:
+                # macFUSE does not support SEEK_DATA and returns EINVAL
+                want_errno = errno.EINVAL if on_mac else errno.ENXIO
+                if e.errno != errno.ENXIO:
+                    LogError(f"Expected {want_errno}, got {e.errno}")
         finally:
             os.close(fd)
 
