@@ -1309,7 +1309,9 @@ def TestSeek(options=[]):
     if not has_holes:
         logging.info('Skipping TestSeek')
         return
-
+    if on_mac:
+        logging.info('Skipping TestSeek (macFUSE does not support SEEK_DATA/SEEK_HOLE via lseek)')
+        return
     zip_name = 'seek.tar.gz'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
