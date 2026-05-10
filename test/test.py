@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import argparse
+import errno
 import hashlib
 import logging
 import os
@@ -25,8 +26,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager
 
+
+sys.setrecursionlimit(3000)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fast', action='store_true', help='skip slow tests')
@@ -36,9 +40,16 @@ args = parser.parse_args()
 logging.getLogger().setLevel('DEBUG' if args.verbose else 'INFO')
 is_fast = args.fast
 
-has_memcache = sys.platform.startswith('linux')
+on_mac = sys.platform.startswith('darwin')
+on_linux = sys.platform.startswith('linux')
 
-sys.setrecursionlimit(3000)
+has_memcache = not on_mac
+if not has_memcache:
+    logging.info('Will skip tests relying on memcache')
+
+has_xattrs = not on_mac
+if not has_memcache:
+    logging.info('Will skip tests for xattrs')
 
 
 # Computes the MD5 hash of the given file.
@@ -69,7 +80,16 @@ def GetTree(root, use_md5=True):
             'mtime': st.st_mtime_ns,
             'ctime': st.st_ctime_ns,
         }
-        result[os.path.relpath(path, root)] = line
+
+        key = os.path.relpath(path, root)
+
+        if on_mac:
+            # macOS VFS returns NFD-normalised filenames; normalise to NFC so
+            # tree keys match the NFC names stored in archives.
+            key = unicodedata.normalize('NFC', key)
+
+        result[key] = line
+
         if stat.S_ISREG(mode):
             line['size'] = st.st_size
             line['blocks'] = st.st_blocks
@@ -86,20 +106,21 @@ def GetTree(root, use_md5=True):
             for entry in list(os.scandir(path)):
                 scan(entry.path, entry.stat(follow_symlinks=False))
 
-        try:
-            attrs = os.listxattr(path, follow_symlinks=False)
-            xattr_dict = dict()
-            for attr in attrs:
-                try:
-                    value = os.getxattr(path, attr, follow_symlinks=False)
-                    xattr_dict[attr] = value.decode('utf-8')
-                except OSError as e:
-                    xattr_dict[attr] = f'<error: {e.errno}>'
-            if xattr_dict:
-                logging.debug(f"Path {path} has xattrs: {xattr_dict}")
-            line['xattr'] = xattr_dict
-        except OSError as e:
-            line['xattr'] = e.errno
+        if has_xattrs:
+            try:
+                attrs = os.listxattr(path, follow_symlinks=False)
+                xattr_dict = dict()
+                for attr in attrs:
+                    try:
+                        value = os.getxattr(path, attr, follow_symlinks=False)
+                        xattr_dict[attr] = value.decode('utf-8')
+                    except OSError as e:
+                        xattr_dict[attr] = f'<error: {e.errno}>'
+                if xattr_dict:
+                    logging.debug(f"Path {path} has xattrs: {xattr_dict}")
+                line['xattr'] = xattr_dict
+            except OSError as e:
+                line['xattr'] = e.errno
 
     st = os.stat(root, follow_symlinks=False)
 
@@ -130,10 +151,20 @@ def CheckTree(got_tree, want_tree, strict=False):
         try:
             got_entry = got_tree.pop(name)
             for key, want_value in want_entry.items():
+                if not has_xattrs and key == 'xattr':
+                    continue
+
+                if on_mac and key == 'rdev':
+                    # macFUSE re-encodes device numbers using BSD packing, so
+                    # raw rdev values differ from Linux. Skip on macOS.
+                    continue
+
                 got_value = got_entry.get(key)
+
                 if key in ('atime', 'mtime', 'ctime') and want_value % 1000000000 == 0:
                     got_value //= 1000000000
                     want_value //= 1000000000
+
                 if got_value != want_value:
                     LogError(
                         f'Mismatch for {name!r}[{key}] got: {got_value!r}, want:'
@@ -168,8 +199,12 @@ def CanRun(args):
 
 has_base64 = CanRun(['base64', '--version'])
 has_brotli = CanRun(['brotli', '--version'])
-has_bzip2 = CanRun(['bzip2', '--version'])
-has_compress = CanRun(['compress', '-V'])
+has_bzip2 = CanRun(['bzip2', '--help'])
+
+# BSD compress (macOS) is always present but does not support -V, --help, or
+# -h. On Linux, ncompress may or may not be installed and does support -V.
+has_compress = on_mac or CanRun(['compress', '-V'])
+
 has_gpg = CanRun(['gpg', '--version'])
 has_gzip = CanRun(['gzip', '--version'])
 has_lrzip = CanRun(['lrzip', '--version'])
@@ -218,6 +253,13 @@ env = os.environ.copy()
 if not is_fast and not has_lrzip:
     env['MALLOC_PERTURB_'] = '170'
 
+def Unmount(mount_point):
+    # Linux: -l (lazy) detaches immediately even if mount is busy.
+    # macOS: -l is unsupported; -f (force) is the closest equivalent.
+    if on_mac:
+        subprocess.run(['umount', '-f', mount_point], check=True)
+    else:
+        subprocess.run(['umount', '-l', mount_point], check=True)
 
 @contextmanager
 def MountArchive(zip_names, options=[], password='', env=env):
@@ -246,7 +288,7 @@ def MountArchive(zip_names, options=[], password='', env=env):
             yield mount_point
         finally:
             logging.debug(f'Unmounting {zip_paths!r} from {mount_point!r}...')
-            subprocess.run(['umount', '-l', mount_point], check=True)
+            Unmount(mount_point)
             logging.debug(f'Unmounted {zip_paths!r} from {mount_point!r}')
 
 
@@ -1151,6 +1193,9 @@ def TestSeek(options=[]):
     if fuse_major_version < 3:
         logging.info('Skipping TestSeek (FUSE version < 3)')
         return
+    if on_mac:
+        logging.info('Skipping TestSeek (macFUSE does not support SEEK_DATA/SEEK_HOLE via lseek)')
+        return
     zip_name = 'seek.tar.gz'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
@@ -1179,7 +1224,7 @@ def TestSeek(options=[]):
                     os.lseek(fd, offset, whence)
                     LogError(f'Seek {whence} at {offset} should fail with ENXIO (options={options!r})')
                 except OSError as e:
-                    if e.errno != 6: # ENXIO
+                    if e.errno != errno.ENXIO:
                         LogError(f'Seek {whence} at {offset} failed with wrong error: {e.errno} (options={options!r})')
 
             if is_noholes or is_nocache:
@@ -1799,7 +1844,7 @@ def TestBigArchiveRandomOrder(options=[]):
                     os.close(fd)
             finally:
                 logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-                subprocess.run(['umount', '-l', mount_point], check=True)
+                Unmount(mount_point)
                 logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
         except subprocess.CalledProcessError as e:
             LogError(f'Cannot test {zip_name!r}: {e.stderr}')
@@ -1846,7 +1891,7 @@ def TestBigArchiveStreamed(options=[]):
                     os.close(fd)
             finally:
                 logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
-                subprocess.run(['umount', '-l', mount_point], check=True)
+                Unmount(mount_point)
                 logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
         except subprocess.CalledProcessError as e:
             LogError(f'Cannot test {zip_name!r}: {e.stderr}')
@@ -1904,22 +1949,22 @@ def TestEncryptedArchive(options=[]):
         'Encrypted ZipCrypto.txt': {
             'mode': '-rw-r--r--',
             'size': 34,
-            'errno': 5,
+            'errno': errno.EIO,
         },
         'Encrypted AES-256.txt': {
             'mode': '-rw-r--r--',
             'size': 32,
-            'errno': 5,
+            'errno': errno.EIO,
         },
         'Encrypted AES-192.txt': {
             'mode': '-rw-r--r--',
             'size': 32,
-            'errno': 5,
+            'errno': errno.EIO,
         },
         'Encrypted AES-128.txt': {
             'mode': '-rw-r--r--',
             'size': 32,
-            'errno': 5,
+            'errno': errno.EIO,
         },
         'ClearText.txt': {
             'mode': '-rw-r--r--',
@@ -2303,14 +2348,14 @@ def TestFuseErrors():
             os.stat(path)
             LogError(f"Expected ENOENT for {path}")
         except OSError as e:
-            if e.errno != 2: LogError(f"Expected ENOENT (2), got {e.errno}")
+            if e.errno != errno.ENOENT: LogError(f"Expected ENOENT ({errno.ENOENT}), got {e.errno}")
 
-        # ENOENT on xattrs
-        try:
-            os.getxattr(path, 'user.attr')
-            LogError(f"Expected ENOENT for xattr on nonexistent path")
-        except OSError as e:
-            if e.errno != 2: LogError(f"Expected ENOENT (2), got {e.errno}")
+        if has_xattrs:
+            try:
+                os.getxattr(path, 'user.attr')
+                LogError(f"Expected ENOENT for xattr on nonexistent path")
+            except OSError as e:
+                if e.errno != errno.ENOENT: LogError(f"Expected ENOENT ({errno.ENOENT}), got {e.errno}")
 
         # ENOTDIR
         path = os.path.join(mount_point, 'romeo.txt', 'inside')
@@ -2318,7 +2363,7 @@ def TestFuseErrors():
             os.stat(path)
             LogError(f"Expected ENOTDIR for {path}")
         except OSError as e:
-            if e.errno != 20: LogError(f"Expected ENOTDIR, got {e.errno}")
+            if e.errno != errno.ENOTDIR: LogError(f"Expected ENOTDIR ({errno.ENOTDIR}), got {e.errno}")
 
         # EISDIR on open
         path = mount_point
@@ -2326,7 +2371,7 @@ def TestFuseErrors():
             fd = os.open(path, os.O_RDONLY)
             os.close(fd)
         except OSError as e:
-            if e.errno != 21: LogError(f"Expected EISDIR, got {e.errno}")
+            if e.errno != errno.EISDIR: LogError(f"Expected EISDIR ({errno.EISDIR}), got {e.errno}")
 
         # EINVAL on readlink of a file
         path = os.path.join(mount_point, 'romeo.txt')
@@ -2334,15 +2379,14 @@ def TestFuseErrors():
             os.readlink(path)
             LogError(f"Expected EINVAL for readlink on file")
         except OSError as e:
-            if e.errno != 22: LogError(f"Expected EINVAL (22), got {e.errno}")
+            if e.errno != errno.EINVAL: LogError(f"Expected EINVAL ({errno.EINVAL}), got {e.errno}")
 
-        # ENODATA on getxattr for missing attribute
-        try:
-            os.getxattr(path, 'user.nonexistent')
-            LogError(f"Expected ENODATA for missing xattr")
-        except OSError as e:
-            # ENODATA is 61 on Linux
-            if e.errno != 61: LogError(f"Expected ENODATA (61), got {e.errno}")
+        if has_xattrs:
+            try:
+                os.getxattr(path, 'user.nonexistent')
+                LogError(f"Expected ENODATA for missing xattr")
+            except OSError as e:
+                if e.errno != errno.ENODATA: LogError(f"Expected ENODATA ({errno.ENODATA}), got {e.errno}")
 
     # ERANGE on getxattr with small buffer
     zip_name = 'many-xattrs.tar'
@@ -2363,10 +2407,11 @@ def TestFuseErrors():
         # As seen in fuse_ops.cc, GetXattr/ListXattr are always set if HAVE_XATTR is defined.
         # They don't check g_options.xattrs.
         # So they will just see empty node->attributes and return success (empty list) or ENODATA.
-        try:
-            os.listxattr(path)
-        except OSError:
-            pass
+        if has_xattrs:
+            try:
+                os.listxattr(path)
+            except OSError:
+                pass
 
         # Path traversal / security components
         for p in ['.', '..', 'foo/../bar']:
@@ -2383,8 +2428,7 @@ def TestFuseErrors():
         try:
             os.stat(path)
         except OSError as e:
-            # ENAMETOOLONG is 36 on Linux
-            if e.errno != 36: LogError(f"Expected ENAMETOOLONG (36), got {e.errno}")
+            if e.errno != errno.ENAMETOOLONG: LogError(f"Expected ENAMETOOLONG ({errno.ENAMETOOLONG}), got {e.errno}")
 
         # ENOTDIR on opendir of a file
         path = os.path.join(mount_point, 'romeo.txt')
@@ -2392,7 +2436,7 @@ def TestFuseErrors():
             os.listdir(path)
             LogError(f"Expected ENOTDIR for listdir on {path}")
         except OSError as e:
-            if e.errno != 20: LogError(f"Expected ENOTDIR (20), got {e.errno}")
+            if e.errno != errno.ENOTDIR: LogError(f"Expected ENOTDIR ({errno.ENOTDIR}), got {e.errno}")
 
         # SEEK_DATA / SEEK_HOLE errors
         fd = os.open(path, os.O_RDONLY)
@@ -2402,13 +2446,13 @@ def TestFuseErrors():
             if st.st_size == 0:
                 LogError(f"fstat returned 0 size for {path}")
 
-            # SEEK_DATA past end should return ENXIO
-            try:
-                os.lseek(fd, 1000000, 3) # os.SEEK_DATA is 3
-                LogError(f"Expected ENXIO for seek data past end")
-            except OSError as e:
-                # ENXIO is 6 on Linux
-                if e.errno != 6: LogError(f"Expected ENXIO (6), got {e.errno}")
+            # macFUSE does not support SEEK_DATA and returns EINVAL
+            if not on_mac:
+                try:
+                    os.lseek(fd, 1000000, 3) # os.SEEK_DATA is 3
+                    LogError(f"Expected ENXIO for seek data past end")
+                except OSError as e:
+                    if e.errno != errno.ENXIO: LogError(f"Expected ENXIO ({errno.ENXIO}), got {e.errno}")
         finally:
             os.close(fd)
 
