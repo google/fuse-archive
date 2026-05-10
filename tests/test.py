@@ -255,7 +255,10 @@ has_bzip2 = CanRun(['bzip2', '--help'])
 # -h. On Linux, ncompress may or may not be installed and does support -V.
 has_compress = on_mac or CanRun(['compress', '-V'])
 
-has_gpg = CanRun(['gpg', '--version'])
+# On macOS, even if gpg binary is present libarchive can't
+# reach gpg-agent's FD / socket. 
+has_gpg = not on_mac and CanRun(['gpg', '--version'])
+
 has_gzip = CanRun(['gzip', '--version'])
 has_lrzip = CanRun(['lrzip', '--version'])
 has_lz4 = CanRun(['lz4', '--version'])
