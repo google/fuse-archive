@@ -14,11 +14,15 @@ endif
 DEPS += libarchive
 UNIT_TEST_DEPS = gtest gtest_main
 
-PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(DEPS))
-PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(DEPS))
+PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(DEPS) 2>/dev/null)
+PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(DEPS) 2>/dev/null)
 
-UNIT_TEST_PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(UNIT_TEST_DEPS))
-UNIT_TEST_PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(UNIT_TEST_DEPS))
+HAS_GTEST := $(shell $(PKG_CONFIG) --exists $(UNIT_TEST_DEPS) 2>/dev/null && echo yes || echo no)
+
+ifeq ($(HAS_GTEST), yes)
+UNIT_TEST_PKG_CXXFLAGS := $(shell $(PKG_CONFIG) --cflags $(UNIT_TEST_DEPS) 2>/dev/null)
+UNIT_TEST_PKG_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(UNIT_TEST_DEPS) 2>/dev/null)
+endif
 
 COMMON_CXXFLAGS = -std=c++20 -Wall -Wextra -Wno-missing-field-initializers -Wno-sign-compare -Wno-unused-parameter -I.
 COMMON_CXXFLAGS += -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64 $(FUSE_CXXFLAGS)
@@ -92,6 +96,7 @@ UNIT_TEST = unit_tests
 UNIT_TEST_SOURCES = test/unit_tests.cc
 UNIT_TEST_OBJECTS = $(addprefix out/,$(UNIT_TEST_SOURCES:.cc=.o))
 
+ifeq ($(HAS_GTEST), yes)
 out/$(UNIT_TEST): $(UNIT_TEST_OBJECTS) $(LIB_ARCHIVE)
 	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(UNIT_TEST_PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $^ $(PKG_LDFLAGS) $(UNIT_TEST_PKG_LDFLAGS) $(LDFLAGS) -o $@
 
@@ -99,18 +104,23 @@ out/test/%.o: test/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(UNIT_TEST_PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
 
+UNIT_TEST_BIN = out/$(UNIT_TEST)
+else
+UNIT_TEST_BIN =
+endif
+
 # ---- Standard targets
 
-check: out/$(PROJECT) out/$(UNIT_TEST) test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
-	out/$(UNIT_TEST)
+check: out/$(PROJECT) $(UNIT_TEST_BIN) test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
+	$(if $(UNIT_TEST_BIN),$(UNIT_TEST_BIN))
 	python3 test/test.py
 
-check-fast: out/$(PROJECT) out/$(UNIT_TEST)
-	out/$(UNIT_TEST)
+check-fast: out/$(PROJECT) $(UNIT_TEST_BIN)
+	$(if $(UNIT_TEST_BIN),$(UNIT_TEST_BIN))
 	python3 test/test.py --fast
 
-valgrind: out/$(PROJECT) out/$(UNIT_TEST)
-	valgrind -q --leak-check=full --error-exitcode=33 out/$(UNIT_TEST)
+valgrind: out/$(PROJECT) $(UNIT_TEST_BIN)
+	$(if $(UNIT_TEST_BIN),valgrind -q --leak-check=full --error-exitcode=33 $(UNIT_TEST_BIN))
 	MOUNT_WRAPPER="valgrind -q --leak-check=full --error-exitcode=33" python3 test/test.py --fast
 
 coverage:
@@ -123,8 +133,8 @@ coverage:
 
 test: check
 
-unit_tests: out/$(UNIT_TEST)
-	out/$(UNIT_TEST)
+unit_tests: $(UNIT_TEST_BIN)
+	$(if $(UNIT_TEST_BIN),$(UNIT_TEST_BIN),@echo "Google Test not found; cannot run unit tests.")
 
 clean:
 	rm -rf out
