@@ -325,12 +325,13 @@ int main(int const argc, char** const argv) try {
     fuse_main(args.argc, args.argv, &ops, tree);
 
     args.argv[0] = old_argv0;
+    return EXIT_SUCCESS;
 #else
+    dup2(STDOUT_FILENO, STDERR_FILENO);
     fuse_opt_add_arg(&args, "-ho");  // I think ho means "help output".
     fuse_main(args.argc, args.argv, &ops, tree);
+    _exit(EXIT_SUCCESS);
 #endif
-
-    return EXIT_SUCCESS;
   }
 
   if (ctx.version) {
@@ -340,9 +341,15 @@ int main(int const argc, char** const argv) try {
 
     // Forward --version to libfuse so that it can print its own version.
     fuse_opt_add_arg(&args, "--version");
-    fuse_main(args.argc, args.argv, &ops, tree);
 
+#if FUSE_USE_VERSION >= 30
+    fuse_main(args.argc, args.argv, &ops, tree);
     return EXIT_SUCCESS;
+#else
+    dup2(STDOUT_FILENO, STDERR_FILENO);
+    fuse_main(args.argc, args.argv, &ops, tree);
+    _exit(EXIT_SUCCESS);
+#endif
   }
 
   if (ctx.archives.empty()) {

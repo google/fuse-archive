@@ -394,11 +394,11 @@ TEST_F(FUSETest, ReadDir) {
     std::vector<std::string> names;
   } data;
 
-  auto filler = [](void* buf, const char* name, const struct stat*, off_t,
+  auto filler = [](void* buf, const char* name, const struct stat*, off_t
 #if FUSE_USE_VERSION >= 30
-                   enum fuse_fill_dir_flags
+                   , enum fuse_fill_dir_flags
 #endif
-                ) {
+  ) {
     static_cast<Data*>(buf)->names.push_back(name);
     return 0;
   };
