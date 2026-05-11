@@ -192,6 +192,9 @@ FileDescriptor CreateCacheFile(bool memcache) {
     }
 #endif
 
+// macOS shm_open objects require ftruncate before any write and cannot
+// auto-extend like Linux memfd or a regular file.
+#if !defined(__APPLE__)
     std::string const shm_name = "/fuse-archive-" + std::to_string(getpid());
     fd = FileDescriptor(
         shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
@@ -201,6 +204,7 @@ FileDescriptor CreateCacheFile(bool memcache) {
                  << ")";
       return fd;
     }
+#endif
 
     PLOG(ERROR) << "Cannot create memory-backed cache file";
     throw ExitCode::CANNOT_CREATE_CACHE;
