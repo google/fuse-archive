@@ -29,12 +29,14 @@ import time
 import unicodedata
 from contextlib import contextmanager
 
-
 sys.setrecursionlimit(3000)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fast', action='store_true', help='skip slow tests')
-parser.add_argument('-v', '--verbose', action='store_true', help='enable debug logging')
+parser.add_argument('-v',
+                    '--verbose',
+                    action='store_true',
+                    help='enable debug logging')
 args = parser.parse_args()
 
 logging.getLogger().setLevel('DEBUG' if args.verbose else 'INFO')
@@ -161,7 +163,8 @@ def CheckTree(got_tree, want_tree, strict=False):
 
                 got_value = got_entry.get(key)
 
-                if key in ('atime', 'mtime', 'ctime') and want_value % 1000000000 == 0:
+                if key in ('atime', 'mtime',
+                           'ctime') and want_value % 1000000000 == 0:
                     got_value //= 1000000000
                     want_value //= 1000000000
 
@@ -216,7 +219,10 @@ has_xz = CanRun(['xz', '--version'])
 has_zstd = CanRun(['zstd', '--version'])
 has_tar = CanRun(['tar', '--version'])
 
-sr = subprocess.run([mount_program, '--version'], capture_output=True, encoding='UTF-8')
+sr = subprocess.run([mount_program, '--version'],
+                    capture_output=True,
+                    encoding='UTF-8')
+
 
 def GetFuseMajorVersion():
     for line in sr.stdout.split('\n'):
@@ -253,6 +259,7 @@ env = os.environ.copy()
 if not is_fast and not has_lrzip:
     env['MALLOC_PERTURB_'] = '170'
 
+
 def Unmount(mount_point):
     # Linux: -l (lazy) detaches immediately even if mount is busy.
     # macOS: -l is unsupported; -f (force) is the closest equivalent.
@@ -261,12 +268,14 @@ def Unmount(mount_point):
     else:
         subprocess.run(['umount', '-l', mount_point], check=True)
 
+
 @contextmanager
 def MountArchive(zip_names, options=[], password='', env=env):
     with tempfile.TemporaryDirectory() as mount_point:
         if type(zip_names) is not list: zip_names = [zip_names]
         zip_paths = [
-            os.path.join(script_dir, 'data', zip_name) for zip_name in zip_names
+            os.path.join(script_dir, 'data', zip_name)
+            for zip_name in zip_names
         ]
         logging.debug(f'Mounting {zip_paths!r} on {mount_point!r}...')
         command = [mount_program, *options]
@@ -298,7 +307,11 @@ def MountArchive(zip_names, options=[], password='', env=env):
 # - member 1 is the result of os.statvfs
 #
 # Throws subprocess.CalledProcessError if the archive cannot be mounted.
-def MountArchiveAndGetTree(zip_names, options=[], password='', use_md5=True, get_tree=True):
+def MountArchiveAndGetTree(zip_names,
+                           options=[],
+                           password='',
+                           use_md5=True,
+                           get_tree=True):
     with MountArchive(zip_names, options, password) as mount_point:
         tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
         return tree, os.statvfs(mount_point)
@@ -321,27 +334,24 @@ def MountArchiveAndCheckTree(
     if password: s += f', password = {password!r}'
     logging.info(s)
     try:
-        got_tree, st = MountArchiveAndGetTree(
-            zip_names, options=options, password=password, use_md5=use_md5, get_tree=want_tree is not None
-        )
+        got_tree, st = MountArchiveAndGetTree(zip_names,
+                                              options=options,
+                                              password=password,
+                                              use_md5=use_md5,
+                                              get_tree=want_tree is not None)
 
         want_block_size = 512
         if st.f_bsize < want_block_size:
-            LogError(
-                f'Mismatch for st.f_bsize: got: {st.f_bsize}, want at least: {want_block_size}'
-            )
+            LogError('Mismatch for st.f_bsize: '
+                     f'got: {st.f_bsize}, want at least: {want_block_size}')
         if st.f_frsize != want_block_size:
-            LogError(
-                'Mismatch for st.f_frsize: '
-                f'got: {st.f_frsize}, want: {want_block_size}'
-            )
+            LogError('Mismatch for st.f_frsize: '
+                     f'got: {st.f_frsize}, want: {want_block_size}')
 
         want_name_max = 255
         if st.f_namemax != want_name_max:
-            LogError(
-                'Mismatch for st.f_namemax: '
-                f'got: {st.f_namemax}, want: {want_name_max}'
-            )
+            LogError('Mismatch for st.f_namemax: '
+                     f'got: {st.f_namemax}, want: {want_name_max}')
 
         if want_blocks is not None and st.f_blocks != want_blocks:
             LogError(
@@ -360,15 +370,18 @@ def MountArchiveAndCheckTree(
 
 # Try to mount the given archive(s), and expects an error.
 # Logs an error if the archive can be mounted, or if the returned error code doesn't match.
-def CheckArchiveMountingError(zip_names, want_error_code, options=[], password=''):
+def CheckArchiveMountingError(zip_names,
+                              want_error_code,
+                              options=[],
+                              password=''):
     s = f'Test {zip_names!r}'
     if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
     logging.info(s)
     try:
-        got_tree, _ = MountArchiveAndGetTree(
-            zip_names, options=options, password=password
-        )
+        got_tree, _ = MountArchiveAndGetTree(zip_names,
+                                             options=options,
+                                             password=password)
         LogError(f'Want error, Got tree: {got_tree}')
     except subprocess.CalledProcessError as e:
         if e.returncode != want_error_code:
@@ -482,7 +495,9 @@ def TestArchiveWithOptions(options=[]):
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     if has_zlib:
-        MountArchiveAndCheckTree('archive.tar.gz.uu', want_tree, options=[*options, '-o', 'maxfilters=2'])
+        MountArchiveAndCheckTree('archive.tar.gz.uu',
+                                 want_tree,
+                                 options=[*options, '-o', 'maxfilters=2'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -540,7 +555,9 @@ def TestArchiveWithOptions(options=[]):
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
     if has_zlib:
-        MountArchiveAndCheckTree('romeo.txt.gz.uu', want_tree, options=[*options, '-o', 'maxfilters=2'])
+        MountArchiveAndCheckTree('romeo.txt.gz.uu',
+                                 want_tree,
+                                 options=[*options, '-o', 'maxfilters=2'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
@@ -571,14 +588,22 @@ def TestArchiveWithOptions(options=[]):
             '-': {'mode': '-rw-r--r--', 'size': 305, 'md5': 'c60b77c7b1cad939d1dee69925b2e47b'},
             'second.txt': {'mode': '-rw-r--r--', 'size': 320, 'md5': 'da1344f8f5f2e52fae7671250d81376e'},
             }
-        MountArchiveAndCheckTree('data_descriptor.zip', want_tree, options=options, use_md5=True)
+
+        MountArchiveAndCheckTree('data_descriptor.zip',
+                                 want_tree,
+                                 options=options,
+                                 use_md5=True)
     else:
         want_tree = {
             '.': {'mode': 'drwxr-xr-x'},
             '-': {'mode': '-rw-r--r--', 'size': 305},
             'second.txt': {'mode': '-rw-r--r--', 'size': 320},
             }
-        MountArchiveAndCheckTree('data_descriptor.zip', want_tree, options=[*options, '-o', 'nocache'], use_md5=False)
+
+        MountArchiveAndCheckTree('data_descriptor.zip',
+                                 want_tree,
+                                 options=[*options, '-o', 'nocache'],
+                                 use_md5=False)
 
     if has_zlib:
         # This should not be mistaken for an mtree archive.
@@ -1016,8 +1041,12 @@ def TestFilteredZip():
     }
 
     for zip_name in zip_names:
-        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'lazycache'])
-        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'nocache'])
+        MountArchiveAndCheckTree(zip_name,
+                                 want_tree,
+                                 options=['-o', 'lazycache'])
+        MountArchiveAndCheckTree(zip_name,
+                                 want_tree,
+                                 options=['-o', 'nocache'])
 
     zip_names = []
     if has_gpg:
@@ -1032,8 +1061,12 @@ def TestFilteredZip():
     }
 
     for zip_name in zip_names:
-        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'lazycache'])
-        MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', 'nocache'])
+        MountArchiveAndCheckTree(zip_name,
+                                 want_tree,
+                                 options=['-o', 'lazycache'])
+        MountArchiveAndCheckTree(zip_name,
+                                 want_tree,
+                                 options=['-o', 'nocache'])
 
     zip_names = []
     if has_gpg:
@@ -1104,7 +1137,11 @@ def TestHardlinks(options=[]):
         'Symlink3': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
-    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=15, want_inodes=5, options=options)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             want_blocks=15,
+                             want_inodes=5,
+                             options=options)
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
@@ -1136,7 +1173,11 @@ def TestHardlinks(options=[]):
         'hardlinks (1)/Symlink3': {'ino': 11, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
-    MountArchiveAndCheckTree([zip_name, zip_name], want_tree, want_blocks=31, want_inodes=11, options=[*options, '-o', 'nomerge'])
+    MountArchiveAndCheckTree([zip_name, zip_name],
+                             want_tree,
+                             want_blocks=31,
+                             want_inodes=11,
+                             options=[*options, '-o', 'nomerge'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 3, 'mtime': 1727754916000000000},
@@ -1146,7 +1187,11 @@ def TestHardlinks(options=[]):
         'Symlink2': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
-    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=7, want_inodes=5, options=[*options, '-o', 'nohardlinks'])
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             want_blocks=7,
+                             want_inodes=5,
+                             options=[*options, '-o', 'nohardlinks'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
@@ -1154,7 +1199,11 @@ def TestHardlinks(options=[]):
         'Symlink2': {'ino': 3, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
-    MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=5, want_inodes=3, options=[*options, '-o', 'nodirs'])
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             want_blocks=5,
+                             want_inodes=3,
+                             options=[*options, '-o', 'nodirs'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 4},
@@ -1166,7 +1215,11 @@ def TestHardlinks(options=[]):
         'hardlinks (1)/Symlink2': {'ino': 7, 'mode': 'lrwxr-xr-x', 'nlink': 1, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
-    MountArchiveAndCheckTree([zip_name, zip_name], want_tree, want_blocks=11, want_inodes=7, options=[*options, '-o', 'nomerge,nodirs'])
+    MountArchiveAndCheckTree([zip_name, zip_name],
+                             want_tree,
+                             want_blocks=11,
+                             want_inodes=7,
+                             options=[*options, '-o', 'nomerge,nodirs'])
 
     if not has_gzip and not has_zlib: return
 
@@ -1184,7 +1237,10 @@ def TestHardlinks(options=[]):
         },
     }
 
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options,
+                             use_md5=False)
 
 
 # Tests sparse file seeking logic.
@@ -1194,7 +1250,9 @@ def TestSeek(options=[]):
         logging.info('Skipping TestSeek (FUSE version < 3)')
         return
     if on_mac:
-        logging.info('Skipping TestSeek (macFUSE does not support SEEK_DATA/SEEK_HOLE via lseek)')
+        logging.info(
+            'Skipping TestSeek (macFUSE does not support SEEK_DATA/SEEK_HOLE via lseek)'
+        )
         return
     zip_name = 'seek.tar.gz'
     s = f'Test {zip_name!r}'
@@ -1207,7 +1265,8 @@ def TestSeek(options=[]):
         if '-o' in options and 'lazycache' in options:
             with open(path, 'rb') as f:
                 f.read()
-            time.sleep(1) # wait for any async processing or FUSE attribute cache
+            # Wait for any async processing or FUSE attribute cache
+            time.sleep(1)
 
         fd = os.open(path, os.O_RDONLY)
         try:
@@ -1217,15 +1276,21 @@ def TestSeek(options=[]):
             def check_seek(offset, whence, want):
                 got = os.lseek(fd, offset, whence)
                 if got != want:
-                    LogError(f'Seek mismatch for {whence} at {offset}: got {got}, want {want} (options={options!r})')
+                    LogError(
+                        f'Seek mismatch for {whence} at {offset}: got {got}, want {want} (options={options!r})'
+                    )
 
             def check_enxio(offset, whence):
                 try:
                     os.lseek(fd, offset, whence)
-                    LogError(f'Seek {whence} at {offset} should fail with ENXIO (options={options!r})')
+                    LogError(
+                        f'Seek {whence} at {offset} should fail with ENXIO (options={options!r})'
+                    )
                 except OSError as e:
                     if e.errno != errno.ENXIO:
-                        LogError(f'Seek {whence} at {offset} failed with wrong error: {e.errno} (options={options!r})')
+                        LogError(
+                            f'Seek {whence} at {offset} failed with wrong error: {e.errno} (options={options!r})'
+                        )
 
             if is_noholes or is_nocache:
                 # No holes reported
@@ -1302,7 +1367,9 @@ def TestMultiArchive(options=[]):
         'a/b/d': {'mode': 'drwxr-xr-x'},
         'a/b/d/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
     }
-    MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'notrim'])
+    MountArchiveAndCheckTree(zip_names,
+                             want_tree,
+                             options=[*options, '-o', 'notrim'])
 
     # nomerge: not merged, and each archive is trimmed.
     want_tree = {
@@ -1312,7 +1379,9 @@ def TestMultiArchive(options=[]):
         'multi2': {'mode': 'drwxr-xr-x'},
         'multi2/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
     }
-    MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'nomerge'])
+    MountArchiveAndCheckTree(zip_names,
+                             want_tree,
+                             options=[*options, '-o', 'nomerge'])
 
     # nomerge and notrim: not merged, not trimmed.
     want_tree = {
@@ -1328,7 +1397,9 @@ def TestMultiArchive(options=[]):
         'multi2/a/b/d': {'mode': 'drwxr-xr-x'},
         'multi2/a/b/d/file2': {'size': 6, 'md5': '3d709e89c8ce201e3c928eb917989aef'},
     }
-    MountArchiveAndCheckTree(zip_names, want_tree, options=[*options, '-o', 'nomerge,notrim'])
+    MountArchiveAndCheckTree(zip_names,
+                             want_tree,
+                             options=[*options, '-o', 'nomerge,notrim'])
 
     # Merged with collisions.
     want_tree = {
@@ -1352,7 +1423,10 @@ def TestSpecialPermissions(options=[]):
         'all': {'mode': '-rwsr-sr-t'},
     }
     # -o default_permissions tells fuse-archive to use the bits from the archive.
-    MountArchiveAndCheckTree(zip_name, want_tree, options=[*options, '-o', 'default_permissions'], use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=[*options, '-o', 'default_permissions'],
+                             use_md5=False)
 
 
 # Tests dmask and fmask.
@@ -1455,7 +1529,10 @@ def TestMasks():
         'File700': {'mode': '-rwxr-xr-x'},
     }
 
-    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False, options=['-o', 'dmask=077'])
+    MountArchiveAndCheckTree('permissions.tar',
+                             want_tree,
+                             use_md5=False,
+                             options=['-o', 'dmask=077'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 24},
@@ -1505,7 +1582,10 @@ def TestMasks():
         'File700': {'mode': '-rwx------'},
     }
 
-    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False, options=['-o', 'fmask=077'])
+    MountArchiveAndCheckTree('permissions.tar',
+                             want_tree,
+                             use_md5=False,
+                             options=['-o', 'fmask=077'])
 
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxrwxrwx', 'nlink': 24},
@@ -1555,7 +1635,10 @@ def TestMasks():
         'File700': {'mode': '-rwxrwxrwx'},
     }
 
-    MountArchiveAndCheckTree('permissions.tar', want_tree, use_md5=False, options=['-o', 'dmask=0,fmask=0'])
+    MountArchiveAndCheckTree('permissions.tar',
+                             want_tree,
+                             use_md5=False,
+                             options=['-o', 'dmask=0,fmask=0'])
 
 
 # Tests the archive with lots of files.
@@ -1566,16 +1649,19 @@ def TestArchiveWithManyFiles():
     want_tree = {
         '1': {
             'mode': '-rw-r--r--',
+            'nlink': 1,
             'mtime': 1371243195000000000,
             'size': 0,
         },
         '30000': {
             'mode': '-rw-r--r--',
+            'nlink': 1,
             'mtime': 1371243200000000000,
             'size': 0,
         },
         '65536': {
             'mode': '-rw-r--r--',
+            'nlink': 1,
             'mtime': 1371243206000000000,
             'size': 0,
         },
@@ -1805,7 +1891,8 @@ def TestBigArchiveRandomOrder(options=[]):
                 env=env,
             )
             try:
-                logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
+                logging.debug(
+                    f'Mounted archive {zip_path!r} on {mount_point!r}')
 
                 GetTree(mount_point, use_md5=False)
                 st = os.statvfs(mount_point)
@@ -1826,24 +1913,29 @@ def TestBigArchiveRandomOrder(options=[]):
                 try:
                     random.seed()
                     n = 100000000
-                    for j in [random.randrange(n) for i in range(100)] + [n - 1, 0, n - 1]:
+                    for j in [random.randrange(n)
+                              for i in range(100)] + [n - 1, 0, n - 1]:
                         logging.debug(f'Getting line {j}...')
                         want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
-                        got_line = os.pread(fd, len(want_line), j * len(want_line))
+                        got_line = os.pread(fd, len(want_line),
+                                            j * len(want_line))
                         if got_line != want_line:
                             LogError(
-                                f'Want line: {want_line!r}, Got line: {got_line!r}')
+                                f'Want line: {want_line!r}, Got line: {got_line!r}'
+                            )
                     got_line = os.pread(fd, 100, j * len(want_line))
                     if got_line != want_line:
                         LogError(
-                            f'Want line: {want_line!r}, Got line: {got_line!r}')
+                            f'Want line: {want_line!r}, Got line: {got_line!r}'
+                        )
                     got_line = os.pread(fd, 100, n * len(want_line))
                     if got_line:
                         LogError(f'Want empty line, Got line: {got_line!r}')
                 finally:
                     os.close(fd)
             finally:
-                logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
+                logging.debug(
+                    f'Unmounting {zip_path!r} from {mount_point!r}...')
                 Unmount(mount_point)
                 logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
         except subprocess.CalledProcessError as e:
@@ -1871,26 +1963,31 @@ def TestBigArchiveStreamed(options=[]):
                 env=env,
             )
             try:
-                logging.debug(f'Mounted archive {zip_path!r} on {mount_point!r}')
+                logging.debug(
+                    f'Mounted archive {zip_path!r} on {mount_point!r}')
                 GetTree(mount_point, use_md5=False)
                 fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
                 try:
                     random.seed()
                     n = 100000000
-                    for i in [(r * 2 + 1) * n // 20 for r in range(10)] + [n - 1]:
+                    for i in [(r * 2 + 1) * n // 20
+                              for r in range(10)] + [n - 1]:
                         for k in range(3):
                             j = i - k * 1000000
                             if j < 0: continue
                             logging.debug(f'Getting line {j}...')
                             want_line = b'%08d The quick brown fox jumps over the lazy dog.\n' % j
-                            got_line = os.pread(fd, len(want_line), j * len(want_line))
+                            got_line = os.pread(fd, len(want_line),
+                                                j * len(want_line))
                             if got_line != want_line:
                                 LogError(
-                                    f'Want line: {want_line!r}, Got line: {got_line!r}')
+                                    f'Want line: {want_line!r}, Got line: {got_line!r}'
+                                )
                 finally:
                     os.close(fd)
             finally:
-                logging.debug(f'Unmounting {zip_path!r} from {mount_point!r}...')
+                logging.debug(
+                    f'Unmounting {zip_path!r} from {mount_point!r}...')
                 Unmount(mount_point)
                 logging.debug(f'Unmounted {zip_path!r} from {mount_point!r}')
         except subprocess.CalledProcessError as e:
@@ -1933,13 +2030,23 @@ def TestEncryptedArchive(options=[]):
         },
     }
 
-    for password in ['password', 'password\n', 'password\nThis line is ignored...\n']:
+    for password in [
+            'password', 'password\n', 'password\nThis line is ignored...\n'
+    ]:
         MountArchiveAndCheckTree(
-            zip_name, want_tree, want_blocks=11, want_inodes=6, options=options, password=password,
+            zip_name,
+            want_tree,
+            want_blocks=11,
+            want_inodes=6,
+            options=options,
+            password=password,
         )
 
     # With wrong or no password.
-    CheckArchiveMountingError(zip_name, 21, options=options, password='wrong password')
+    CheckArchiveMountingError(zip_name,
+                              21,
+                              options=options,
+                              password='wrong password')
     CheckArchiveMountingError(zip_name, 20, options=options, password='\n')
     CheckArchiveMountingError(zip_name, 20, options=options)
 
@@ -1974,7 +2081,11 @@ def TestEncryptedArchive(options=[]):
     }
     for password in ['wrong password', '\n', '']:
         MountArchiveAndCheckTree(
-            zip_name, want_tree, want_inodes=6, options=options + ['-o', 'force'], password=password,
+            zip_name,
+            want_tree,
+            want_inodes=6,
+            options=options + ['-o', 'force'],
+            password=password,
         )
 
 
@@ -2004,7 +2115,12 @@ def TestArchiveWithSpecialFiles():
     }
 
     MountArchiveAndCheckTree(
-        zip_name, want_tree, want_blocks=8, want_inodes=6, options=['-o', 'default_permissions'],)
+        zip_name,
+        want_tree,
+        want_blocks=8,
+        want_inodes=6,
+        options=['-o', 'default_permissions'],
+    )
 
     # Test -o default_permissions,fmask=0
     want_tree = {
@@ -2017,7 +2133,12 @@ def TestArchiveWithSpecialFiles():
     }
 
     MountArchiveAndCheckTree(
-        zip_name, want_tree, want_blocks=8, want_inodes=6, options=['-o', 'default_permissions,fmask=0'],)
+        zip_name,
+        want_tree,
+        want_blocks=8,
+        want_inodes=6,
+        options=['-o', 'default_permissions,fmask=0'],
+    )
 
     # Test -o nosymlinks
     want_tree = {
@@ -2081,7 +2202,8 @@ def TestInvalidArchive():
     CheckArchiveMountingError('overflow.tar.gz', 32)
 
     # 7Z encryption is not supported
-    if has_liblzma: CheckArchiveMountingError("encrypted.7z", 22, password='password')
+    if has_liblzma:
+        CheckArchiveMountingError("encrypted.7z", 22, password='password')
     CheckArchiveMountingError("encrypted-solidly.7z", 22, password='password')
 
     # Test nobidding option with an unrecognized extension
@@ -2106,13 +2228,19 @@ def TestExtendedAttributes(options=[]):
             },
         },
     }
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options,
+                             use_md5=False)
 
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {"xattr": {}},
     }
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options + ['-o', 'noxattrs'],
+                             use_md5=False)
 
     # Test very long name xattr cases
     zip_name = 'long-xattr-name.tar'
@@ -2125,13 +2253,19 @@ def TestExtendedAttributes(options=[]):
             # },
         },
     }
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options,
+                             use_md5=False)
 
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {"xattr": {}},
     }
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options + ['-o', 'noxattrs'],
+                             use_md5=False)
 
     # Test xattr error cases
     zip_name = 'xattr-errors.tar'
@@ -2144,13 +2278,20 @@ def TestExtendedAttributes(options=[]):
             },
         },
     }
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options, use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options,
+                             use_md5=False)
 
     want_tree = {
         ".": {"ino": 1, "mode": "drwxr-xr-x", "nlink": 2},
         "file.txt": {"xattr": {}},
     }
-    MountArchiveAndCheckTree(zip_name, want_tree, options=options + ['-o', 'noxattrs'], use_md5=False)
+    MountArchiveAndCheckTree(zip_name,
+                             want_tree,
+                             options=options + ['-o', 'noxattrs'],
+                             use_md5=False)
+
 
 # Tests FUSE error paths.
 # Tests automatic mount point creation, removal, and deduplication.
@@ -2165,7 +2306,10 @@ def TestMultiArchiveUsage():
         os.mkdir(mount_point)
 
         # 1. Correct usage: 2 archives + 1 mount point
-        command = [mount_program, '-f', '-o', 'notrim', zip_path1, zip_path2, mount_point]
+        command = [
+            mount_program, '-f', '-o', 'notrim', zip_path1, zip_path2,
+            mount_point
+        ]
         if args.verbose: command.append('-v')
 
         proc = subprocess.Popen(command)
@@ -2174,11 +2318,14 @@ def TestMultiArchiveUsage():
                 if os.path.ismount(mount_point): break
                 time.sleep(0.1)
             if not os.path.ismount(mount_point):
-                LogError("Multi-archive mount failed with explicit mount point")
+                LogError(
+                    "Multi-archive mount failed with explicit mount point")
             else:
-                if not os.path.exists(os.path.join(mount_point, 'a/b/c/file1')):
+                if not os.path.exists(os.path.join(mount_point,
+                                                   'a/b/c/file1')):
                     LogError("Missing file1 in multi-archive mount")
-                if not os.path.exists(os.path.join(mount_point, 'a/b/d/file2')):
+                if not os.path.exists(os.path.join(mount_point,
+                                                   'a/b/d/file2')):
                     LogError("Missing file2 in multi-archive mount")
         finally:
             proc.terminate()
@@ -2205,10 +2352,13 @@ def TestMultiArchiveUsage():
             # but we check if fuse-archive at least attempted it.
             # On Linux, mounting on a file IS allowed.
             if not os.path.ismount(zip_link2):
-                logging.info("Note: Mounting on a file (auto-mount point) not supported or failed as expected")
+                logging.info(
+                    "Note: Mounting on a file (auto-mount point) not supported or failed as expected"
+                )
         finally:
             proc.terminate()
             proc.wait()
+
 
 # Tests usage information, help, and version options.
 def TestUsage():
@@ -2216,12 +2366,15 @@ def TestUsage():
     # No arguments
     res = subprocess.run([mount_program], capture_output=True)
     if res.returncode != 1:
-        LogError(f"Expected exit code 1 for no arguments, got {res.returncode}")
+        LogError(
+            f"Expected exit code 1 for no arguments, got {res.returncode}")
 
     # Help and version options
     logging.info("Testing help and version options")
     for opt in ['-h', '--help', '-V', '--version']:
-        res = subprocess.run([mount_program, opt], capture_output=True, text=True)
+        res = subprocess.run([mount_program, opt],
+                             capture_output=True,
+                             text=True)
         if res.returncode != 0:
             LogError(f"Option {opt} failed with {res.returncode}")
 
@@ -2238,6 +2391,7 @@ def TestUsage():
     with MountArchive(zip_name, options=['-q']) as mount_point:
         if not os.path.exists(mount_point):
             LogError("Mount point does not exist with -q flag")
+
 
 # Tests automatic mount point creation, removal, and deduplication.
 def TestAutoMountPoint():
@@ -2274,14 +2428,16 @@ def TestAutoMountPoint():
                 if os.path.ismount(dedup_mount_point): break
                 time.sleep(0.1)
             if not os.path.ismount(dedup_mount_point):
-                LogError("Deduplicated mount point 'archive (1)' was not created")
+                LogError(
+                    "Deduplicated mount point 'archive (1)' was not created")
         finally:
             proc.terminate()
             proc.wait()
             if os.path.exists(dedup_mount_point):
                 LogError("Deduplicated mount point was not removed")
             if not os.path.exists(os.path.join(tmp_dir, 'archive')):
-                LogError("Original 'archive' directory was accidentally removed")
+                LogError(
+                    "Original 'archive' directory was accidentally removed")
             os.rmdir(os.path.join(tmp_dir, 'archive'))
 
         # 3. Mount point starting with '-' (using permanent symlink test/data/--help)
@@ -2308,12 +2464,16 @@ def TestAutoMountPoint():
         # 4. Mount point creation failure (e.g. read-only directory)
         readonly_dir = os.path.join(tmp_dir, 'readonly')
         os.mkdir(readonly_dir)
-        os.chmod(readonly_dir, 0o555) # Read and execute, but no write
+        os.chmod(readonly_dir, 0o555)  # Read and execute, but no write
         try:
             command_fail = [mount_program, zip_path]
-            res = subprocess.run(command_fail, capture_output=True, cwd=readonly_dir)
+            res = subprocess.run(command_fail,
+                                 capture_output=True,
+                                 cwd=readonly_dir)
             if res.returncode != 10:
-                LogError(f"Expected exit code 10 for mount point creation failure, got {res.returncode}")
+                LogError(
+                    f"Expected exit code 10 for mount point creation failure, got {res.returncode}"
+                )
         finally:
             os.chmod(readonly_dir, 0o777)
             os.rmdir(readonly_dir)
@@ -2324,7 +2484,9 @@ def TestAutoMountPoint():
             command_nonexistent = [mount_program, zip_path, nonexistent_parent]
             res = subprocess.run(command_nonexistent, capture_output=True)
             if res.returncode != 10:
-                LogError(f"Expected exit code 10 for non-existent parent, got {res.returncode}")
+                LogError(
+                    f"Expected exit code 10 for non-existent parent, got {res.returncode}"
+                )
         except:
             pass
 
@@ -2333,9 +2495,12 @@ def TestAutoMountPoint():
             command_empty = [mount_program, zip_path, ""]
             res = subprocess.run(command_empty, capture_output=True)
             if res.returncode != 10:
-                LogError(f"Expected exit code 10 for empty mount point, got {res.returncode}")
+                LogError(
+                    f"Expected exit code 10 for empty mount point, got {res.returncode}"
+                )
         except:
             pass
+
 
 def TestFuseErrors():
     logging.info("Testing FUSE error paths")
@@ -2348,14 +2513,17 @@ def TestFuseErrors():
             os.stat(path)
             LogError(f"Expected ENOENT for {path}")
         except OSError as e:
-            if e.errno != errno.ENOENT: LogError(f"Expected ENOENT ({errno.ENOENT}), got {e.errno}")
+            if e.errno != errno.ENOENT:
+                LogError(f"Expected ENOENT ({errno.ENOENT}), got {e.errno}")
 
         if has_xattrs:
             try:
                 os.getxattr(path, 'user.attr')
                 LogError(f"Expected ENOENT for xattr on nonexistent path")
             except OSError as e:
-                if e.errno != errno.ENOENT: LogError(f"Expected ENOENT ({errno.ENOENT}), got {e.errno}")
+                if e.errno != errno.ENOENT:
+                    LogError(
+                        f"Expected ENOENT ({errno.ENOENT}), got {e.errno}")
 
         # ENOTDIR
         path = os.path.join(mount_point, 'romeo.txt', 'inside')
@@ -2363,7 +2531,8 @@ def TestFuseErrors():
             os.stat(path)
             LogError(f"Expected ENOTDIR for {path}")
         except OSError as e:
-            if e.errno != errno.ENOTDIR: LogError(f"Expected ENOTDIR ({errno.ENOTDIR}), got {e.errno}")
+            if e.errno != errno.ENOTDIR:
+                LogError(f"Expected ENOTDIR ({errno.ENOTDIR}), got {e.errno}")
 
         # EISDIR on open
         path = mount_point
@@ -2371,7 +2540,8 @@ def TestFuseErrors():
             fd = os.open(path, os.O_RDONLY)
             os.close(fd)
         except OSError as e:
-            if e.errno != errno.EISDIR: LogError(f"Expected EISDIR ({errno.EISDIR}), got {e.errno}")
+            if e.errno != errno.EISDIR:
+                LogError(f"Expected EISDIR ({errno.EISDIR}), got {e.errno}")
 
         # EINVAL on readlink of a file
         path = os.path.join(mount_point, 'romeo.txt')
@@ -2379,14 +2549,17 @@ def TestFuseErrors():
             os.readlink(path)
             LogError(f"Expected EINVAL for readlink on file")
         except OSError as e:
-            if e.errno != errno.EINVAL: LogError(f"Expected EINVAL ({errno.EINVAL}), got {e.errno}")
+            if e.errno != errno.EINVAL:
+                LogError(f"Expected EINVAL ({errno.EINVAL}), got {e.errno}")
 
         if has_xattrs:
             try:
                 os.getxattr(path, 'user.nonexistent')
                 LogError(f"Expected ENODATA for missing xattr")
             except OSError as e:
-                if e.errno != errno.ENODATA: LogError(f"Expected ENODATA ({errno.ENODATA}), got {e.errno}")
+                if e.errno != errno.ENODATA:
+                    LogError(
+                        f"Expected ENODATA ({errno.ENODATA}), got {e.errno}")
 
     # ERANGE on getxattr with small buffer
     zip_name = 'many-xattrs.tar'
@@ -2428,7 +2601,10 @@ def TestFuseErrors():
         try:
             os.stat(path)
         except OSError as e:
-            if e.errno != errno.ENAMETOOLONG: LogError(f"Expected ENAMETOOLONG ({errno.ENAMETOOLONG}), got {e.errno}")
+            if e.errno != errno.ENAMETOOLONG:
+                LogError(
+                    f"Expected ENAMETOOLONG ({errno.ENAMETOOLONG}), got {e.errno}"
+                )
 
         # ENOTDIR on opendir of a file
         path = os.path.join(mount_point, 'romeo.txt')
@@ -2436,7 +2612,8 @@ def TestFuseErrors():
             os.listdir(path)
             LogError(f"Expected ENOTDIR for listdir on {path}")
         except OSError as e:
-            if e.errno != errno.ENOTDIR: LogError(f"Expected ENOTDIR ({errno.ENOTDIR}), got {e.errno}")
+            if e.errno != errno.ENOTDIR:
+                LogError(f"Expected ENOTDIR ({errno.ENOTDIR}), got {e.errno}")
 
         # SEEK_DATA / SEEK_HOLE errors
         fd = os.open(path, os.O_RDONLY)
@@ -2449,10 +2626,12 @@ def TestFuseErrors():
             # macFUSE does not support SEEK_DATA and returns EINVAL
             if not on_mac:
                 try:
-                    os.lseek(fd, 1000000, 3) # os.SEEK_DATA is 3
+                    os.lseek(fd, 1000000, 3)  # os.SEEK_DATA is 3
                     LogError(f"Expected ENXIO for seek data past end")
                 except OSError as e:
-                    if e.errno != errno.ENXIO: LogError(f"Expected ENXIO ({errno.ENXIO}), got {e.errno}")
+                    if e.errno != errno.ENXIO:
+                        LogError(
+                            f"Expected ENXIO ({errno.ENXIO}), got {e.errno}")
         finally:
             os.close(fd)
 
@@ -2460,7 +2639,8 @@ def TestFuseErrors():
         os.statvfs(mount_point)
 
     # Jump tests for Read
-    with MountArchive(zip_name, options=['-o', 'nocache,direct_io']) as mount_point:
+    with MountArchive(zip_name, options=['-o',
+                                         'nocache,direct_io']) as mount_point:
         path = os.path.join(mount_point, 'romeo.txt')
         fd = os.open(path, os.O_RDONLY)
         try:
@@ -2481,11 +2661,13 @@ def TestFuseErrors():
         os.stat(mount_point)
 
     # Multiple archives
-    with MountArchive(['multi1.tar.gz', 'multi2.tar.gz'], options=['-o', 'notrim', '-v']) as mount_point:
+    with MountArchive(['multi1.tar.gz', 'multi2.tar.gz'],
+                      options=['-o', 'notrim', '-v']) as mount_point:
         if not os.path.exists(os.path.join(mount_point, 'a/b/c/file1')):
             LogError("Missing a/b/c/file1 in multi-archive mount")
         if not os.path.exists(os.path.join(mount_point, 'a/b/d/file2')):
             LogError("Missing a/b/d/file2 in multi-archive mount")
+
 
 if has_gpg:
     b = b' BLOCK'
@@ -2493,10 +2675,9 @@ if has_gpg:
     p = b' PGP'
     s = b' PRIVATE'
     d = b'-----'
-    subprocess.run(
-        ['gpg', '--quiet', '--import'],
-        check=True,
-        input= d + b'BEGIN' + p + s + k + b + d + b'''
+    subprocess.run(['gpg', '--quiet', '--import'],
+                   check=True,
+                   input=d + b'BEGIN' + p + s + k + b + d + b'''
 
 lFgEaZo1fhYJKwYBBAHaRw8BAQdAluzXFhgZsK/hf+nmr5NeRwH/ErXLA7gG6r47
 GXdneYoAAP4vOlornRnpAn3s7te7GE2lf04jCHhK3KA9Rboz2Yazkg/JtBlUZXN0
@@ -2521,7 +2702,10 @@ try:
     TestFilteredOpaque()
 finally:
     if has_gpg:
-        subprocess.run(['gpg', '--batch', '--yes', '--delete-secret-and-public-key', '7D74961702BCAD35D591BB896EC5AAD2CC5FEC0E'])
+        subprocess.run([
+            'gpg', '--batch', '--yes', '--delete-secret-and-public-key',
+            '7D74961702BCAD35D591BB896EC5AAD2CC5FEC0E'
+        ])
 
 TestHardlinks()
 TestHardlinks(['-o', 'nocache'])
