@@ -159,7 +159,7 @@ class ReaderTest : public ::testing::Test {
       Options options;
       options.cache = Cache::None;
       tree_.SetOptions(options);
-      tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+      tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
     } catch (ExitCode const& e) {
       std::cerr << "ReaderTest::SetUp failed with ExitCode: "
                 << static_cast<int>(e) << std::endl;
@@ -244,7 +244,7 @@ class FUSETest : public ::testing::Test {
 };
 
 TEST_F(FUSETest, GetAttrByPath) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   Stat z;
 #if FUSE_USE_VERSION >= 30
   EXPECT_EQ(ops_.getattr("/romeo.txt", &z, nullptr), 0);
@@ -261,7 +261,7 @@ TEST_F(FUSETest, GetAttrByPath) {
 }
 
 TEST_F(FUSETest, GetAttrByFi) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   fuse_file_info fi;
   std::memset(&fi, 0, sizeof(fi));
   EXPECT_EQ(ops_.open("/romeo.txt", &fi), 0);
@@ -279,7 +279,7 @@ TEST_F(FUSETest, GetAttrByFi) {
 }
 
 TEST_F(FUSETest, Xattr) {
-  tree_.Load(std::vector<std::string>{"test/data/many-xattrs.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/many-xattrs.tar"});
   char buf[1024];
 
   // Success
@@ -316,7 +316,7 @@ TEST_F(FUSETest, Xattr) {
 }
 
 TEST_F(FUSETest, ReadLink) {
-  tree_.Load(std::vector<std::string>{"test/data/specials.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/specials.tar"});
   char buf[1024];
 
   // Success
@@ -331,7 +331,7 @@ TEST_F(FUSETest, ReadLink) {
 }
 
 TEST_F(FUSETest, OpenRelease) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   fuse_file_info fi;
   std::memset(&fi, 0, sizeof(fi));
 
@@ -351,7 +351,7 @@ TEST_F(FUSETest, OpenRelease) {
 
 #if FUSE_USE_VERSION >= 30
 TEST_F(FUSETest, Seek) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   fuse_file_info fi;
   std::memset(&fi, 0, sizeof(fi));
   ops_.open("/romeo.txt", &fi);
@@ -369,7 +369,7 @@ TEST_F(FUSETest, Seek) {
 #endif
 
 TEST_F(FUSETest, OpenDir) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   fuse_file_info fi;
   std::memset(&fi, 0, sizeof(fi));
 
@@ -385,7 +385,7 @@ TEST_F(FUSETest, OpenDir) {
 }
 
 TEST_F(FUSETest, ReadDir) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   fuse_file_info fi;
   std::memset(&fi, 0, sizeof(fi));
   ops_.opendir("/", &fi);
@@ -415,7 +415,7 @@ TEST_F(FUSETest, ReadDir) {
 }
 
 TEST_F(FUSETest, StatFs) {
-  tree_.Load(std::vector<std::string>{"test/data/archive.tar"});
+  tree_.Load(std::vector<std::string>{"tests/data/archive.tar"});
   StatVfs z;
   std::memset(&z, 0, sizeof(z));
   EXPECT_EQ(ops_.statfs("/", &z), 0);

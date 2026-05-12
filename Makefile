@@ -79,7 +79,7 @@ all: out/$(PROJECT)
 # ---- Formatting
 
 FORMAT = clang-format
-CC_FILES = $(wildcard *.cc lib/*.cc test/*.cc)
+CC_FILES = $(wildcard *.cc lib/*.cc tests/*.cc)
 H_FILES = $(wildcard lib/*.h)
 ALL_CXX_FILES = $(CC_FILES) $(H_FILES)
 
@@ -113,14 +113,14 @@ out/$(PROJECT): $(PROJECT).cc $(LIB_ARCHIVE)
 # ---- Unit Tests
 
 UNIT_TEST = unit_tests
-UNIT_TEST_SOURCES = test/unit_tests.cc
+UNIT_TEST_SOURCES = tests/unit_tests.cc
 UNIT_TEST_OBJECTS = $(addprefix out/,$(UNIT_TEST_SOURCES:.cc=.o))
 
 ifeq ($(HAS_GTEST), yes)
 out/$(UNIT_TEST): $(UNIT_TEST_OBJECTS) $(LIB_ARCHIVE)
 	$(CXX) $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(UNIT_TEST_PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $^ $(PKG_LDFLAGS) $(UNIT_TEST_PKG_LDFLAGS) $(LDFLAGS) -o $@
 
-out/test/%.o: test/%.cc
+out/tests/%.o: tests/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(COMMON_CXXFLAGS) $(PKG_CXXFLAGS) $(UNIT_TEST_PKG_CXXFLAGS) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ -MMD -MP -MF $(@:.o=.d)
 
@@ -131,23 +131,23 @@ endif
 
 # ---- Standard targets
 
-check: out/$(PROJECT) $(UNIT_TEST_BIN) test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
+check: out/$(PROJECT) $(UNIT_TEST_BIN) tests/data/big.zip tests/data/collisions.zip tests/data/deep.tar tests/data/many_nodes.zip
 	$(if $(UNIT_TEST_BIN),$(UNIT_TEST_BIN))
-	python3 test/test.py
+	python3 tests/test.py
 
 check-fast: out/$(PROJECT) $(UNIT_TEST_BIN)
 	$(if $(UNIT_TEST_BIN),$(UNIT_TEST_BIN))
-	python3 test/test.py --fast
+	python3 tests/test.py --fast
 
 valgrind: out/$(PROJECT) $(UNIT_TEST_BIN)
 	$(if $(UNIT_TEST_BIN),valgrind -q --leak-check=full --error-exitcode=33 $(UNIT_TEST_BIN))
-	MOUNT_WRAPPER="valgrind -q --leak-check=full --error-exitcode=33" python3 test/test.py --fast
+	MOUNT_WRAPPER="valgrind -q --leak-check=full --error-exitcode=33" python3 tests/test.py --fast
 
 coverage:
 	$(MAKE) clean
 	$(MAKE) DEBUG=1 COVERAGE=1 check-fast
 	lcov --capture --directory out --output-file out/coverage.info --ignore-errors mismatch,inconsistent
-	lcov --remove out/coverage.info '/usr/include/*' '/usr/lib/*' 'test/*' --output-file out/coverage.info --ignore-errors unused,inconsistent
+	lcov --remove out/coverage.info '/usr/include/*' '/usr/lib/*' 'tests/*' --output-file out/coverage.info --ignore-errors unused,inconsistent
 	genhtml out/coverage.info --output-directory out/coverage --ignore-errors inconsistent
 	@echo "Coverage report generated at out/coverage/index.html"
 
@@ -160,7 +160,7 @@ clean:
 	rm -rf out
 
 clean-data:
-	rm -f test/data/big.zip test/data/collisions.zip test/data/deep.tar test/data/many_nodes.zip
+	rm -f tests/data/big.zip tests/data/collisions.zip tests/data/deep.tar tests/data/many_nodes.zip
 
 doc: $(MAN)
 	@if [ -z "$(QUIET)" ]; then man -l $(MAN); fi
@@ -196,17 +196,17 @@ uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(PROJECT)" "$(DESTDIR)$(MANDIR)/$(MAN)"
 
 
-test/data/big.zip: test/make_big_zip.py
-	python3 test/make_big_zip.py
+tests/data/big.zip: tests/make_big_zip.py
+	python3 tests/make_big_zip.py
 
-test/data/collisions.zip: test/make_collisions.py
-	python3 test/make_collisions.py
+tests/data/collisions.zip: tests/make_collisions.py
+	python3 tests/make_collisions.py
 
-test/data/deep.tar: test/make_deep.py
-	python3 test/make_deep.py
+tests/data/deep.tar: tests/make_deep.py
+	python3 tests/make_deep.py
 
-test/data/many_nodes.zip: test/make_many_nodes.py
-	python3 test/make_many_nodes.py
+tests/data/many_nodes.zip: tests/make_many_nodes.py
+	python3 tests/make_many_nodes.py
 
 .PHONY: all check check-fast check-format clean clean-data coverage doc format install install-strip release test uninstall unit_tests valgrind
 
