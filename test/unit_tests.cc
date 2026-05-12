@@ -518,10 +518,10 @@ TEST(Util, All) {
   EXPECT_EQ(SafeAdd(10, 20), 30);
   EXPECT_THROW(SafeAdd(INT64_MAX, 1), ExitCode);
 
-  EXPECT_EQ(StrCat(ExitCode::GENERIC_FAILURE), "GENERIC_FAILURE (1)");
 #define CHECK_EXIT_CODE(s)       \
   EXPECT_EQ(StrCat(ExitCode::s), \
             #s " (" + std::to_string(int(ExitCode::s)) + ")");
+  CHECK_EXIT_CODE(GENERIC_FAILURE)
   CHECK_EXIT_CODE(CANNOT_CREATE_MOUNT_POINT)
   CHECK_EXIT_CODE(CANNOT_OPEN_ARCHIVE)
   CHECK_EXIT_CODE(CANNOT_CREATE_CACHE)
@@ -544,15 +544,31 @@ TEST(Util, All) {
 
   EXPECT_FALSE(GetCacheDir().empty());
 
-  FileDescriptor fd = CreateCacheFile(true);
-  EXPECT_TRUE(fd.IsValid());
-  CheckCacheFile(fd);
-
-  // Failure: Not empty
+  // Create cache file in /tmp.
   {
+    FileDescriptor fd = CreateCacheFile();
+    EXPECT_TRUE(fd.IsValid());
+    EXPECT_NO_THROW(CheckCacheFile(fd));
+
+    // Failure: Not empty
     char const c = 'x';
     EXPECT_EQ(write(fd, &c, 1), 1);
     EXPECT_THROW(CheckCacheFile(fd), ExitCode);
+  }
+
+  // Create cache file in memory.
+  try {
+    FileDescriptor fd = CreateCacheFile(true);
+    EXPECT_TRUE(fd.IsValid());
+    EXPECT_NO_THROW(CheckCacheFile(fd));
+
+    // Failure: Not empty
+    char const c = 'x';
+    EXPECT_EQ(write(fd, &c, 1), 1);
+    EXPECT_THROW(CheckCacheFile(fd), ExitCode);
+  } catch (ExitCode e) {
+    // If it fails, it should fail with a precise ExitCode.
+    EXPECT_EQ(e, ExitCode::CANNOT_CREATE_CACHE);
   }
 
   // Failure: Invalid FD
@@ -567,9 +583,9 @@ TEST(Util, All) {
     // Destructor will run here and PLOG(ERROR)
   }
 
-  EXPECT_THROW(ThrowExitCode("Incorrect passphrase"), ExitCode);
-  EXPECT_THROW(ThrowExitCode("Passphrase required"), ExitCode);
   for (const char* const s : {
+           "Incorrect passphrase",
+           "Passphrase required",
            "Crypto codec not supported",
            "Decryption is unsupported",
            "Encrypted file is unsupported",
@@ -581,7 +597,10 @@ TEST(Util, All) {
        }) {
     EXPECT_THROW(ThrowExitCode(s), ExitCode);
   }
+
   EXPECT_NO_THROW(ThrowExitCode("Unknown error"));
+
+  EXPECT_EQ(StrCat(Hole(42, 999)), "Hole from 42 to 999");
 }
 
 TEST(Common, All) {

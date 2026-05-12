@@ -176,26 +176,24 @@ FileDescriptor CreateCacheFile(bool memcache) {
   FileDescriptor fd;
 
   if (memcache) {
+    errno = ENOSYS;
+
 #if defined(__linux__)
     fd = FileDescriptor(memfd_create("fuse-archive", MFD_CLOEXEC));
     if (fd.IsValid()) {
       LOG(DEBUG) << "Created memory-backed cache file (memfd_create)";
       return fd;
     }
-#endif
-
-#if defined(SHM_ANON)
+#elif defined(SHM_ANON)
     fd = FileDescriptor(shm_open(SHM_ANON, O_RDWR | O_CLOEXEC, 0600));
     if (fd.IsValid()) {
       LOG(DEBUG) << "Created memory-backed cache file (shm_open SHM_ANON)";
       return fd;
     }
-#endif
-
-// macOS shm_open objects require ftruncate before any write and cannot
-// auto-extend like Linux memfd or a regular file.
-#if !defined(__APPLE__)
-    std::string const shm_name = "/fuse-archive-" + std::to_string(getpid());
+#elif !defined(__APPLE__)
+    // macOS shm_open objects require ftruncate before any write and cannot
+    // auto-extend like Linux memfd or a regular file.
+    std::string const shm_name = StrCat("/fuse-archive-", getpid());
     fd = FileDescriptor(
         shm_open(shm_name.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600));
     if (fd.IsValid()) {
