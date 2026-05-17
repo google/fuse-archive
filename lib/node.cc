@@ -35,6 +35,8 @@
 
 namespace fuse_archive {
 
+ino_t Node::ino_count = 0;
+
 void Node::AddChild(Node* const child) {
   assert(child);
   assert(!child->parent);
@@ -48,26 +50,6 @@ void Node::AddChild(Node* const child) {
   children.push_back(*child);
 }
 
-// Recomputes this Node's path length and hash.
-void Node::ComputePathHash() {
-  path_length = 0;
-  path_hash = 0;
-
-  if (!IsRoot()) {
-    path_length = parent->path_length;
-    path_hash = parent->path_hash;
-    if (!parent->IsRoot()) {
-      ++path_length;
-      boost::hash_combine(path_hash, '/');
-    }
-  }
-
-  path_length += name.size();
-  for (char const c : name) {
-    boost::hash_combine(path_hash, c);
-  }
-}
-
 // Returns the number of blocks used by this node.
 i64 Node::GetBlockCount() const {
   if (size <= 0) {
@@ -77,33 +59,6 @@ i64 Node::GetBlockCount() const {
   i64 const size = GetSizeToLastHole();
   i64 const n = size / block_size + (size % block_size != 0) - saved_blocks;
   return std::max<i64>(0, n);
-}
-
-Stat Node::GetStat() const {
-  Stat z = {};
-  assert((nlink == 0) == (hardlink_target != nullptr));
-  z.st_nlink = GetTarget()->nlink;
-  assert(z.st_nlink > 0);
-  z.st_ino = ino;
-  z.st_mode = mode;
-  z.st_uid = uid;
-  z.st_gid = gid;
-  z.st_size = size;
-  z.st_blksize = block_size;
-  z.st_blocks = GetBlockCount();
-  z.st_rdev = dev;
-
-#if __APPLE__
-  z.st_atimespec = atime;
-  z.st_mtimespec = mtime;
-  z.st_ctimespec = ctime;
-#else
-  z.st_atim = atime;
-  z.st_mtim = mtime;
-  z.st_ctim = ctime;
-#endif
-
-  return z;
 }
 
 off_t Node::SparseSeek(off_t const offset, int const whence) const {
@@ -164,7 +119,33 @@ off_t Node::SparseSeek(off_t const offset, int const whence) const {
   }
 }
 
-// Gets the full absolute path of this node.
+Stat Node::GetStat() const {
+  Stat z = {};
+  assert((nlink == 0) == (hardlink_target != nullptr));
+  z.st_nlink = GetTarget()->nlink;
+  assert(z.st_nlink > 0);
+  z.st_ino = ino;
+  z.st_mode = mode;
+  z.st_uid = uid;
+  z.st_gid = gid;
+  z.st_size = size;
+  z.st_blksize = block_size;
+  z.st_blocks = GetBlockCount();
+  z.st_rdev = dev;
+
+#if __APPLE__
+  z.st_atimespec = atime;
+  z.st_mtimespec = mtime;
+  z.st_ctimespec = ctime;
+#else
+  z.st_atim = atime;
+  z.st_mtim = mtime;
+  z.st_ctim = ctime;
+#endif
+
+  return z;
+}
+
 std::string Node::GetPath() const {
   if (IsRoot()) {
     assert(name == "/");
@@ -229,6 +210,26 @@ bool Node::HasPath(std::string_view path) const {
   return path == node->name;
 }
 
+// Recomputes this Node's path length and hash.
+void Node::ComputePathHash() {
+  path_length = 0;
+  path_hash = 0;
+
+  if (!IsRoot()) {
+    path_length = parent->path_length;
+    path_hash = parent->path_hash;
+    if (!parent->IsRoot()) {
+      ++path_length;
+      boost::hash_combine(path_hash, '/');
+    }
+  }
+
+  path_length += name.size();
+  for (char const c : name) {
+    boost::hash_combine(path_hash, c);
+  }
+}
+
 // If this node is a directory which only has one child which is a directory
 // as well, then this method returns a pointer to this child. Otherwise it
 // returns a null pointer.
@@ -268,7 +269,5 @@ std::ostream& operator<<(std::ostream& out, const Node& n) {
   }
   return out << " " << Path(n.GetPath());
 }
-
-ino_t Node::count = 0;
 
 }  // namespace fuse_archive

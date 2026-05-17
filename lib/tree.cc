@@ -319,7 +319,7 @@ void Tree::ResolveHardlinks() {
       target->nlink++;
     } else {
       // Then the new Node gets its own inode number.
-      node->ino = ++Node::count;
+      node->ino = ++Node::ino_count;
       // And it counts as an extra separate inode.
       node->nlink = 1;
       inode_count_++;

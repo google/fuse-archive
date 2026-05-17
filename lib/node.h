@@ -38,14 +38,21 @@ namespace bi = boost::intrusive;
 
 class Tree;
 
-#ifdef NDEBUG
-using LinkMode = bi::link_mode<bi::normal_link>;
-#else
-using LinkMode = bi::link_mode<bi::safe_link>;
-#endif
-
 // A node of the virtual file system: either a directory or a file.
 struct Node {
+  // Nodes are dynamically allocated and passed around by unique_ptr when
+  // the ownership is transferred.
+  using Ptr = std::unique_ptr<Node>;
+
+  // Constants and settings shared by all nodes.
+  static ino_t ino_count;
+
+#ifdef NDEBUG
+  using LinkMode = bi::link_mode<bi::normal_link>;
+#else
+  using LinkMode = bi::link_mode<bi::safe_link>;
+#endif
+
   // --- 16-byte members (Highest alignment) ---
 
   timespec mtime;
@@ -59,7 +66,7 @@ struct Node {
   i64 const index_within_archive = 0;
 
   // Inode-specific data.
-  ino_t ino = ++count;
+  ino_t ino = ++ino_count;
 
   // Number of bytes of this file.
   i64 size = 0;
@@ -79,7 +86,7 @@ struct Node {
   // Device number for special files.
   dev_t dev = 0;
 
-  // --- Architecture-dependent members ---
+  // --- Architecture-dependent members (8 bytes on 64-bit, 4 bytes on 32-bit)
 
   // File descriptor of the archive holding the entry represented by this node,
   // or nullptr if it is not directly represented in the archive (like any
@@ -98,11 +105,7 @@ struct Node {
   size_t path_length = 0;
   size_t path_hash = 0;
 
-  // --- Intrusive Hooks ---
-
-  // Hook used to index Nodes by full path.
-  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<false>>;
-  ByPath by_path;
+  // --- Intrusive Hooks (8-24 bytes on 64-bit, 4-12 bytes on 32-bit) ---
 
   // Hook used to index Nodes by parent.
   using ByParent = bi::slist_member_hook<LinkMode>;
@@ -117,6 +120,10 @@ struct Node {
                              bi::linear<true>,
                              bi::cache_last<true>>;
   Children children;
+
+  // Hook used to index Nodes by full path.
+  using ByPath = bi::unordered_set_member_hook<LinkMode, bi::store_hash<false>>;
+  ByPath by_path;
 
   // --- Remaining members (Strings and 4-byte types) ---
 
@@ -151,14 +158,6 @@ struct Node {
   using Attributes = std::vector<Attribute>;
   Attributes attributes;
 
-  static ino_t count;
-
-  using Ptr = std::unique_ptr<Node>;
-
- private:
-  friend class NodeTest;
-
- public:
   // Returns true if this node is the root directory of the virtual file system.
   bool IsRoot() const { return !parent; }
 
@@ -189,10 +188,6 @@ struct Node {
   // Returns the POSIX 'struct stat' representation of this node's metadata.
   Stat GetStat() const;
 
-  // Performs a sparse seek (SEEK_DATA or SEEK_HOLE) on this node.
-  // Returns the new offset or a negative error code (e.g., -ENXIO, -EINVAL).
-  off_t SparseSeek(off_t offset, int whence) const;
-
   // Returns the full absolute path of this node within the virtual file system.
   std::string GetPath() const;
 
@@ -210,6 +205,10 @@ struct Node {
   i64 GetSizeToLastHole() const {
     return IsFullyCached() ? last_hole_start - cache_offset : size;
   }
+
+  // Performs a sparse seek (SEEK_DATA or SEEK_HOLE) on this node.
+  // Returns the new offset or a negative error code (e.g., -ENXIO, -EINVAL).
+  off_t SparseSeek(off_t offset, int whence) const;
 };
 
 // Formats a Node for logging output (e.g. "File /path/to/file").
