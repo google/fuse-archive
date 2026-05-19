@@ -42,6 +42,32 @@ args = parser.parse_args()
 logging.getLogger().setLevel('DEBUG' if args.verbose else 'INFO')
 is_fast = args.fast
 
+# Directory of this test program.
+script_dir = os.path.dirname(os.path.realpath(__file__))
+
+# Directory containing the archives to mount.
+data_dir = os.path.join(script_dir, 'data')
+
+# Path of the FUSE mounter.
+mount_program = os.path.join(script_dir, '..', 'out', 'fuse-archive')
+
+sr = subprocess.run([mount_program, '--version'],
+                    capture_output=True,
+                    encoding='UTF-8')
+
+
+def GetFuseMajorVersion():
+    for line in sr.stdout.split('\n'):
+        if 'FUSE library version' in line:
+            # Handle "FUSE library version 3.x" and "FUSE library version: 3.x"
+            version_str = line.split('version')[-1].strip(': ').split()[0]
+            return int(version_str.split('.')[0])
+    return 0
+
+
+fuse_major_version = GetFuseMajorVersion()
+logging.info(f'FUSE major version: {fuse_major_version}')
+
 on_mac = sys.platform.startswith('darwin')
 on_linux = sys.platform.startswith('linux')
 
@@ -53,6 +79,9 @@ has_xattrs = not on_mac
 if not has_memcache:
     logging.info('Will skip tests for xattrs')
 
+has_holes = not on_mac and fuse_major_version >= 3
+if not has_holes:
+    logging.info('Will skip tests for holes')
 
 # Computes the MD5 hash of the given file.
 # Returns the MD5 hash as an hexadecimal string.
@@ -63,6 +92,28 @@ def md5(path):
         while chunk := f.read(4096):
             h.update(chunk)
     return h.hexdigest()
+
+
+# Gets the hole map of the given file.
+def GetHoleMap(path):
+    m = []
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            i = 0
+            while True:
+                j = os.lseek(fd, i, os.SEEK_HOLE)
+                if j < i: break
+                m.append(j)
+                i = os.lseek(fd, j, os.SEEK_DATA)
+                if i <= j: break
+                m.append(i)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        if e.errno != errno.ENXIO:
+            LogError(f'Cannot get holes from {path!r}: {e}');
+    return m
 
 
 # Walks the given directory.
@@ -95,6 +146,9 @@ def GetTree(root, use_md5=True):
         if stat.S_ISREG(mode):
             line['size'] = st.st_size
             line['blocks'] = st.st_blocks
+            if has_holes and st.st_blocks * 512 < st.st_size:
+                logging.debug(f'Sparse file: {path!r}')
+                line['holes'] = GetHoleMap(path)
             try:
                 if use_md5:
                     line['md5'] = md5(path)
@@ -161,6 +215,9 @@ def CheckTree(got_tree, want_tree, strict=False):
                     # raw rdev values differ from Linux. Skip on macOS.
                     continue
 
+                if not has_holes and key == 'holes':
+                    continue
+
                 got_value = got_entry.get(key)
 
                 if key in ('atime', 'mtime',
@@ -177,16 +234,6 @@ def CheckTree(got_tree, want_tree, strict=False):
 
     if strict and got_tree:
         LogError(f'Found {len(got_tree)} unexpected entries: {got_tree}')
-
-
-# Directory of this test program.
-script_dir = os.path.dirname(os.path.realpath(__file__))
-
-# Directory containing the archives to mount.
-data_dir = os.path.join(script_dir, 'data')
-
-# Path of the FUSE mounter.
-mount_program = os.path.join(script_dir, '..', 'out', 'fuse-archive')
 
 
 def CanRun(args):
@@ -218,23 +265,6 @@ has_lzop = CanRun(['lzop', '--version'])
 has_xz = CanRun(['xz', '--version'])
 has_zstd = CanRun(['zstd', '--version'])
 has_tar = CanRun(['tar', '--version'])
-
-sr = subprocess.run([mount_program, '--version'],
-                    capture_output=True,
-                    encoding='UTF-8')
-
-
-def GetFuseMajorVersion():
-    for line in sr.stdout.split('\n'):
-        if 'FUSE library version' in line:
-            # Handle "FUSE library version 3.x" and "FUSE library version: 3.x"
-            version_str = line.split('version')[-1].strip(': ').split()[0]
-            return int(version_str.split('.')[0])
-    return 0
-
-
-fuse_major_version = GetFuseMajorVersion()
-logging.info(f'FUSE major version: {fuse_major_version}')
 
 
 def HasLib(name):
@@ -1007,6 +1037,8 @@ def TestArchiveWithOptions(options=[]):
     for zip_name, want_tree in want_trees.items():
         MountArchiveAndCheckTree(zip_name, want_tree, options=options)
 
+
+def TestSparse():
     if is_fast: return
     if not has_zlib and not has_gzip: return
 
@@ -1014,17 +1046,45 @@ def TestArchiveWithOptions(options=[]):
         'zeroes-256mib.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             # https://github.com/google/fuse-archive/issues/59
-            'zeroes': {'mode': '-rw-r--r--', 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2'},
+            'zeroes': {'mode': '-rw-r--r--', 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2', 'blocks': 0, 'holes': [0]},
         },
         'sparse.tar.gz': {
             '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
             # https://github.com/google/fuse-archive/issues/40
-            'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef'},
+            'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef', 'blocks': 1, 'holes': [0, 536870912, 536870917]},
+        },
+        'seek.tar.gz': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'complex_sparse': {'mode': '-rw-r--r--', 'size': 8192, 'md5': '8c16924f2d11167fd4e4215a89dbf435', 'blocks': 3, 'holes': [0, 2048, 3072, 5632, 6144]},
         },
     }
 
-    for zip_name, want_tree in want_trees.items():
-        MountArchiveAndCheckTree(zip_name, want_tree, options=options)
+    options = ['precache']
+    if has_memcache: options += ['memcache']
+    for option in options:
+        for zip_name, want_tree in want_trees.items():
+            MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', option])
+
+    want_trees = {
+        'zeroes-256mib.tar.gz': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            # https://github.com/google/fuse-archive/issues/59
+            'zeroes': {'mode': '-rw-r--r--', 'size': 268435456, 'md5': '1f5039e50bd66b290c56684d8550c6c2', 'blocks': 524288},
+        },
+        'sparse.tar.gz': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            # https://github.com/google/fuse-archive/issues/40
+            'sparse': {'mode': '-rw-r--r--', 'size': 1073741824, 'md5': '5e4001589ffa2c5135f413a13e6800ef', 'blocks': 2097152},
+        },
+        'seek.tar.gz': {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'complex_sparse': {'mode': '-rw-r--r--', 'size': 8192, 'md5': '8c16924f2d11167fd4e4215a89dbf435', 'blocks': 16},
+        },
+    }
+
+    for option in ['lazycache', 'nocache', 'noholes']:
+        for zip_name, want_tree in want_trees.items():
+            MountArchiveAndCheckTree(zip_name, want_tree, options=['-o', option])
 
 
 def TestFilteredZip():
@@ -1246,14 +1306,10 @@ def TestHardlinks(options=[]):
 # Tests sparse file seeking logic.
 def TestSeek(options=[]):
     if not has_gzip and not has_zlib: return
-    if fuse_major_version < 3:
-        logging.info('Skipping TestSeek (FUSE version < 3)')
+    if not has_holes:
+        logging.info('Skipping TestSeek')
         return
-    if on_mac:
-        logging.info(
-            'Skipping TestSeek (macFUSE does not support SEEK_DATA/SEEK_HOLE via lseek)'
-        )
-        return
+
     zip_name = 'seek.tar.gz'
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
@@ -2712,6 +2768,7 @@ TestHardlinks(['-o', 'nocache'])
 TestHardlinks(['-o', 'lazycache'])
 if has_memcache: TestHardlinks(['-o', 'memcache'])
 
+TestSparse()
 TestSeek()
 TestSeek(['-o', 'nocache'])
 TestSeek(['-o', 'lazycache'])
