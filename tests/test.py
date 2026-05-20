@@ -71,6 +71,9 @@ logging.info(f'FUSE major version: {fuse_major_version}')
 on_mac = sys.platform.startswith('darwin')
 on_linux = sys.platform.startswith('linux')
 
+# On macOS, using the default TMPDIR causes Finder to use CPU excessively.
+tmp_dir_base = '/tmp' if on_mac else None
+
 has_memcache = not on_mac
 if not has_memcache:
     logging.info('Will skip tests relying on memcache')
@@ -304,7 +307,7 @@ def Unmount(mount_point):
 
 @contextmanager
 def MountArchive(zip_names, options=[], password='', env=env):
-    with tempfile.TemporaryDirectory() as mount_point:
+    with tempfile.TemporaryDirectory(dir=tmp_dir_base) as mount_point:
         if type(zip_names) is not list: zip_names = [zip_names]
         zip_paths = [
             os.path.join(script_dir, 'data', zip_name)
@@ -1937,7 +1940,7 @@ def TestBigArchiveRandomOrder(options=[]):
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
     logging.info(s)
-    with tempfile.TemporaryDirectory() as mount_point:
+    with tempfile.TemporaryDirectory(dir=tmp_dir_base) as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         try:
@@ -2009,7 +2012,7 @@ def TestBigArchiveStreamed(options=[]):
     s = f'Test {zip_name!r}'
     if options: s += f', options = {" ".join(options)!r}'
     logging.info(s)
-    with tempfile.TemporaryDirectory() as mount_point:
+    with tempfile.TemporaryDirectory(dir=tmp_dir_base) as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
         logging.debug(f'Mounting {zip_path!r} on {mount_point!r}...')
         try:
@@ -2360,7 +2363,7 @@ def TestMultiArchiveUsage():
     zip_path1 = os.path.join(script_dir, 'data', 'multi1.tar.gz')
     zip_path2 = os.path.join(script_dir, 'data', 'multi2.tar.gz')
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(dir=tmp_dir_base) as tmp_dir:
         mount_point = os.path.join(tmp_dir, 'mnt')
         os.mkdir(mount_point)
 
@@ -2458,7 +2461,7 @@ def TestAutoMountPoint():
     zip_path = os.path.join(script_dir, 'data', 'archive.tar')
     dash_archive_path = os.path.join(script_dir, 'data', '--help')
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(dir=tmp_dir_base) as tmp_dir:
         # 1. Standard auto-mount (relative path to trigger './' prepending)
         mount_point = os.path.join(tmp_dir, 'archive')
         command = [mount_program, '-f', '-v', zip_path]
