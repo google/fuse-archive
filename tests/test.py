@@ -162,8 +162,11 @@ def GetTree(root, use_md5=True):
         elif stat.S_ISBLK(mode) or stat.S_ISCHR(mode):
             line['rdev'] = st.st_rdev
         elif stat.S_ISDIR(mode):
-            for entry in list(os.scandir(path)):
-                scan(entry.path, entry.stat(follow_symlinks=False))
+            try:
+                for entry in list(os.scandir(path)):
+                    scan(entry.path, entry.stat(follow_symlinks=False))
+            except OSError as e:
+                line['errno'] = e.errno
 
         if has_xattrs:
             try:
@@ -1788,7 +1791,6 @@ def TestArchiveWithManyFiles():
 
 # Tests archives with lots of directories or with the `nodirs` option.
 def TestDirectories():
-
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
         '0.bytes': {'mode': '-rw-r--r--', 'mtime': 1580883024000000000, 'size': 0, 'md5': 'd41d8cd98f00b204e9800998ecf8427e'},
@@ -1938,7 +1940,8 @@ def TestBigArchiveRandomOrder(options=[]):
     if is_fast or not has_zlib: return
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
-    if options: s += f', options = {" ".join(options)!r}'
+    if options:
+        s += f', options = {" ".join(options)!r}'
     logging.info(s)
     with tempfile.TemporaryDirectory(dir=tmp_dir_base) as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
@@ -2010,7 +2013,8 @@ def TestBigArchiveStreamed(options=[]):
     if is_fast or not has_zlib: return
     zip_name = 'big.zip'
     s = f'Test {zip_name!r}'
-    if options: s += f', options = {" ".join(options)!r}'
+    if options:
+        s += f', options = {" ".join(options)!r}'
     logging.info(s)
     with tempfile.TemporaryDirectory(dir=tmp_dir_base) as mount_point:
         zip_path = os.path.join(script_dir, 'data', zip_name)
@@ -2025,8 +2029,7 @@ def TestBigArchiveStreamed(options=[]):
                 env=env,
             )
             try:
-                logging.debug(
-                    f'Mounted archive {zip_path!r} on {mount_point!r}')
+                logging.debug(f'Mounted {zip_path!r} on {mount_point!r}')
                 GetTree(mount_point, use_md5=False)
                 fd = os.open(os.path.join(mount_point, 'big.txt'), os.O_RDONLY)
                 try:
