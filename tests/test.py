@@ -2275,6 +2275,9 @@ def TestInvalidArchive():
     CheckArchiveMountingError('archive.xxx', 30, options=['-o', 'nobidding'])
     CheckArchiveMountingError('--help', 30, options=['-o', 'nobidding'])
 
+    # Test noexternal
+    CheckArchiveMountingError('romeo.txt.b64', 30, options=['-o', 'noexternal'])
+
     if os.getuid() != 0:
         with tempfile.NamedTemporaryFile() as f:
             os.chmod(f.name, 0)

@@ -91,6 +91,7 @@ struct Context {
   LogLevel log_level = LogLevel::INFO;
   int help = 0;
   int version = 0;
+  int can_use_external_filters = 1;
   std::vector<std::string> archives;
 };
 
@@ -123,6 +124,7 @@ fuse_opt const g_fuse_opts[] = {
     {"nohardlinks", offsetof(Context, options.hardlinks), 0},
     {"noxattrs", offsetof(Context, options.xattrs), 0},
     {"nobidding", offsetof(Context, options.bidding), 0},
+    {"noexternal", offsetof(Context, can_use_external_filters), 0},
     {"default_permissions", offsetof(Context, options.default_permissions), 1},
 #if FUSE_USE_VERSION >= 30
     {"direct_io", offsetof(Context, options.direct_io), 1},
@@ -240,6 +242,7 @@ general options:
     -o nohardlinks         no hard links
     -o noxattrs            no extended attributes
     -o nobidding           rely on file extension to detect archive format
+    -o noexternal          do not use external programs for decompression
     -o dmask=M             directory permission mask in octal (default 0022)
     -o fmask=M             file permission mask in octal (default 0022))"
 #if FUSE_USE_VERSION >= 30
@@ -355,6 +358,10 @@ int main(int const argc, char** const argv) try {
   if (ctx.archives.empty()) {
     PrintUsage();
     return EXIT_FAILURE;
+  }
+
+  if (!ctx.can_use_external_filters) {
+    setenv("PATH", "", 1);
   }
 
   // Determine where the mount point should be.

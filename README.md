@@ -105,6 +105,11 @@ numeric suffix (e.g., `archive (1)`).
 :   Do not use libarchive's format bidding system to detect the archive format.
     Instead, strictly rely on the file extension.
 
+**-o noexternal**
+:   Do not use external programs for decompression. This is achieved by clearing
+    the `PATH` environment variable, ensuring that only decompression filters
+    implemented natively or statically linked into **libarchive** are used.
+
 **-o dmask=M**
 :   Directory permission mask in octal (default is 0022).
 
