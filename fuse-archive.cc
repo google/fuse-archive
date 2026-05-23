@@ -360,9 +360,14 @@ int main(int const argc, char** const argv) try {
     return EXIT_FAILURE;
   }
 
-  if (!ctx.can_use_external_filters) {
-    setenv("PATH", "", 1);
-  }
+  // Sanitize PATH to a safe system default.
+#ifdef __APPLE__
+  const char safe_path[] =
+      "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:/opt/local/bin";
+#else
+  const char safe_path[] = "/usr/bin:/bin:/usr/local/bin";
+#endif
+  setenv("PATH", ctx.can_use_external_filters ? safe_path : "", 1);
 
   // Determine where the mount point should be.
   // The last non-option argument is the mount point, unless only one such

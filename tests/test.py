@@ -350,8 +350,9 @@ def MountArchiveAndGetTree(zip_names,
                            options=[],
                            password='',
                            use_md5=True,
-                           get_tree=True):
-    with MountArchive(zip_names, options, password) as mount_point:
+                           get_tree=True,
+                           env=env):
+    with MountArchive(zip_names, options=options, password=password, env=env) as mount_point:
         tree = GetTree(mount_point, use_md5=use_md5) if get_tree else None
         return tree, os.statvfs(mount_point)
 
@@ -367,7 +368,7 @@ def MountArchiveAndCheckTree(
     password='',
     strict=True,
     use_md5=True,
-):
+    env=env):
     s = f'Test {zip_names!r}'
     if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
@@ -377,6 +378,7 @@ def MountArchiveAndCheckTree(
                                               options=options,
                                               password=password,
                                               use_md5=use_md5,
+                                              env=env,
                                               get_tree=want_tree is not None)
 
         want_block_size = 512
@@ -412,7 +414,8 @@ def MountArchiveAndCheckTree(
 def CheckArchiveMountingError(zip_names,
                               want_error_code,
                               options=[],
-                              password=''):
+                              password='',
+                              env=env):
     s = f'Test {zip_names!r}'
     if options: s += f', options = {" ".join(options)!r}'
     if password: s += f', password = {password!r}'
@@ -420,7 +423,8 @@ def CheckArchiveMountingError(zip_names,
     try:
         got_tree, _ = MountArchiveAndGetTree(zip_names,
                                              options=options,
-                                             password=password)
+                                             password=password,
+                                             env=env)
         LogError(f'Want error, Got tree: {got_tree}')
     except subprocess.CalledProcessError as e:
         if e.returncode != want_error_code:
@@ -2252,6 +2256,43 @@ def TestArchiveWithSpecialFiles():
     )
 
 
+# Tests that external helpers are searched for in a sanitized PATH.
+def TestPathSanitization():
+    with tempfile.TemporaryDirectory(dir=tmp_dir_base) as tmp_dir:
+        bin_dir = os.path.join(tmp_dir, 'bin')
+        os.mkdir(bin_dir)
+        fake_helper = os.path.join(bin_dir, 'base64')
+        sentinel_file = os.path.join(tmp_dir, 'was_called')
+
+        with open(fake_helper, 'w') as f:
+            f.write(f'#!/bin/sh\ntouch {sentinel_file}\nexit 1\n')
+        os.chmod(fake_helper, 0o755)
+
+        # Prepend the fake bin dir to the environment PATH
+        custom_env = os.environ.copy()
+        custom_env['PATH'] = bin_dir + os.pathsep + custom_env.get('PATH', '')
+
+        # Attempt to mount a file that triggers base64 filter.
+        # Verify that -o noexternal doesn't trigger it.
+        CheckArchiveMountingError('romeo.txt.b64', 30, options=['-o', 'noexternal'], env=custom_env)
+
+        if os.path.exists(sentinel_file):
+            LogError("Security Vulnerability: External helper executed with -o noexternal!")
+            os.remove(sentinel_file)
+
+        # Attempt to mount a file that triggers base64 filter.
+        want_tree = {
+            '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
+            'romeo.txt': {'mode': '-rw-r--r--', 'size': 942, 'md5': '80f1521c4533d017df063c623b75cde3'},
+        }
+
+        MountArchiveAndCheckTree('romeo.txt.b64', want_tree, env=custom_env)
+
+        # It should FAIL to use our fake helper because of PATH sanitization.
+        if os.path.exists(sentinel_file):
+            LogError("Security Vulnerability: External helper executed from unsanitized PATH!")
+
+
 # Tests invalid and absent archives.
 def TestInvalidArchive():
     CheckArchiveMountingError('', 11)
@@ -2274,9 +2315,6 @@ def TestInvalidArchive():
     # Test nobidding option with an unrecognized extension
     CheckArchiveMountingError('archive.xxx', 30, options=['-o', 'nobidding'])
     CheckArchiveMountingError('--help', 30, options=['-o', 'nobidding'])
-
-    # Test noexternal
-    CheckArchiveMountingError('romeo.txt.b64', 30, options=['-o', 'noexternal'])
 
     if os.getuid() != 0:
         with tempfile.NamedTemporaryFile() as f:
@@ -2813,6 +2851,7 @@ TestMultiArchiveUsage()
 TestUsage()
 TestAutoMountPoint()
 TestFuseErrors()
+TestPathSanitization()
 TestInvalidArchive()
 TestMasks()
 TestArchiveWithManyFiles()
@@ -2826,3 +2865,4 @@ if error_count:
     sys.exit(1)
 else:
     logging.info('PASS: All tests passed')
+

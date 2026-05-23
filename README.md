@@ -106,9 +106,12 @@ numeric suffix (e.g., `archive (1)`).
     Instead, strictly rely on the file extension.
 
 **-o noexternal**
-:   Do not use external programs for decompression. This is achieved by clearing
-    the `PATH` environment variable, ensuring that only decompression filters
-    implemented natively or statically linked into **libarchive** are used.
+:   Do not use external programs for decompression. By default, external programs
+    are allowed but searched for in a sanitized, fixed `PATH`
+    (`/usr/bin:/bin:/usr/local/bin`, plus `/opt/homebrew/bin:/opt/local/bin`
+    on macOS) to prevent local spoofing attacks. Using this option entirely
+    clears the `PATH`, ensuring that only decompression filters implemented
+    natively or statically linked into **libarchive** are used.
 
 **-o dmask=M**
 :   Directory permission mask in octal (default is 0022).
@@ -244,7 +247,8 @@ either natively through **libarchive** or by invoking external filter programs.
 The exact set of supported formats depends on:
 
 *   The version and build-time configuration of the **libarchive** library.
-*   The availability of external filter programs in your system's `PATH`.
+*   The availability of external filter programs in the sanitized, fixed `PATH`
+    (see the `-o noexternal` option).
 
 To see the version of **libarchive** and other libraries linked with your build
 of **fuse-archive**, use the `--version` option:
@@ -282,7 +286,7 @@ reliance on the file extension.
 ## External Filter Programs
 
 For some formats and encodings, **fuse-archive** relies on the following
-external programs being available in your `PATH`:
+external programs being available in the sanitized, fixed `PATH`:
 
 *   `base64`: For `b64` and `base64` encodings.
 *   `brotli`: For `br` and `brotli` compression.
@@ -397,7 +401,8 @@ GnuPG configuration and environment:
     encryption (e.g., `archive.tar.gz.gpg`). Use the `-o maxfilters` option to
     support these scenarios.
 
-Ensure that the `gpg` program is installed and available in your `PATH`.
+Ensure that the `gpg` program is installed and available in the sanitized,
+fixed `PATH`.
 
 # CACHING
 
