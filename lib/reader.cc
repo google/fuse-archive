@@ -529,7 +529,7 @@ void Reader::SetRpmFormat() {
   }
 
 #define WORK_AROUND_ISSUE_2513 ARCHIVE_VERSION_NUMBER < 3'008'007
-#define WORK_AROUND_ISSUE_2514 ARCHIVE_VERSION_NUMBER < 3'009'000
+#define WORK_AROUND_ISSUE_2514 ARCHIVE_VERSION_NUMBER < 3'008'007
 
 bool Reader::SetFilter(std::string_view const ext) {
   static std::unordered_map<std::string_view, void (*)(Reader&)> const
