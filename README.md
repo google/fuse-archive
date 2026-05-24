@@ -127,9 +127,14 @@ numeric suffix (e.g., `archive (1)`).
 :   Set the file group of all the items in the mounted archive (default is the
     current group).
 
-**-o default_permissions**
-:   Use the file owner (UID), group (GID), and permissions stored with each item
-    in the archive.
+**-o enforce_permissions**
+:   Enforce standard UNIX permissions. By default, **fuse-archive** presents
+    all files as being owned by the current user and group, with standard
+    read permissions. This option instructs **fuse-archive** to use the exact
+    UID, GID, and Unix permission bits stored within the archive for each item.
+    This includes support for special bits such as `SUID`, `SGID`, and `SVTX`
+    (sticky bit). Note that this may result in access denied errors if you
+    are not the owner of the files inside the archive.
 
 **-f**
 :   Foreground mode.
@@ -488,12 +493,13 @@ user and group, with standard read permissions.
 You can explicitly set the owner and group of all items in the mounted archive
 using the `-o uid` and `-o gid` options with the desired numerical IDs.
 
-### Using Archive Permissions (`-o default_permissions`)
+### Enforcing Archive Permissions (`-o enforce_permissions`)
 
-The `-o default_permissions` option instructs **fuse-archive** to use the exact
+The `-o enforce_permissions` option instructs **fuse-archive** to use the exact
 UID, GID, and Unix permission bits stored within the archive for each item. This
 includes support for special bits such as **SUID**, **SGID**, and **SVTX**
-(sticky bit).
+(sticky bit). Note that this may result in access denied errors if you are not
+the owner of the files inside the archive.
 
 ### Permission Masks (`-o dmask=M`, `-o fmask=M`)
 

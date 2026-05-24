@@ -1479,7 +1479,7 @@ def TestMultiArchive(options=[]):
     MountArchiveAndCheckTree([zip1, zip1], want_tree, options=options)
 
 
-# Tests SUID, SGID and sticky bits with -o default_permissions.
+# Tests SUID, SGID and sticky bits with -o enforce_permissions.
 def TestSpecialPermissions(options=[]):
     if not has_gzip and not has_zlib: return
     zip_name = 'special_perms.tar.gz'
@@ -1491,10 +1491,10 @@ def TestSpecialPermissions(options=[]):
         'sticky': {'mode': 'drwxr-xr-t'},
         'all': {'mode': '-rwsr-sr-t'},
     }
-    # -o default_permissions tells fuse-archive to use the bits from the archive.
+    # -o enforce_permissions tells fuse-archive to use the bits from the archive.
     MountArchiveAndCheckTree(zip_name,
                              want_tree,
-                             options=[*options, '-o', 'default_permissions'],
+                             options=[*options, '-o', 'enforce_permissions'],
                              use_md5=False)
 
 
@@ -2158,7 +2158,7 @@ def TestEncryptedArchive(options=[]):
         )
 
 
-# Tests the default_permissions, nosymlinks and nospecials mount options.
+# Tests the enforce_permissions, nosymlinks and nospecials mount options.
 def TestArchiveWithSpecialFiles():
     zip_name = 'specials.tar'
 
@@ -2173,7 +2173,7 @@ def TestArchiveWithSpecialFiles():
 
     MountArchiveAndCheckTree(zip_name, want_tree, want_blocks=8, want_inodes=6)
 
-    # Test -o default_permissions
+    # Test -o enforce_permissions
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
         'block': {'mode': 'brw-r-----', 'uid': 0, 'gid': 6, 'rdev': 2049},
@@ -2188,10 +2188,19 @@ def TestArchiveWithSpecialFiles():
         want_tree,
         want_blocks=8,
         want_inodes=6,
+        options=['-o', 'enforce_permissions'],
+    )
+
+    # Test -o default_permissions (alias)
+    MountArchiveAndCheckTree(
+        zip_name,
+        want_tree,
+        want_blocks=8,
+        want_inodes=6,
         options=['-o', 'default_permissions'],
     )
 
-    # Test -o default_permissions,fmask=0
+    # Test -o enforce_permissions,fmask=0
     want_tree = {
         '.': {'ino': 1, 'mode': 'drwxr-xr-x', 'nlink': 2},
         'block': {'mode': 'brw-rw----', 'uid': 0, 'gid': 6, 'rdev': 2049},
@@ -2206,7 +2215,7 @@ def TestArchiveWithSpecialFiles():
         want_tree,
         want_blocks=8,
         want_inodes=6,
-        options=['-o', 'default_permissions,fmask=0'],
+        options=['-o', 'enforce_permissions,fmask=0'],
     )
 
     # Test -o nosymlinks

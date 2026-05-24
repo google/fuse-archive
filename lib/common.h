@@ -51,7 +51,7 @@ struct Options {
   int hardlinks = 1;
   int xattrs = 1;
   int bidding = 1;
-  int default_permissions = 0;
+  int enforce_permissions = 0;
 
 #if FUSE_USE_VERSION >= 30
   int direct_io = 0;

@@ -125,7 +125,8 @@ fuse_opt const g_fuse_opts[] = {
     {"noxattrs", offsetof(Context, options.xattrs), 0},
     {"nobidding", offsetof(Context, options.bidding), 0},
     {"noexternal", offsetof(Context, can_use_external_filters), 0},
-    {"default_permissions", offsetof(Context, options.default_permissions), 1},
+    {"enforce_permissions", offsetof(Context, options.enforce_permissions), 1},
+    {"default_permissions", offsetof(Context, options.enforce_permissions), 1},
 #if FUSE_USE_VERSION >= 30
     {"direct_io", offsetof(Context, options.direct_io), 1},
 #endif
@@ -243,6 +244,7 @@ general options:
     -o noxattrs            no extended attributes
     -o nobidding           rely on file extension to detect archive format
     -o noexternal          do not use external programs for decompression
+    -o enforce_permissions enforce standard UNIX permissions
     -o dmask=M             directory permission mask in octal (default 0022)
     -o fmask=M             file permission mask in octal (default 0022))"
 #if FUSE_USE_VERSION >= 30
@@ -426,7 +428,7 @@ int main(int const argc, char** const argv) try {
   fuse_opt_add_arg(&args, "use_ino");
 #endif
 
-  if (ctx.options.default_permissions) {
+  if (ctx.options.enforce_permissions) {
     fuse_opt_add_arg(&args, "-o");
     fuse_opt_add_arg(&args, "default_permissions");
   }

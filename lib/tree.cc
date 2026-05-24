@@ -470,7 +470,7 @@ void Tree::ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
                      .tv_nsec = archive_entry_ctime_nsec(e)};
     }
 
-    if (options_.default_permissions) {
+    if (options_.enforce_permissions) {
       node->uid = archive_entry_uid(e);
       node->gid = archive_entry_gid(e);
       mode_t const pbits = 07777;
@@ -523,7 +523,7 @@ void Tree::ProcessEntry(Reader& r, std::string& path, Node* const local_root) {
   inode_count_ += 1;
   block_count_ += 1;
 
-  if (options_.default_permissions) {
+  if (options_.enforce_permissions) {
     node->uid = archive_entry_uid(e);
     node->gid = archive_entry_gid(e);
     mode_t const pbits = 07777;
