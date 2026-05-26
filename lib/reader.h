@@ -34,7 +34,7 @@ namespace fuse_archive {
 namespace bi = boost::intrusive;
 
 struct Node;
-struct Tree;
+class Tree;
 
 #ifdef NDEBUG
 using LinkMode = bi::link_mode<bi::normal_link>;
@@ -168,7 +168,7 @@ struct Reader : bi::list_base_hook<LinkMode> {
 
  private:
   friend class ReaderTest;
-  friend struct Tree;
+  friend class Tree;
 
   // Read a password from the standard input if necessary.
   static const char* ReadPassword(Archive* a, void* client_data);
