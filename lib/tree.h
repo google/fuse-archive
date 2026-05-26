@@ -54,6 +54,12 @@ class Tree {
   // Finds a node in the tree by its full absolute path.
   Node* FindNode(std::string_view path);
 
+  // Finds a node in the tree using a pre-computed original path hash.
+  Node* FindNodeByOriginalPath(const HashedStringView& path);
+
+  // Finds a node in the tree by its full absolute original path.
+  Node* FindNodeByOriginalPath(std::string_view path);
+
   // Returns a warm reader from the recycle bin or creates a new one,
   // positioned at the requested entry and offset.
   Reader::Ptr GetReader(ArchiveDescriptor* descriptor,
@@ -151,20 +157,44 @@ class Tree {
   // hierarchies.
   void Trim(Node& a);
 
+  struct OriginalName {
+    Node* renamed_node;
+    std::string original_name;
+    size_t path_length;
+    size_t path_hash;
+
+    bool HasPath(std::string_view path) const;
+  };
+
   // Hashing logic for the intrusive unordered_set of nodes.
   struct GetHash {
+    using is_transparent = void;
     size_t operator()(const HashedStringView& hsv) const { return hsv.hash; }
     size_t operator()(const Node& n) const { return n.path_hash; }
+    size_t operator()(const OriginalName& n) const { return n.path_hash; }
   };
 
   // Equality logic for the intrusive unordered_set of nodes.
   struct HasSamePath {
+    using is_transparent = void;
+
     bool operator()(const Node& a, const Node& b) const {
       return a.path_hash == b.path_hash && a.parent == b.parent &&
              a.name == b.name;
     }
 
     bool operator()(const HashedStringView& hsv, const Node& n) const {
+      return hsv.hash == n.path_hash && hsv.string.size() == n.path_length &&
+             n.HasPath(hsv.string);
+    }
+
+    bool operator()(const OriginalName& a, const OriginalName& b) const {
+      return a.path_hash == b.path_hash &&
+             a.renamed_node->parent == b.renamed_node->parent &&
+             a.original_name == b.original_name;
+    }
+
+    bool operator()(const HashedStringView& hsv, const OriginalName& n) const {
       return hsv.hash == n.path_hash && hsv.string.size() == n.path_length &&
              n.HasPath(hsv.string);
     }
@@ -225,6 +255,11 @@ class Tree {
   using Buckets = std::vector<Bucket>;
   Buckets buckets_{1 << 4};
   NodesByPath nodes_by_path_{{buckets_.data(), buckets_.size()}};
+
+  // Renamed nodes indexed by original path.
+  using NodesByOriginalPath =
+      std::unordered_set<OriginalName, GetHash, HasSamePath>;
+  NodesByOriginalPath nodes_by_original_path_;
 };
 
 }  // namespace fuse_archive

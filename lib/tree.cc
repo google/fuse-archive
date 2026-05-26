@@ -104,6 +104,30 @@ Tree::NodesByPath::~NodesByPath() {
   clear_and_dispose(std::default_delete<Node>());
 }
 
+bool Tree::OriginalName::HasPath(std::string_view path) const {
+  if (!path.ends_with(original_name)) {
+    return false;
+  }
+
+  path.remove_suffix(original_name.size());
+
+  assert(renamed_node);
+  assert(renamed_node->renamed);
+  const Node* const parent = renamed_node->parent;
+  assert(parent);
+
+  if (parent->IsRoot()) {
+    return parent->HasPath(path);
+  }
+
+  if (!path.ends_with('/')) {
+    return false;
+  }
+
+  path.remove_suffix(1);
+  return parent->HasPath(path);
+}
+
 Node* Tree::FindNode(const HashedStringView& path) {
   auto const it = nodes_by_path_.find(path, nodes_by_path_.hash_function(),
                                       nodes_by_path_.key_eq());
@@ -112,6 +136,24 @@ Node* Tree::FindNode(const HashedStringView& path) {
 
 Node* Tree::FindNode(std::string_view const path) {
   return FindNode(HashedStringView(Path(path).WithoutTrailingSeparator()));
+}
+
+Node* Tree::FindNodeByOriginalPath(const HashedStringView& path) {
+  auto const it = nodes_by_original_path_.find(path);
+  if (it != nodes_by_original_path_.end()) {
+    Node* const node = it->renamed_node;
+    assert(node);
+    assert(node->renamed);
+    return node;
+  }
+
+  Node* const node = FindNode(path);
+  return node && !node->renamed ? node : nullptr;
+}
+
+Node* Tree::FindNodeByOriginalPath(std::string_view const path) {
+  return FindNodeByOriginalPath(
+      HashedStringView(Path(path).WithoutTrailingSeparator()));
 }
 
 void Tree::RehashIfNecessary() {
@@ -124,12 +166,22 @@ void Tree::RehashIfNecessary() {
 
 Node* Tree::RenameIfCollision(Node::Ptr node) {
   assert(node);
+  RehashIfNecessary();
   auto const [pos, ok] = nodes_by_path_.insert(*node);
   if (ok) {
-    RehashIfNecessary();
     return node.release();  // Now owned by |nodes_by_path_|.
   }
 
+  if (!node->renamed) {
+    node->renamed = true;
+    assert(!node->IsRoot());
+    if (!node->IsDir()) {
+      nodes_by_original_path_.insert({.renamed_node = node.get(),
+                                      .original_name = node->name,
+                                      .path_length = node->path_length,
+                                      .path_hash = node->path_hash});
+    }
+  }
   // There is a name collision
   LOG(DEBUG) << *node << " conflicts with " << *pos;
 
@@ -154,7 +206,6 @@ Node* Tree::RenameIfCollision(Node::Ptr node) {
     auto const [pos2, ok2] = nodes_by_path_.insert(*node);
     if (ok2) {
       LOG(DEBUG) << "Resolved conflict for " << *node;
-      RehashIfNecessary();
       return node.release();  // Now owned by |nodes_by_path_|.
     }
 
@@ -253,7 +304,7 @@ void Tree::ResolveHardlinks() {
   Timer const timer;
 
   for (const Hardlink& entry : hardlinks_) {
-    Node* target = FindNode(entry.target_path);
+    Node* target = FindNodeByOriginalPath(entry.target_path);
     if (!target) {
       LOG(DEBUG) << "Skipped hard link [" << entry.index_within_archive << "] "
                  << Path(entry.source_path) << ": Cannot find target "
@@ -338,6 +389,8 @@ void Tree::ResolveHardlinks() {
   }
 
   hardlinks_.clear();
+  nodes_by_original_path_.clear();
+
   LOG(DEBUG) << "Resolved hard links in " << timer;
 }
 

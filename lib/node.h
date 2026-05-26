@@ -158,6 +158,9 @@ struct Node {
   using Attributes = std::vector<Attribute>;
   Attributes attributes;
 
+  // Has this node been renamed?
+  bool renamed = false;
+
   // Returns true if this node is the root directory of the virtual file system.
   bool IsRoot() const { return !parent; }
 

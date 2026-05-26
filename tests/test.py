@@ -1210,10 +1210,11 @@ def TestHardlinks(options=[]):
         'Symlink3': {'ino': 5, 'mode': 'lrwxr-xr-x', 'nlink': 3, 'mtime': 1727754873000000000, 'target': 'Target', 'xattr': {}},
     }
 
-    MountArchiveAndCheckTree(zip_name,
+    MountArchiveAndCheckTree([zip_name, zip_name, zip_name],
                              want_tree,
-                             want_blocks=15,
-                             want_inodes=5,
+                             want_blocks=59,
+                             want_inodes=9,
+                             strict=False,
                              options=options)
 
     want_tree = {
