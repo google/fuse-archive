@@ -92,6 +92,7 @@ struct Context {
   int help = 0;
   int version = 0;
   int can_use_external_filters = 1;
+  int unsafe_path = 0;
   std::vector<std::string> archives;
 };
 
@@ -111,6 +112,7 @@ fuse_opt const g_fuse_opts[] = {
     {"--redact", offsetof(Context, options.redact), 1},
     {"redact", offsetof(Context, options.redact), 1},
     {"force", offsetof(Context, options.force), 1},
+    {"unsafe_path", offsetof(Context, unsafe_path), 1},
     {"precache", offsetof(Context, options.cache), int(Cache::Full)},
     {"lazycache", offsetof(Context, options.cache), int(Cache::Lazy)},
     {"nocache", offsetof(Context, options.cache), int(Cache::None)},
@@ -229,6 +231,7 @@ general options:
     -v   -o verbose        print more log messages
     -o redact              redact paths from log messages
     -o force               continue despite errors
+    -o unsafe_path         do not sanitize PATH for external programs
     -o maxfilters=N        max number of filters (default 1)
     -o precache            pre-emptive caching of uncompressed data (default)
     -o lazycache           incremental caching of uncompressed data
@@ -253,6 +256,60 @@ general options:
 #endif
          "\n\n"
       << std::flush;
+}
+
+// Value to use for PATH when it should be empty or disabled. Using "/dev/null"
+// ensures that any attempt to execute an external program via PATH will fail
+// with ENOTDIR, avoiding unintended fallbacks to system defaults or the
+// current directory.
+static const char safe_empty_path[] = "/dev/null";
+
+// Limits the PATH environment variable to a predefined set of safe system
+// directories. This prevents the execution of untrusted external filters from
+// non-standard locations while allowing those necessary for archive processing.
+void SetSafePath() {
+  std::string out;
+
+  if (const char* const p = getenv("PATH")) {
+    for (std::string_view in = p; !in.empty();) {
+      // Split PATH by ':' and normalize each directory.
+      size_t const i = in.find(':');
+      std::string_view const dir =
+          Path(in.substr(0, i)).WithoutTrailingSeparator();
+
+      // Recognized safe system locations.
+      static const std::unordered_set<std::string_view> safe_dirs = {
+          "/usr/bin",          "/bin",           "/usr/local/bin",
+#ifdef __APPLE__
+          "/opt/homebrew/bin", "/opt/local/bin",
+#endif
+      };
+
+      // Only keep directories that are in the safe list.
+      if (safe_dirs.contains(dir)) {
+        if (!out.empty()) {
+          out += ':';
+        }
+        out += dir;
+      }
+
+      if (i == std::string_view::npos) {
+        break;
+      }
+
+      in.remove_prefix(i + 1);
+    }
+  }
+
+  if (out.empty()) {
+    out = safe_empty_path;
+  }
+
+  LOG(DEBUG) << "Setting PATH to " << Path(out);
+  if (setenv("PATH", out.c_str(), true) < 0) {
+    PLOG(ERROR) << "Cannot set PATH to " << Path(out);
+    throw ExitCode::GENERIC_FAILURE;
+  }
 }
 
 }  // namespace
@@ -362,14 +419,17 @@ int main(int const argc, char** const argv) try {
     return EXIT_FAILURE;
   }
 
-  // Sanitize PATH to a safe system default.
-#ifdef __APPLE__
-  const char safe_path[] =
-      "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:/opt/local/bin";
-#else
-  const char safe_path[] = "/usr/bin:/bin:/usr/local/bin";
-#endif
-  setenv("PATH", ctx.can_use_external_filters ? safe_path : "", 1);
+  // Sanitize PATH.
+  if (ctx.can_use_external_filters) {
+    if (ctx.unsafe_path) {
+      LOG(DEBUG) << "Keeping unsafe path " << Path(getenv("PATH") ?: "");
+    } else {
+      SetSafePath();
+    }
+  } else if (setenv("PATH", safe_empty_path, 1) < 0) {
+    PLOG(ERROR) << "Cannot reset PATH";
+    throw ExitCode::GENERIC_FAILURE;
+  }
 
   // Determine where the mount point should be.
   // The last non-option argument is the mount point, unless only one such

@@ -107,11 +107,18 @@ numeric suffix (e.g., `archive (1)`).
 
 **-o noexternal**
 :   Do not use external programs for decompression. By default, external programs
-    are allowed but searched for in a sanitized, fixed `PATH`
-    (`/usr/bin:/bin:/usr/local/bin`, plus `/opt/homebrew/bin:/opt/local/bin`
-    on macOS) to prevent local spoofing attacks. Using this option entirely
-    clears the `PATH`, ensuring that only decompression filters implemented
-    natively or statically linked into **libarchive** are used.
+    are allowed but searched for in a sanitized `PATH` containing only standard
+    system directories (e.g., `/usr/bin`, `/bin`, `/usr/local/bin`) to prevent
+    local spoofing attacks. Using this option effectively disables external
+    programs by setting `PATH` to a safe, non-directory value (`/dev/null`),
+    ensuring that only decompression filters implemented natively or statically
+    linked into **libarchive** are used.
+
+**-o unsafe_path**
+:   Do not sanitize `PATH` for external programs. This option preserves the
+    original `PATH` from the environment instead of filtering it. Use with
+    caution as it may allow local spoofing attacks if the environment is not
+    trusted. This option is ignored if `-o noexternal` is also used.
 
 **-o dmask=M**
 :   Directory permission mask in octal (default is 0022).
@@ -252,8 +259,8 @@ either natively through **libarchive** or by invoking external filter programs.
 The exact set of supported formats depends on:
 
 *   The version and build-time configuration of the **libarchive** library.
-*   The availability of external filter programs in the sanitized, fixed `PATH`
-    (see the `-o noexternal` option).
+*   The availability of external filter programs in the sanitized `PATH`
+    (see the `-o noexternal` and `-o unsafe_path` options).
 
 To see the version of **libarchive** and other libraries linked with your build
 of **fuse-archive**, use the `--version` option:
@@ -291,7 +298,7 @@ reliance on the file extension.
 ## External Filter Programs
 
 For some formats and encodings, **fuse-archive** relies on the following
-external programs being available in the sanitized, fixed `PATH`:
+external programs being available in the sanitized `PATH`:
 
 *   `base64`: For `b64` and `base64` encodings.
 *   `brotli`: For `br` and `brotli` compression.
@@ -406,8 +413,8 @@ GnuPG configuration and environment:
     encryption (e.g., `archive.tar.gz.gpg`). Use the `-o maxfilters` option to
     support these scenarios.
 
-Ensure that the `gpg` program is installed and available in the sanitized,
-fixed `PATH`.
+Ensure that the `gpg` program is installed and available in the sanitized
+`PATH`.
 
 # CACHING
 

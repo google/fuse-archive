@@ -2301,6 +2301,23 @@ def TestPathSanitization():
         # It should FAIL to use our fake helper because of PATH sanitization.
         if os.path.exists(sentinel_file):
             LogError("Security Vulnerability: External helper executed from unsanitized PATH!")
+            os.remove(sentinel_file)
+
+        # With -o unsafe_path, it SHOULD use our fake helper.
+        # Since our fake helper exits with 1, mounting should fail.
+        CheckArchiveMountingError('romeo.txt.b64', 30, options=['-o', 'unsafe_path'], env=custom_env)
+
+        if not os.path.exists(sentinel_file):
+            LogError("Error: External helper NOT executed from unsanitized PATH with -o unsafe_path!")
+        else:
+            os.remove(sentinel_file)
+
+        # Verify precedence: -o noexternal should win over -o unsafe_path.
+        CheckArchiveMountingError('romeo.txt.b64', 30, options=['-o', 'noexternal,unsafe_path'], env=custom_env)
+
+        if os.path.exists(sentinel_file):
+            LogError("Security Vulnerability: External helper executed with -o noexternal,unsafe_path!")
+            os.remove(sentinel_file)
 
 
 # Tests invalid and absent archives.
