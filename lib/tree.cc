@@ -144,11 +144,14 @@ Node* Tree::FindNodeByOriginalPath(const HashedStringView& path) {
     Node* const node = it->renamed_node;
     assert(node);
     assert(node->renamed);
+    assert(node->descriptor == current_archive);
     return node;
   }
 
   Node* const node = FindNode(path);
-  return node && !node->renamed ? node : nullptr;
+  return node && !node->renamed && node->descriptor == current_archive
+             ? node
+             : nullptr;
 }
 
 Node* Tree::FindNodeByOriginalPath(std::string_view const path) {
@@ -175,13 +178,14 @@ Node* Tree::RenameIfCollision(Node::Ptr node) {
   if (!node->renamed) {
     node->renamed = true;
     assert(!node->IsRoot());
-    if (!node->IsDir()) {
+    if (!node->IsDir() && node->descriptor == current_archive) {
       nodes_by_original_path_.insert({.renamed_node = node.get(),
                                       .original_name = node->name,
                                       .path_length = node->path_length,
                                       .path_hash = node->path_hash});
     }
   }
+
   // There is a name collision
   LOG(DEBUG) << *node << " conflicts with " << *pos;
 
@@ -387,9 +391,6 @@ void Tree::ResolveHardlinks() {
     LOG(DEBUG) << "Resolved hard link [" << entry.index_within_archive << "] "
                << Path(n->GetPath()) << " -> " << *target;
   }
-
-  hardlinks_.clear();
-  nodes_by_original_path_.clear();
 
   LOG(DEBUG) << "Resolved hard links in " << timer;
 }
@@ -717,6 +718,10 @@ void Tree::Load(std::span<const std::string> const archives) {
 
     LOG(DEBUG) << "Loading " << Path(archive.path) << "...";
 
+    current_archive = &archive;
+    hardlinks_.clear();
+    nodes_by_original_path_.clear();
+
     try {
       Timer const timer;
       std::unique_ptr<Reader> r = std::make_unique<Reader>(&archive, *this);
@@ -811,6 +816,10 @@ void Tree::Load(std::span<const std::string> const archives) {
       archive.fd.Close();
     }
   }
+
+  current_archive = nullptr;
+  Hardlinks().swap(hardlinks_);
+  NodesByOriginalPath().swap(nodes_by_original_path_);
 
   // Trim the top level if necessary.
   if (options_.trim) {

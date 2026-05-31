@@ -33,13 +33,6 @@ namespace bi = boost::intrusive;
 
 struct Reader;
 
-// Hard link to resolve.
-struct Hardlink {
-  i64 index_within_archive;
-  std::string source_path;
-  std::string target_path;
-};
-
 class Tree {
  public:
   // Creates an empty virtual file system tree.
@@ -240,8 +233,16 @@ class Tree {
   // Collection of archives that form the virtual filesystem.
   std::vector<ArchiveDescriptor> archives_;
 
+  // Hard link to resolve.
+  struct Hardlink {
+    i64 index_within_archive;
+    std::string source_path;
+    std::string target_path;
+  };
+
   // Temporary storage for hardlinks found during Load(), resolved at the end.
-  std::vector<Hardlink> hardlinks_;
+  using Hardlinks = std::vector<Hardlink>;
+  Hardlinks hardlinks_;
 
   // Collection of warm Reader instances ready for reuse.
   struct RecycledReaders : bi::list<Reader> {
@@ -260,6 +261,9 @@ class Tree {
   using NodesByOriginalPath =
       std::unordered_set<OriginalName, GetHash, HasSamePath>;
   NodesByOriginalPath nodes_by_original_path_;
+
+  // Descriptor of the archive being currently parsed.
+  ArchiveDescriptor* current_archive = nullptr;
 };
 
 }  // namespace fuse_archive
