@@ -191,6 +191,10 @@ class Tree {
       return hsv.hash == n.path_hash && hsv.string.size() == n.path_length &&
              n.HasPath(hsv.string);
     }
+
+    bool operator()(const OriginalName& n, const HashedStringView& hsv) const {
+      return (*this)(hsv, n);
+    }
   };
 
   using NodesByPathBase =
