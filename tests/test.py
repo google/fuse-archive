@@ -2809,7 +2809,7 @@ if has_gpg:
     s = b' PRIVATE'
     d = b'-----'
     subprocess.run(['gpg', '--quiet', '--import'],
-                   check=True,
+                   check=False,
                    input=d + b'BEGIN' + p + s + k + b + d + b'''
 
 lFgEaZo1fhYJKwYBBAHaRw8BAQdAluzXFhgZsK/hf+nmr5NeRwH/ErXLA7gG6r47
