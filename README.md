@@ -3,8 +3,34 @@ title: fuse-archive
 section: 1
 header: User Manual
 footer: fuse-archive 1.25
-date: August 2026
+date: September 2026
 ---
+
+# ⚠️ REPOSITORY ARCHIVED & TRANSITIONED
+
+**This repository is no longer actively maintained by Google and has been
+officially archived.**
+
+The primary maintainer of `fuse-archive` is continuing active development,
+maintenance, and community support under a new name in his personal repository:
+
+👉 **[github.com/fdegros/mount-archive](https://github.com/fdegros/mount-archive)**
+
+### What does this mean for you?
+
+* **Code & History:** The historical releases, issues, and code remain here for
+  reference.
+* **New Name & Active Home:** Active development is continuing at
+  [fdegros/mount-archive](https://github.com/fdegros/mount-archive).
+* **New Features & Bug Fixes:** All new development, security updates, and
+  format-handling improvements will occur exclusively in the new repository.
+* **Contributions:** Please submit all future bug reports, feature requests, and
+  pull requests to the new
+  [fdegros/mount-archive](https://github.com/fdegros/mount-archive) home.
+
+Thank you to everyone who has starred, used, or contributed to this project
+under the Google organization! We encourage you to head over, star, and follow
+the new repository to keep up with active updates.
 
 # NAME
 
